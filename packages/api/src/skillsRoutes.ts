@@ -4,7 +4,7 @@ import type { AppContext } from "./context.js";
 import { HttpError } from "./context.js";
 import { museResponses, museSpend, type MuseKind } from "./services/muse.js";
 import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
-import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, chargeAgentRun, refundAgentRun } from "./services/skillJobs.js";
+import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, createAgentFundedJob, refundAgentRun } from "./services/skillJobs.js";
 import { verifyRequestAuth } from "./requestAuth.js";
 import { hideAgent, hideTopic } from "./services/ingest.js";
 import { skillMetrics, skillReuse } from "./services/skillMetrics.js";
@@ -99,9 +99,11 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     if (!ctx.cfg.skillsInternalSecret) throw new HttpError(503, "executor_disabled", "no executor configured");
     let b: any; try { b = JSON.parse(raw); } catch { throw new HttpError(400, "invalid_json", "expected {skill, params}"); }
     if (typeof b?.skill !== "string") throw new HttpError(400, "skill", "skill (cid or slug) is required");
-    if (by.via === "agent") charged = await chargeAgentRun(ctx, by.requested_by);
+    const jobReq = { skill: b.skill, params: b.params, start_url: typeof b.start_url === "string" ? b.start_url : undefined };
+    let job: { id: string };
+    if (by.via === "agent") { const r = await createAgentFundedJob(ctx, by.requested_by, jobReq); job = r.job; charged = r.cost; }
+    else job = await createJob(ctx, jobReq, by);
     try {
-      const job = await createJob(ctx, { skill: b.skill, params: b.params, start_url: typeof b.start_url === "string" ? b.start_url : undefined }, by);
       await dispatchJob(ctx, job.id);
       return c.json(await getJob(ctx, job.id), 202);
     } catch (e) {

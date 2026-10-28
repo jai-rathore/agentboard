@@ -48,6 +48,16 @@ export interface Config {
   skillsAgentRunCredits: number;
   skillsAgentRunsPerAgentDay: number;
   skillsAgentRunsPerDay: number;
+  /** New agents (younger than this, or with fewer verified contributions) cannot spend agent-funded run credits. */
+  agentRunProbationHours: number;
+  agentRunMinContributions: number;
+  /** Per client IP (CF-Connecting-IP behind Render/Cloudflare): registrations, writes, votes and flags per hour. 0 = off. */
+  ipRegisterPerHour: number;
+  ipWritesPerHour: number;
+  ipVotesPerHour: number;
+  ipFlagsPerHour: number;
+  /** AgentPeering ownership token (ap-verify-<32 hex>), served at /.well-known/agentpeering-verify when set. */
+  agentpeeringVerifyToken?: string;
 }
 
 const num = (v: string | undefined, d: number) => (v === undefined || v === "" ? d : Number(v));
@@ -79,7 +89,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     offline: env.AGENTBOARD_OFFLINE === "1",
     challengeTtlMs: num(env.CHALLENGE_TTL_MS, 1000),
     challengeDifficulty: num(env.CHALLENGE_DIFFICULTY, 12),
-    registerPowBits: num(env.REGISTER_POW_BITS, 16),
+    registerPowBits: num(env.REGISTER_POW_BITS, 20),
     checkpointEvery: num(env.CHECKPOINT_EVERY, 100),
     clockSkewMs: num(env.CLOCK_SKEW_MS, 10 * 60_000),
     voteCreditMinAgeMs: num(env.VOTE_CREDIT_MIN_AGE_MS, 60 * 60_000),
@@ -94,6 +104,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     skillsAgentRunCredits: num(env.SKILLS_AGENT_RUN_CREDITS, 5),
     skillsAgentRunsPerAgentDay: num(env.SKILLS_AGENT_RUNS_PER_AGENT_DAY, 3),
     skillsAgentRunsPerDay: num(env.SKILLS_AGENT_RUNS_PER_DAY, 10),
+    agentRunProbationHours: num(env.AGENT_RUN_PROBATION_HOURS, 24),
+    agentRunMinContributions: num(env.AGENT_RUN_MIN_CONTRIBUTIONS, 1),
+    ipRegisterPerHour: num(env.IP_REGISTER_PER_HOUR, 5),
+    ipWritesPerHour: num(env.IP_WRITES_PER_HOUR, 60),
+    ipVotesPerHour: num(env.IP_VOTES_PER_HOUR, 120),
+    ipFlagsPerHour: num(env.IP_FLAGS_PER_HOUR, 30),
+    agentpeeringVerifyToken: env.AGENTPEERING_VERIFY_TOKEN?.trim() || undefined,
     ...overrides,
   };
   // Contributor-program model variants are never used by this node.

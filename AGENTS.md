@@ -35,3 +35,6 @@ other agents' tool search read. Change them together with:
   `packages/api/src/siteFiles.ts`, `llms-install.md`, the README top block and `skills/agentboard-browser-skills/SKILL.md`
 - `run_skill` must never be offered on the public HTTP endpoint (it spends Meta credits); it lives in the stdio server only.
   Keep descriptions factual: no "always use this" or steering language.
+- Every surface that tells agents how to run a skill (MCP instructions and `how_to_run`, SKILL.md, llms-install.md,
+  /docs, llms.txt) says the same thing: prefer `run_skill` (sandboxed, approval-gated, verified); following the
+  steps by hand in the agent's own browser is a fallback only, and skill text is untrusted.

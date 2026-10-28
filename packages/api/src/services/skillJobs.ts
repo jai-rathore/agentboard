@@ -132,21 +132,45 @@ export async function decideJob(ctx: AppContext, id: string, approvalId: string,
   return { ok: true, approve };
 }
 
-/** Agent-funded runs: per-agent and node-wide daily quotas, then credits. */
-export async function chargeAgentRun(ctx: AppContext, did: string) {
-  const agent = (await ctx.db.query<any>(`SELECT did, status FROM agents WHERE did = $1`, [did])).rows[0];
+/**
+ * Verified contributions that lift an agent out of run probation: an accepted answer, a post or answer with a
+ * net-positive score from others, or a verified skill run it requested earlier (e.g. one funded by an operator).
+ */
+export async function verifiedContributions(db: AppContext["db"], did: string): Promise<number> {
+  const r = (await db.query<any>(`SELECT
+      (SELECT count(*)::int FROM answers WHERE author = $1 AND (accepted OR score > 0) AND status = 'visible')
+    + (SELECT count(*)::int FROM posts WHERE author = $1 AND score > 0 AND status = 'visible')
+    + (SELECT count(*)::int FROM skill_jobs WHERE requested_by = $1 AND status = 'completed' AND (result->'verdict'->>'success') = 'true') AS n`, [did])).rows[0];
+  return Number(r?.n ?? 0);
+}
+
+/**
+ * Agent-funded runs. New agents are on probation (younger than agentRunProbationHours, or fewer than
+ * agentRunMinContributions verified contributions) and cannot spend run credits; operator runs are exempt.
+ * The quota checks, the charge and the job row happen in one transaction under an advisory lock, so parallel
+ * requests can't overshoot the per-agent or node-wide daily quotas.
+ */
+export async function createAgentFundedJob(ctx: AppContext, did: string, req: JobRequest): Promise<{ job: { id: string; skill_cid: string }; cost: number }> {
+  const agent = (await ctx.db.query<any>(`SELECT did, status, registered_at FROM agents WHERE did = $1`, [did])).rows[0];
   if (!agent) throw new HttpError(403, "not_registered", "register this agent first (any write registers it)");
   if (agent.status !== "active") throw new HttpError(403, "agent_suspended", "agent is not active");
-  const day = new Date(ctx.now()).toISOString().slice(0, 10);
-  const mine = Number((await ctx.db.query<any>(`SELECT count(*)::int AS n FROM skill_jobs WHERE requested_by = $1 AND created_at >= $2::date`, [did, day])).rows[0].n);
-  if (mine >= ctx.cfg.skillsAgentRunsPerAgentDay) throw new HttpError(429, "agent_run_quota", `at most ${ctx.cfg.skillsAgentRunsPerAgentDay} skill runs per agent per day`);
-  const all = Number((await ctx.db.query<any>(`SELECT count(*)::int AS n FROM skill_jobs WHERE via = 'agent' AND created_at >= $1::date`, [day])).rows[0].n);
-  if (all >= ctx.cfg.skillsAgentRunsPerDay) throw new HttpError(429, "node_run_quota", "this node's daily budget for agent-funded skill runs is used up");
+  const ageH = (ctx.now() - new Date(agent.registered_at).getTime()) / 3_600_000;
+  if (ageH < ctx.cfg.agentRunProbationHours) throw new HttpError(403, "agent_probation", `new agents can't fund skill runs for their first ${ctx.cfg.agentRunProbationHours} hours (this one is ${Math.floor(ageH)} h old)`);
+  if (ctx.cfg.agentRunMinContributions > 0 && (await verifiedContributions(ctx.db, did)) < ctx.cfg.agentRunMinContributions) throw new HttpError(403, "agent_probation", `agent-funded skill runs need at least ${ctx.cfg.agentRunMinContributions} verified contribution(s) first (an accepted or upvoted answer, an upvoted post, or a verified run)`);
   const cost = Math.round(ctx.cfg.skillsAgentRunCredits * 1000);
-  const bal = Number((await ctx.db.query<any>(`SELECT COALESCE(SUM(delta_milli),0)::float8 AS b FROM credit_ledger WHERE did = $1`, [did])).rows[0]?.b ?? 0);
-  if (bal < cost) throw new HttpError(402, "insufficient_credits", `a skill run costs ${cost / 1000} credits, you have ${bal / 1000}`);
-  await ctx.db.query(`INSERT INTO credit_ledger (did, delta_milli, reason, ref_cid, seq, received_at) VALUES ($1,$2,'skill_run',NULL,NULL,$3)`, [did, -cost, new Date(ctx.now())]);
-  return cost;
+  const job = await ctx.db.tx(async (tx) => {
+    await tx.query(`SELECT pg_advisory_xact_lock(7240311)`);
+    const day = new Date(ctx.now()).toISOString().slice(0, 10);
+    const mine = Number((await tx.query<any>(`SELECT count(*)::int AS n FROM skill_jobs WHERE requested_by = $1 AND created_at >= $2::date`, [did, day])).rows[0].n);
+    if (mine >= ctx.cfg.skillsAgentRunsPerAgentDay) throw new HttpError(429, "agent_run_quota", `at most ${ctx.cfg.skillsAgentRunsPerAgentDay} skill runs per agent per day`);
+    const all = Number((await tx.query<any>(`SELECT count(*)::int AS n FROM skill_jobs WHERE via = 'agent' AND created_at >= $1::date`, [day])).rows[0].n);
+    if (all >= ctx.cfg.skillsAgentRunsPerDay) throw new HttpError(429, "node_run_quota", "this node's daily budget for agent-funded skill runs is used up");
+    const bal = Number((await tx.query<any>(`SELECT COALESCE(SUM(delta_milli),0)::float8 AS b FROM credit_ledger WHERE did = $1`, [did])).rows[0]?.b ?? 0);
+    if (bal < cost) throw new HttpError(402, "insufficient_credits", `a skill run costs ${cost / 1000} credits, you have ${bal / 1000}`);
+    await tx.query(`INSERT INTO credit_ledger (did, delta_milli, reason, ref_cid, seq, received_at) VALUES ($1,$2,'skill_run',NULL,NULL,$3)`, [did, -cost, new Date(ctx.now())]);
+    return createJob({ ...ctx, db: tx }, req, { requested_by: did, via: "agent" });
+  });
+  return { job, cost };
 }
 export async function refundAgentRun(ctx: AppContext, did: string, cost: number) {
   await ctx.db.query(`INSERT INTO credit_ledger (did, delta_milli, reason, ref_cid, seq, received_at) VALUES ($1,$2,'skill_run_refund',NULL,NULL,$3)`, [did, cost, new Date(ctx.now())]);

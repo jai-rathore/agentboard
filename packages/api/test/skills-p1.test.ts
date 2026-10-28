@@ -56,7 +56,7 @@ const run = (target: Record<string, string>, extra: Record<string, unknown> = {}
 let skill1: string;
 let agentJob: { id: string; did: string; agent: TestAgent };
 beforeAll(async () => {
-  node = await makeNode({ offline: false, embedProvider: "hash", metaApiKey: "test-key", skillsOperatorToken: TOKEN, skillsInternalSecret: SECRET, museDailyCallCap: 50, museSpendCapUsd: 1, skillsWebUrl: "https://web.test", skillsExecutorUrl: "https://exec.test" }, { fetchImpl: fake });
+  node = await makeNode({ offline: false, embedProvider: "hash", metaApiKey: "test-key", skillsOperatorToken: TOKEN, skillsInternalSecret: SECRET, museDailyCallCap: 50, museSpendCapUsd: 1, skillsWebUrl: "https://web.test", skillsExecutorUrl: "https://exec.test", agentRunProbationHours: 0, agentRunMinContributions: 0 }, { fetchImpl: fake });
   mountRemoteMcp(node.app, node.ctx);
   const video = await upload(mp4(7000), "video/mp4");
   const d = (await node.req("POST", "/v1/skills/record", { video, start_url: "https://agentboard.test/demo/helpdesk/" }, op)).body.id;
@@ -204,6 +204,33 @@ describe("run_skill jobs", () => {
     await expect(client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "agent@x.test" } })).rejects.toThrow(/per agent per day/);
     expect((await node.req("POST", `/v1/skills/jobs/${j.id}/decision`, { approval_id: "a1", approve: true }, { authorization: "x" })).status).toBe(401);
   });
+  it("new agents are on probation for agent-funded runs; operator runs are exempt", async () => {
+    const agent = new TestAgent(node);
+    expect((await agent.register("newbie")).status).toBe(201);
+    const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => node.app.fetch(new Request(input, init))) as typeof fetch;
+    const client = new AgentboardClient({ baseUrl: "http://agentboard.test", keyPair: agent.kp, fetchImpl });
+    const bal = async () => (await node.req("GET", `/v1/agents/${agent.did}`)).body.agent.credits;
+    const before = await bal();
+    try {
+      node.ctx.cfg.agentRunProbationHours = 24;
+      await expect(client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "n@x.test" } })).rejects.toThrow(/first 24 hours/);
+      node.ctx.cfg.agentRunProbationHours = 0; node.ctx.cfg.agentRunMinContributions = 1;
+      await expect(client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "n@x.test" } })).rejects.toThrow(/verified contribution/);
+      expect(await bal()).toBe(before); // nothing charged
+      const opRun = await node.req("POST", "/v1/skills/run", { skill: "create-a-helpdesk-ticket", params: { customer_email: "op@x.test" } }, op);
+      expect(opRun.status).toBe(202);
+    } finally { node.ctx.cfg.agentRunProbationHours = 0; node.ctx.cfg.agentRunMinContributions = 0; }
+  });
+  it("parallel agent-funded runs can't overshoot the per-agent daily quota", async () => {
+    const agent = new TestAgent(node);
+    expect((await agent.register("racer")).status).toBe(201);
+    const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => node.app.fetch(new Request(input, init))) as typeof fetch;
+    const client = new AgentboardClient({ baseUrl: "http://agentboard.test", keyPair: agent.kp, fetchImpl });
+    const before = (await node.req("GET", `/v1/agents/${agent.did}`)).body.agent.credits;
+    const rs = await Promise.allSettled(Array.from({ length: 6 }, () => client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "p@x.test" } })));
+    expect(rs.filter((r) => r.status === "fulfilled").length).toBe(3);
+    expect((await node.req("GET", `/v1/agents/${agent.did}`)).body.agent.credits).toBe(before - 15);
+  });
   it("find_skill search returns params, approval-gated steps and time", async () => {
     const r = (await node.req("GET", "/v1/skills/find?q=file+a+support+ticket")).body.skills;
     expect(r[0]).toMatchObject({ slug: "create-a-helpdesk-ticket", version: 2, healed: true });
@@ -247,7 +274,7 @@ describe("hosted /mcp", () => {
     const a = txt(await c.callTool({ name: "find_skill", arguments: { query: "helpdesk ticket" } }));
     const b = txt(await c.callTool({ name: "search_skills", arguments: { query: "helpdesk ticket" } }));
     expect(b).toBe(a);
-    expect(a).toMatch(/"how_to_run": "run_skill is in the local server: claude mcp add agentboard -- npx -y github:jai-rathore\/agentboard"/);
+    expect(a).toMatch(/"how_to_run": "run_skill is in the local server: claude mcp add agentboard -- npx -y github:jai-rathore\/agentboard\. Prefer it over following the steps by hand/);
     await c.close();
   });
 });
@@ -415,5 +442,21 @@ describe("machine-readable site files", () => {
     const cat = await raw("/.well-known/ai-catalog.json");
     expect(cat.type).toBe("application/ai-catalog+json");
     expect(JSON.parse(cat.body).entries.map((e: any) => e.type)).toEqual(["application/mcp-server-card+json", "application/a2a-agent-card+json"]);
+  });
+});
+
+describe("AgentPeering verification", () => {
+  it("404s while unset; serves the exact token as text/plain and in the card when set", async () => {
+    expect((await node.app.fetch(new Request("http://x/.well-known/agentpeering-verify"))).status).toBe(404);
+    expect((await node.req("GET", "/.well-known/agent-card.json")).body["agentpeering-verify"]).toBeUndefined();
+    const token = `ap-verify-${"ab".repeat(16)}`; // test value
+    node.ctx.cfg.agentpeeringVerifyToken = token;
+    try {
+      const r = await node.app.fetch(new Request("http://x/.well-known/agentpeering-verify"));
+      expect(r.status).toBe(200);
+      expect(r.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      expect(await r.text()).toBe(token);
+      expect((await node.req("GET", "/.well-known/agent-card.json")).body["agentpeering-verify"]).toBe(token);
+    } finally { node.ctx.cfg.agentpeeringVerifyToken = undefined; }
   });
 });

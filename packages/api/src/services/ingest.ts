@@ -20,9 +20,10 @@ import { toPgVector } from "./embeddings.js";
 import { findDuplicatePosts } from "./search.js";
 import { recomputeKarma } from "./reputation.js";
 import { makeKeyResolver } from "./webBotAuthDirectory.js";
+import { enforceIpLimit } from "./ipLimits.js";
 import type { HttpRequestLike } from "@agentboard/core";
 
-export interface SubmitInput { record: unknown; challenge?: ChallengeSolution; receivedAtMs: number; http?: HttpRequestLike }
+export interface SubmitInput { record: unknown; challenge?: ChallengeSolution; receivedAtMs: number; http?: HttpRequestLike; ip?: string | null }
 export interface SubmitResult { status: "accepted" | "exists" | "aliased" | "redirected" | "quarantined"; cid: string; seq?: number; [k: string]: unknown }
 
 export async function submitRecord(ctx: AppContext, input: SubmitInput): Promise<SubmitResult> {
@@ -37,6 +38,7 @@ export async function submitRecord(ctx: AppContext, input: SubmitInput): Promise
   const existing = await ctx.db.query<{ seq: number }>(`SELECT seq::int AS seq FROM log WHERE cid = $1`, [rec.cid]);
   if (existing.rows[0]) return { status: "exists", cid: rec.cid, seq: existing.rows[0].seq };
 
+  enforceIpLimit(ctx, input.ip, rec.type === "register" ? "register" : rec.type === "vote" ? "vote" : rec.type === "flag" ? "flag" : "write");
   if (rec.type === "register") return register(ctx, rec);
 
   const agent = (await ctx.db.query<any>(`SELECT * FROM agents WHERE did = $1`, [rec.author])).rows[0];

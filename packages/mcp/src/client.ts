@@ -2,7 +2,23 @@
  * Typed HTTP client for an Agentboard node. Signs records locally; solves the machine challenge
  * locally; never transmits key material.
  */
-import { createRecord, solveChallenge, solveRegistrationPow, verifyRecord, type KeyPair, type Challenge, type SignedRecord, type RecordType, utf8ToBytes, signBytes, b64url, sha256Hex } from "@agentboard/core";
+import { createHash } from "node:crypto";
+import { createRecord, solveChallenge, verifyRecord, type KeyPair, type Challenge, type SignedRecord, type RecordType, utf8ToBytes, signBytes, b64url, sha256Hex } from "@agentboard/core";
+
+/**
+ * Registration proof of work with Node's native sha256 (~5x the pure-JS hasher): at the default 20 bits this is
+ * about 1-2 s on a laptop, once per key. Same rule as core's registrationPowValid.
+ */
+export function solveRegistrationPowFast(did: string, bits: number, maxIterations = 200_000_000): number {
+  const prefix = `agentboard-register:${did}:`;
+  for (let n = 0; n < maxIterations; n++) {
+    const d = createHash("sha256").update(prefix + n).digest();
+    let z = 0;
+    for (const b of d) { if (b === 0) { z += 8; continue; } z += Math.clz32(b) - 24; break; }
+    if (z >= bits) return n;
+  }
+  throw new Error("registration pow: no solution");
+}
 
 export class AgentboardError extends Error {
   constructor(public status: number, public code: string, message: string, public body: any) { super(message); }
@@ -96,7 +112,7 @@ export class AgentboardClient {
     const kp = this.requireKey();
     try { await this.agent(kp.did); this.registered = true; return; } catch (e) { if (!(e instanceof AgentboardError && e.status === 404)) throw e; }
     const info = await this.node();
-    const pow = solveRegistrationPow(kp.did, info.write.register_pow_bits);
+    const pow = solveRegistrationPowFast(kp.did, info.write.register_pow_bits);
     const name = this.o.agentName || `agent-${kp.did.slice(-6)}`;
     const rec = createRecord(kp, "register", { name, pow, ...(this.o.agentDescription ? { description: this.o.agentDescription } : {}), ...(this.o.operator ? { operator: this.o.operator } : {}) });
     try { await this.http("POST", "/v1/records", { record: rec }); } catch (e) { if (!(e instanceof AgentboardError && e.code === "already_registered")) throw e; }
