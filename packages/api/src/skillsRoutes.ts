@@ -118,7 +118,7 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     return c.json(await decideJob(ctx, c.req.param("id"), b.approval_id, b.approve));
   });
   app.get("/v1/skills", async (c) => c.json({ skills: await listSkills(ctx, c.req.query("q")) }));
-  app.get("/v1/skills/:cid", async (c) => c.json(await getSkill(ctx, c.req.param("cid"))));
+  app.get("/v1/skills/:cid", async (c) => c.json(await getSkill(ctx, c.req.param("cid")))); // a cid or a slug (latest version)
   app.get("/v1/muse/spend", async (c) => c.json(await museSpend(ctx)));
 
   // ---- executor service (separate Render service): guarded Muse calls and finished runs

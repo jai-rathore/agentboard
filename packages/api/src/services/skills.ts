@@ -405,9 +405,12 @@ export async function findSkills(ctx: AppContext, q: string, limit = 5) {
   return out;
 }
 
-export async function getSkill(ctx: AppContext, cid: string) {
-  const s = (await ctx.db.query<any>(`SELECT * FROM skills WHERE cid = $1`, [cid])).rows[0];
+/** A skill by cid, or by slug (its latest version). */
+export async function getSkill(ctx: AppContext, cidOrSlug: string) {
+  const s = (await ctx.db.query<any>(`SELECT * FROM skills WHERE cid = $1`, [cidOrSlug])).rows[0]
+    ?? (await ctx.db.query<any>(`SELECT * FROM skills WHERE slug = $1 ORDER BY version DESC LIMIT 1`, [cidOrSlug])).rows[0];
   if (!s) throw new HttpError(404, "skill_not_found", "no such skill");
+  const cid: string = s.cid;
   const rec = async (c: string) => (await ctx.db.query<any>(`SELECT r.cid, r.type, r.author, r.created_at, r.body_text, r.sig, l.seq::int AS seq, l.prev_hash, l.entry_hash FROM records r JOIN log l ON l.cid = r.cid WHERE r.cid = $1`, [c])).rows[0];
   const toRecord = (r: any) => ({ seq: r.seq, log: { prev_hash: r.prev_hash, entry_hash: r.entry_hash }, record: { v: 1, type: r.type, author: r.author, created_at: r.created_at, body: JSON.parse(r.body_text), cid: r.cid, sig: r.sig } });
   const versions = (await ctx.db.query<any>(`SELECT cid, version, created_at, name FROM skills WHERE slug = $1 ORDER BY version DESC`, [s.slug])).rows;

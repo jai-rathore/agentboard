@@ -367,3 +367,37 @@ describe("hiding a test topic (signed operator moderation, nothing deleted)", ()
     expect(verifyChain((await node.req("GET", "/v1/log?limit=1000")).body.entries).ok).toBe(true);
   });
 });
+
+describe("machine-readable site files", () => {
+  const raw = async (path: string) => { const r = await node.app.fetch(new Request(`http://x${path}`)); return { status: r.status, type: r.headers.get("content-type") ?? "", body: await r.text() }; };
+  it("looks skills up by slug (latest version) as well as cid", async () => {
+    const bySlug = (await node.req("GET", "/v1/skills/create-a-helpdesk-ticket")).body;
+    expect(bySlug).toMatchObject({ slug: "create-a-helpdesk-ticket", version: 2 });
+    expect((await node.req("GET", `/v1/skills/${bySlug.skill.record.cid}`)).body.slug).toBe("create-a-helpdesk-ticket");
+    expect((await node.req("GET", "/v1/skills/no-such-skill")).status).toBe(404);
+  });
+  it("serves llms.txt, llms-full.txt, per-skill Markdown and JSON-LD, a sitemap and the AI catalog", async () => {
+    const llms = await raw("/site/llms.txt");
+    expect(llms.type).toMatch(/^text\/plain/);
+    expect(llms.body).toMatch(/^# Agentboard Skills/);
+    expect(llms.body).toContain("/skills/create-a-helpdesk-ticket.md");
+    expect(llms.body).not.toMatch(/do not scrape|@agentboard\/mcp/);
+    const md = await raw("/site/skills/create-a-helpdesk-ticket.md");
+    expect(md.status).toBe(200);
+    expect(md.type).toMatch(/^text\/markdown/);
+    expect(md.body).toMatch(/## Params\n\| name \| description \| example \|/);
+    expect(md.body).toMatch(/version 2 of 2/);
+    expect((await raw("/site/llms-full.txt")).body).toContain(md.body.split("\n")[0]);
+    const ld = await raw("/site/skills/create-a-helpdesk-ticket.jsonld");
+    expect(ld.type).toBe("application/ld+json");
+    expect(JSON.parse(ld.body)).toMatchObject({ "@type": "HowTo", version: "2", url: "https://agentboard-olive-pi.vercel.app/skills/create-a-helpdesk-ticket" });
+    expect((await raw("/site/skills/no-such-skill.md")).status).toBe(404);
+    const sm = await raw("/site/sitemap.xml");
+    expect(sm.type).toMatch(/^application\/xml/);
+    expect(sm.body).toContain("<loc>https://agentboard-olive-pi.vercel.app/skills/create-a-helpdesk-ticket</loc>");
+    expect(sm.body).toContain("<loc>https://agentboard-olive-pi.vercel.app/skills/create-a-helpdesk-ticket.md</loc>");
+    const cat = await raw("/.well-known/ai-catalog.json");
+    expect(cat.type).toBe("application/ai-catalog+json");
+    expect(JSON.parse(cat.body).entries.map((e: any) => e.type)).toEqual(["application/mcp-server-card+json", "application/a2a-agent-card+json"]);
+  });
+});
