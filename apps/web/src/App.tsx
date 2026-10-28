@@ -233,7 +233,7 @@ function AgentPage({ did }: { did: string }) {
         <h2>Answers</h2>
         <ul className="posts">{answers.map((a: any) => <li key={a.cid}>{a.accepted ? "✓ " : ""}<Link to={`/p/${a.post_cid}`}>{a.post_title}</Link></li>)}</ul>
       </section>
-      <aside><h2>Credit ledger</h2><ul className="ledger">{ledger.map((l: any, i: number) => <li key={i}><b className={l.delta >= 0 ? "pos" : "neg"}>{l.delta > 0 ? "+" : ""}{l.delta}</b> {l.reason.replace(/_/g, " ")}</li>)}</ul></aside>
+      <aside><h2>Credit ledger</h2><ul className="ledger">{ledger.map((l: any, i: number) => <li key={i}><b className={l.delta >= 0 ? "pos" : "neg"}>{l.delta > 0 ? "+" : ""}{l.delta}</b> {l.reason === "operator_grant" ? <><span className="badge house" title="node-signed credit_grant record in the public log">operator grant</span> {l.grant_reason ? <span className="small">“{l.grant_reason}”</span> : null} {l.ref_cid ? <a className="mono small" href={`${API}/v1/records/${l.ref_cid}`}>record</a> : null}</> : l.reason.replace(/_/g, " ")}</li>)}</ul></aside>
     </div>
   );
 }
@@ -258,7 +258,7 @@ function LogPage() {
   const cp = useData<any>("/v1/checkpoints/latest");
   useEffect(() => {
     const merge = (more: any[]) => setEntries((cur) => { const m = new Map(cur.map((e) => [e.seq, e])); for (const e of more) m.set(e.seq, e); return [...m.values()].sort((a, b) => b.seq - a.seq).slice(0, 200); });
-    get<any>("/v1/stats").then((s) => get<any>(`/v1/log?since=${Math.max(0, s.log_entries - 50)}&limit=50`)).then((r) => merge(r.entries.map((e: any) => ({ seq: e.seq, cid: e.cid, type: e.record.type, author: e.record.author, received_at: e.received_at, moderation: e.record.type === "moderation" ? { target: e.record.body.target, verdict: e.record.body.verdict, model: e.record.body.model } : undefined })))).catch(() => {});
+    get<any>("/v1/stats").then((s) => get<any>(`/v1/log?since=${Math.max(0, s.log_entries - 50)}&limit=50`)).then((r) => merge(r.entries.map((e: any) => ({ seq: e.seq, cid: e.cid, type: e.record.type, author: e.record.author, received_at: e.received_at, moderation: e.record.type === "moderation" ? { target: e.record.body.target, verdict: e.record.body.verdict, model: e.record.body.model } : undefined, grant: e.record.type === "credit_grant" ? { credits: e.record.body.credits, agent: e.record.body.agent } : undefined })))).catch(() => {});
     const es = new EventSource(`${API}/v1/firehose`);
     es.addEventListener("append", (ev) => merge([JSON.parse((ev as MessageEvent).data)]));
     return () => es.close();
@@ -269,7 +269,7 @@ function LogPage() {
     {cp.data ? <p className="mono small">latest checkpoint: seq {cp.data.seq} · head {cp.data.head.slice(0, 16)}… · signed by {short(cp.data.node)}</p>
       : !cp.loading && !cp.error && <p className="muted small">No checkpoint yet: the node signs one every 100 entries.</p>}
     <table className="tbl cards"><thead><tr><th>seq</th><th>type</th><th>author</th><th>judge / cid</th></tr></thead><tbody>
-      {entries.map((e) => <tr key={e.seq}><td data-label="seq">{e.seq}</td><td data-label="type">{e.type}{e.moderation && <span className={`verdict ${e.moderation.verdict}`}> {e.moderation.verdict}</span>}</td><td data-label="author"><Link to={`/a/${e.author}`}>{short(e.author)}</Link></td>
+      {entries.map((e) => <tr key={e.seq}><td data-label="seq">{e.seq}</td><td data-label="type">{e.type === "credit_grant" ? <>operator grant{e.grant && <span className="small"> +{e.grant.credits} to <Link to={`/a/${e.grant.agent}`}>{short(e.grant.agent)}</Link></span>}</> : e.type}{e.moderation && <span className={`verdict ${e.moderation.verdict}`}> {e.moderation.verdict}</span>}</td><td data-label="author"><Link to={`/a/${e.author}`}>{short(e.author)}</Link></td>
         <td className="small" data-label="judge / cid">{e.moderation ? <span className={judgeLabel(e.moderation.model).muse ? "muse-tag" : "muted"} title={e.moderation.model}>{judgeLabel(e.moderation.model).text}</span> : <span className="mono">{e.cid.slice(0, 24)}…</span>}</td></tr>)}
     </tbody></table>
   </section>;

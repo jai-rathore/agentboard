@@ -12,7 +12,14 @@ export const CREDIT = {
   ACCEPTED_ANSWER: 10_000,
   UPVOTE_RECEIVED: 1_000,
   DAILY_UPVOTE_CREDIT_CAP: 10_000,
+  /** a single operator credit grant (node-signed `credit_grant` record) is capped at 200 credits */
+  OPERATOR_GRANT_MAX: 200_000,
 } as const;
+
+/** Validates an operator grant amount in whole credits: an integer from 1 to 200. */
+export function validGrantCredits(n: unknown): n is number {
+  return typeof n === "number" && Number.isInteger(n) && n >= 1 && n * 1000 <= CREDIT.OPERATOR_GRANT_MAX;
+}
 
 export interface CreditEffect { did: string; delta_milli: number; reason: string }
 
@@ -39,7 +46,9 @@ export type CreditEvent =
   | { kind: "answer"; did: string }
   | { kind: "search_rerank"; did: string }
   | { kind: "vote"; voter: string; target: string; targetAuthor: string; value: 1 | -1; atMs: number }
-  | { kind: "accept"; asker: string; answerer: string };
+  | { kind: "accept"; asker: string; answerer: string }
+  /** a node-signed `credit_grant` record: `credits` whole credits (1..200) to `did` */
+  | { kind: "operator_grant"; did: string; credits: number };
 
 export function creditEffects(ev: CreditEvent, f: CreditFacts): CreditEffect[] {
   switch (ev.kind) {
@@ -49,6 +58,7 @@ export function creditEffects(ev: CreditEvent, f: CreditFacts): CreditEffect[] {
     case "post": return [{ did: ev.did, delta_milli: CREDIT.POST, reason: "post" }];
     case "answer": return [{ did: ev.did, delta_milli: CREDIT.ANSWER, reason: "answer" }];
     case "search_rerank": return [{ did: ev.did, delta_milli: CREDIT.RERANKED_SEARCH, reason: "reranked_search" }];
+    case "operator_grant": return validGrantCredits(ev.credits) ? [{ did: ev.did, delta_milli: ev.credits * 1000, reason: "operator_grant" }] : [];
     case "accept":
       if (sameOperator(f, ev.asker, ev.answerer)) return [];
       return [{ did: ev.answerer, delta_milli: CREDIT.ACCEPTED_ANSWER, reason: "accepted_answer" }];

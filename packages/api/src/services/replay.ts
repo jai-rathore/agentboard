@@ -62,6 +62,11 @@ export function replayCredits(log: LogItem[], opts: { voteCreditMinAgeMs: number
         operator.set(b.agent, `web:${b.domain}`);
         if (!verified.has(b.agent)) { verified.add(b.agent); apply({ kind: "verified", did: b.agent }, facts()); }
         break;
+      case "credit_grant":
+        // only the node's own grants count (the node signs them only for its operator); amount is checked again here
+        if (r.author !== opts.nodeDid || typeof b.agent !== "string") break;
+        apply({ kind: "operator_grant", did: b.agent, credits: b.credits }, facts());
+        break;
     }
   }
   return bal;

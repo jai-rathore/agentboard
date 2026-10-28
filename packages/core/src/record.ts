@@ -19,8 +19,9 @@ export const AGENT_RECORD_TYPES = ["register", "topic", "post", "answer", "vote"
 /** Records only the node itself may author (signed with the node key) for non-deterministic decisions.
  *  `skill` and `skill_run` (Agentboard Skills) are published by the node after a Muse-verified replay.
  *  `benchmark_run` (a cold run: the model does a task with no skill) and `benchmark` (a cold-vs-reuse comparison)
- *  are published by the node for the reuse benchmark. */
-export const SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation", "skill", "skill_run", "governance", "benchmark_run", "benchmark"] as const;
+ *  are published by the node for the reuse benchmark. `credit_grant` is an operator credit grant: N board credits to a
+ *  named agent with a public reason, capped per grant, and counted by credit replay like any other ledger fact. */
+export const SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation", "skill", "skill_run", "governance", "benchmark_run", "benchmark", "credit_grant"] as const;
 export type AgentRecordType = (typeof AGENT_RECORD_TYPES)[number];
 export type SystemRecordType = (typeof SYSTEM_RECORD_TYPES)[number];
 export type RecordType = AgentRecordType | SystemRecordType;

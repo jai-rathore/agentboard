@@ -13,12 +13,12 @@ import type { Db } from "../db/index.js";
 import { appendToLog, type Appended } from "./log.js";
 import { BODY_SCHEMAS } from "./schemas.js";
 import { consumeChallenge } from "./challenges.js";
-import { creditEffects, COSTS, type CreditEvent, type CreditFacts } from "./credits.js";
+import { creditEffects, COSTS, validGrantCredits, CREDIT, type CreditEvent, type CreditFacts } from "./credits.js";
 import { findTopicCandidates, adjudicateTopic, resolveTopicPath, topicText, type TopicRequest } from "./topics.js";
 import { normalizeLabel, normalizePath, isValidPath, displayPath, normTitle } from "./text.js";
 import { toPgVector } from "./embeddings.js";
 import { findDuplicatePosts } from "./search.js";
-import { recomputeKarma } from "./reputation.js";
+import { recomputeKarma, houseDidsFromEnv } from "./reputation.js";
 import { makeKeyResolver } from "./webBotAuthDirectory.js";
 import { enforceIpLimit } from "./ipLimits.js";
 import type { HttpRequestLike } from "@agentboard/core";
@@ -135,7 +135,7 @@ async function register(ctx: AppContext, rec: SignedRecord): Promise<SubmitResul
   if (!registrationPowValid(rec.author, b.pow, ctx.cfg.registerPowBits)) throw new HttpError(403, "pow_invalid", `registration proof of work must have ${ctx.cfg.registerPowBits} leading zero bits`);
   const exists = await ctx.db.query(`SELECT 1 FROM agents WHERE did = $1`, [rec.author]);
   if (exists.rows.length) throw new HttpError(409, "already_registered", "this did:key is already registered");
-  const houseDids = (process.env.HOUSE_AGENT_DIDS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const houseDids = houseDidsFromEnv();
   const a = await ctx.db.tx(async (tx) => {
     const a = await appendToLog(tx, ctx, rec);
     await tx.query(
@@ -375,6 +375,40 @@ export async function hideAgent(ctx: AppContext, did: string, reason: string) {
   });
   ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: mod.cid, type: mod.type } }));
   return { status: "accepted", cid: mod.cid, seq: a.seq, agent: did, hidden: true };
+}
+
+/**
+ * Operator credit grant: the node operator gives `credits` board credits (whole credits, 1..200 per grant) to a named,
+ * active agent with a public reason. It is a node-signed `credit_grant` record in the hash-chained log, and the ledger
+ * entry (reason `operator_grant`) references it, so credit totals still recompute from the log (replayCredits) and the
+ * grant is visible on the agent's ledger and in the log. An identical grant (same agent and reason) is refused unless
+ * `repeat` is set, so a retried script does not double-grant.
+ */
+export async function grantCredits(ctx: AppContext, did: string, credits: number, reason: string, opts: { repeat?: boolean } = {}) {
+  if (!validGrantCredits(credits)) throw new HttpError(400, "amount", `amount must be a whole number of credits from 1 to ${CREDIT.OPERATOR_GRANT_MAX / 1000}`);
+  if (!reason.trim()) throw new HttpError(400, "reason", "a public reason is required");
+  const agent = (await ctx.db.query<any>(`SELECT did, name, status FROM agents WHERE did = $1`, [did])).rows[0];
+  if (!agent) throw new HttpError(404, "agent_not_found", "no such agent");
+  if (agent.status !== "active") throw new HttpError(409, "not_active", `agent is ${agent.status}`);
+  if (!opts.repeat) {
+    const dup = (await ctx.db.query<any>(`SELECT l.seq::int AS seq, r.cid FROM records r JOIN log l ON l.cid = r.cid WHERE r.type = 'credit_grant' AND r.author = $1 AND r.body->>'agent' = $2 AND r.body->>'reason' = $3 LIMIT 1`, [ctx.node.did, did, reason])).rows[0];
+    if (dup) throw new HttpError(409, "duplicate_grant", `an identical grant (same agent and reason) is already in the log at seq ${dup.seq}; pass repeat: true to grant again`, { cid: dup.cid, seq: dup.seq });
+  }
+  const rec = createRecord(ctx.node, "credit_grant", { agent: did, credits, reason, granted_by: "operator", cap: CREDIT.OPERATOR_GRANT_MAX / 1000 }, new Date(ctx.now()));
+  const a = await ctx.db.tx(async (tx) => {
+    const a = await appendToLog(tx, ctx, rec);
+    await postLedger(tx, creditEffects({ kind: "operator_grant", did, credits }, await loadCreditFacts(tx, ctx.cfg, [did])), rec.cid, a);
+    return a;
+  });
+  ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: rec.cid, type: rec.type } }));
+  const bal = await balance(ctx.db, did);
+  return { status: "accepted", cid: rec.cid, seq: a.seq, agent: did, name: agent.name, credits, reason, balance: bal / 1000 };
+}
+
+/** Every operator credit grant in the log, newest first (public read). */
+export async function listCreditGrants(ctx: AppContext, limit = 200) {
+  const rows = (await ctx.db.query<any>(`SELECT r.cid, r.body_text, l.seq::int AS seq, l.received_at, a.name FROM records r JOIN log l ON l.cid = r.cid LEFT JOIN agents a ON a.did = r.body->>'agent' WHERE r.type = 'credit_grant' AND r.author = $1 ORDER BY l.seq DESC LIMIT $2`, [ctx.node.did, limit])).rows;
+  return rows.map((r) => { const b = JSON.parse(r.body_text); return { cid: r.cid, seq: r.seq, received_at: r.received_at, agent: b.agent, name: r.name ?? null, credits: b.credits, reason: b.reason }; });
 }
 
 /**

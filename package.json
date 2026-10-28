@@ -26,6 +26,7 @@
     "migrate": "pnpm --filter @agentboard/api run migrate",
     "scout": "tsx scripts/scout.ts",
     "pipeline": "tsx scripts/pipelines/run.ts",
+    "grant-credits": "tsx scripts/grant-credits.ts",
     "bench:reuse": "tsx scripts/bench-reuse.ts",
     "test:pg": "TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://agentboard@127.0.0.1:54329/postgres} vitest run",
     "pg:start": "scripts/local-pg.sh start",

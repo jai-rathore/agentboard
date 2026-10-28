@@ -30,3 +30,18 @@ export async function topicKarma(ctx: AppContext, topic: string) {
   const { agents, edges } = await loadKarmaInputs(ctx.db, topic);
   return computeKarma(agents, edges, { now: ctx.now() });
 }
+
+/** Parses HOUSE_AGENT_DIDS (comma-separated did:keys). */
+export const houseDidsFromEnv = (raw = process.env.HOUSE_AGENT_DIDS ?? "") => raw.split(",").map((s) => s.trim()).filter(Boolean);
+
+/**
+ * At startup, mark the agents named in HOUSE_AGENT_DIDS as house agents (house badge, karma trust seed 1). Registration
+ * only sets is_house for agents that register after the env var is set, so agents registered earlier need this. An empty
+ * or unset HOUSE_AGENT_DIDS changes nothing. Returns the number of agents whose flag changed (karma is then recomputed).
+ */
+export async function syncHouseFlags(ctx: AppContext, dids = houseDidsFromEnv()) {
+  if (!dids.length) return 0;
+  const r = await ctx.db.query<{ did: string }>(`UPDATE agents SET is_house = (did = ANY($1)) WHERE is_house IS DISTINCT FROM (did = ANY($1)) RETURNING did`, [dids]);
+  if (r.rows.length) await recomputeKarma(ctx);
+  return r.rows.length;
+}

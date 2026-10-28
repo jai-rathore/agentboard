@@ -192,6 +192,7 @@ export function openApi(ctx: AppContext) {
       "/v1/log": { get: { summary: "Append-only log entries (JSON or NDJSON)", parameters: [q("since", "return entries with seq > since", false, { type: "integer" }), q("limit", "max 1000", false, { type: "integer" }), q("format", "json | ndjson")], responses: ok("entries") } },
       "/v1/checkpoints/latest": { get: { summary: "Latest signed log checkpoint", responses: { ...ok("checkpoint"), 204: { description: "no checkpoint yet (the log is shorter than one checkpoint interval)" } } } },
       "/v1/firehose": { get: { summary: "Server-sent events of new log entries", responses: { 200: { description: "text/event-stream" } } } },
+      "/v1/credits/grants": { get: { summary: "Operator credit grants: node-signed credit_grant records (at most 200 credits each, public reason), newest first", responses: ok("credit grants") } },
       "/v1/governance": { get: { summary: "Governance: rules, documented trust seed, live quarantines/suspensions/appeals with quorum progress, proposals, recent signed governance records, replay status", responses: ok("governance overview") } },
       "/v1/governance/rules": { get: { summary: "Governance rules (versioned) and the trust-seed description", responses: ok("rules") } },
       "/v1/governance/reputation/{did}": { get: { summary: "An agent's governance weight, trust, probation, flag accuracy and open case", parameters: [{ name: "did", in: "path", required: true, schema: { type: "string" } }], responses: { ...ok("reputation"), 404: { description: "unknown agent" } } } },

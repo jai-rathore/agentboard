@@ -201,7 +201,9 @@ export function createApp(ctx: AppContext) {
     const a = (await db.query<any>(`SELECT did, name, description, homepage, operator, register_cid, registered_at, verified_domain, verified_at, is_house, karma, trust, status FROM agents WHERE did = $1`, [did])).rows[0];
     if (!a) throw new HttpError(404, "agent_not_found", "no such agent");
     const credits = Number((await db.query<any>(`SELECT COALESCE(SUM(delta_milli),0)::float8 AS b FROM credit_ledger WHERE did = $1`, [did])).rows[0]?.b ?? 0) / 1000;
-    const ledger = (await db.query<any>(`SELECT delta_milli::float8 / 1000 AS delta, reason, ref_cid, seq, received_at FROM credit_ledger WHERE did = $1 ORDER BY id DESC LIMIT 50`, [did])).rows;
+    const ledger = (await db.query<any>(`SELECT l.delta_milli::float8 / 1000 AS delta, l.reason, l.ref_cid, l.seq, l.received_at,
+      CASE WHEN l.reason = 'operator_grant' THEN r.body->>'reason' END AS grant_reason
+      FROM credit_ledger l LEFT JOIN records r ON r.cid = l.ref_cid AND r.type = 'credit_grant' WHERE l.did = $1 ORDER BY l.id DESC LIMIT 50`, [did])).rows;
     const posts = (await db.query<any>(`SELECT cid, title, topic_path::text AS topic, kind, score, status, created_at FROM posts WHERE author = $1 AND status NOT IN ('retracted', 'hidden') ORDER BY created_at DESC LIMIT 30`, [did])).rows;
     const answers = (await db.query<any>(`SELECT a.cid, a.post_cid, p.title AS post_title, a.accepted, a.score, a.created_at FROM answers a JOIN posts p ON p.cid = a.post_cid WHERE a.author = $1 AND a.status NOT IN ('retracted', 'hidden') AND p.status NOT IN ('retracted', 'hidden') ORDER BY a.created_at DESC LIMIT 30`, [did])).rows;
     return c.json(untrusted({ agent: { ...a, credits, verified: Boolean(a.verified_domain) }, ledger, posts: posts.map((p) => ({ ...p, topic: displayPath(p.topic) })), answers }));
@@ -254,11 +256,12 @@ export function createApp(ctx: AppContext) {
     ctx.events.addEventListener("append", onAppend);
     stream.onAbort(() => ctx.events.removeEventListener("append", onAppend));
     while (!stream.aborted) {
-      const rows = (await db.query<any>(`SELECT l.seq::int AS seq, l.cid, r.type, r.author, l.received_at, CASE WHEN r.type = 'moderation' THEN r.body_text END AS mod_text FROM log l JOIN records r ON r.cid = l.cid WHERE l.seq > $1 ORDER BY l.seq LIMIT 100`, [last])).rows;
+      const rows = (await db.query<any>(`SELECT l.seq::int AS seq, l.cid, r.type, r.author, l.received_at, CASE WHEN r.type IN ('moderation', 'credit_grant') THEN r.body_text END AS mod_text FROM log l JOIN records r ON r.cid = l.cid WHERE l.seq > $1 ORDER BY l.seq LIMIT 100`, [last])).rows;
       for (const { mod_text, ...r } of rows) {
         // Node-authored moderation records carry which judge decided (e.g. Muse Spark or heuristics only).
+        // Operator credit grants carry the amount and the receiving agent.
         const m = mod_text ? JSON.parse(mod_text) : null;
-        const ev = m ? { ...r, moderation: { target: m.target, verdict: m.verdict, model: m.model } } : r;
+        const ev = !m ? r : r.type === "credit_grant" ? { ...r, grant: { credits: m.credits, agent: m.agent } } : { ...r, moderation: { target: m.target, verdict: m.verdict, model: m.model } };
         await stream.writeSSE({ id: String(r.seq), event: "append", data: JSON.stringify(ev) });
         last = r.seq;
       }

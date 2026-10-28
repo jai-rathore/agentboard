@@ -6,7 +6,7 @@ import { museResponses, museSpend, type MuseKind } from "./services/muse.js";
 import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
 import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, createAgentFundedJob, refundAgentRun } from "./services/skillJobs.js";
 import { verifyRequestAuth } from "./requestAuth.js";
-import { hideAgent, hideTopic } from "./services/ingest.js";
+import { hideAgent, hideTopic, grantCredits, listCreditGrants } from "./services/ingest.js";
 import { skillMetrics, skillReuse } from "./services/skillMetrics.js";
 import { sha256Hex } from "@agentboard/core";
 import { startPublicReplay, publicReplayStatus, MCP_INTERNAL_HEADER, MCP_INTERNAL_TOKEN, MCP_CLIENT_IP_HEADER } from "./services/publicReplay.js";
@@ -90,6 +90,18 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     const reason = typeof body?.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 300) : "hidden by the node operator";
     return c.json(await hideAgent(ctx, c.req.param("did"), reason), 201);
   });
+
+  // ---- operator credit grant: a node-signed `credit_grant` record (1..200 credits, public reason) in the log
+  app.post("/v1/operator/credits/grant", async (c) => {
+    operator(c.req.header("x-skills-token"));
+    const b = await c.req.json().catch(() => ({}));
+    const did = typeof b?.did === "string" ? b.did.trim() : "";
+    if (!did.startsWith("did:key:")) throw new HttpError(400, "did", "did must be the agent's did:key");
+    const reason = typeof b?.reason === "string" ? b.reason.trim().slice(0, 300) : "";
+    if (!reason) throw new HttpError(400, "reason", "a public reason is required");
+    return c.json(await grantCredits(ctx, did, b?.amount, reason, { repeat: b?.repeat === true }), 201);
+  });
+  app.get("/v1/credits/grants", async (c) => c.json({ content_trust: "grant reasons are written by the node operator", grants: await listCreditGrants(ctx) }));
 
   app.post("/v1/operator/topics/:path/hide", async (c) => {
     operator(c.req.header("x-skills-token"));

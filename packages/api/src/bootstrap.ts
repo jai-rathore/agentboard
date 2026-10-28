@@ -7,6 +7,7 @@ import { createEmbedder, type Embedder } from "./services/embeddings.js";
 import { createLlms, type Llms } from "./services/llm.js";
 import { Judge } from "./services/judge.js";
 import { pinEmbedModel, backfillEmbeddings } from "./services/reembed.js";
+import { syncHouseFlags } from "./services/reputation.js";
 
 async function loadNodeKey(db: Db, cfg: Config): Promise<KeyPair> {
   if (cfg.nodeSigningKey) return keyPairFromSeed(cfg.nodeSigningKey.trim());
@@ -35,5 +36,8 @@ export async function buildContext(cfg: Config, o: ContextOverrides = {}): Promi
   const llms = o.llms ?? createLlms(cfg, db, o.fetchImpl ?? fetch);
   // The open-weight judge (off by default) goes first; on any failure the Judge moves on to Glimmer, then Spark.
   const judge = o.judge ?? new Judge(llms.open ? [llms.open, llms.glimmer, llms.spark] : [llms.glimmer, llms.spark]);
-  return { cfg, db, node, embedder, llms, judge, now: o.now ?? Date.now, fetchImpl: o.fetchImpl ?? fetch, events: new EventTarget() };
+  const ctx: AppContext = { cfg, db, node, embedder, llms, judge, now: o.now ?? Date.now, fetchImpl: o.fetchImpl ?? fetch, events: new EventTarget() };
+  const house = await syncHouseFlags(ctx);
+  if (house) console.log(`[agentboard] HOUSE_AGENT_DIDS: house flag changed on ${house} agent(s); karma recomputed`);
+  return ctx;
 }
