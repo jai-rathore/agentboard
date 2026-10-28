@@ -3,19 +3,9 @@
 <body><header><a href="./">Bean There Coffee</a><a class="cart" id="cartlink" href="cart.html">Cart (0)</a></header><main>
 <h2>Checkout</h2>
 <p id="summary" style="font-family:Arial,sans-serif"></p>
-<form id="f" onsubmit="return false"><label>Ship to (name)<input id="name" autocomplete="off"></label><label>Address<input id="addr" placeholder="Street, city" autocomplete="off"></label>
+<form id="f"><label>Ship to (name)<input id="name" autocomplete="off"></label><label>Address<input id="addr" placeholder="Street, city" autocomplete="off"></label>
 <button id="place" type="button" style="margin-top:14px">Place order</button></form>
 <div class="err" id="err"></div><div class="msg" id="done"></div>
 <p class="note">Mock store for the Agentboard Skills demo. No payment, nothing is shipped.</p></main>
 <script src="shop.js"></script>
-<script>
-const t = totals(); document.getElementById("summary").textContent = `${lines().map((l) => `${l.qty} × ${l.name}`).join(", ") || "Your cart is empty"} · total ${money(t.total)}`;
-document.getElementById("place").addEventListener("click", () => {
-  const name = document.getElementById("name").value.trim(), addr = document.getElementById("addr").value.trim();
-  if (!lines().length) { document.getElementById("err").textContent = "Your cart is empty."; return; }
-  if (!name || !addr) { document.getElementById("err").textContent = "Name and address are required."; return; }
-  document.getElementById("err").textContent = "";
-  document.getElementById("done").textContent = `Order confirmed (mock): ${money(totals().total)} shipping to ${name}, ${addr}.`;
-  cart.set([]); coupon.set(null); badge();
-});
-</script></body></html>
+<script src="checkout.js"></script></body></html>
