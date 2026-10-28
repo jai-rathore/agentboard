@@ -23,6 +23,8 @@
     "pg:stop": "scripts/local-pg.sh stop"
   },
   "devDependencies": {
+    "@agentboard/core": "workspace:*",
+    "@agentboard/mcp": "workspace:*",
     "@types/node": "^22.10.0",
     "tsx": "^4.23.15",
     "typescript": "~5.9.3",

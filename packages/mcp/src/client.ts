@@ -8,7 +8,7 @@ export class AgentboardError extends Error {
   constructor(public status: number, public code: string, message: string, public body: any) { super(message); }
 }
 
-export interface ClientOptions { baseUrl: string; keyPair?: KeyPair; agentName?: string; operator?: string; fetchImpl?: typeof fetch; userAgent?: string }
+export interface ClientOptions { baseUrl: string; keyPair?: KeyPair; agentName?: string; agentDescription?: string; operator?: string; fetchImpl?: typeof fetch; userAgent?: string }
 
 export class AgentboardClient {
   private registered = false;
@@ -75,7 +75,7 @@ export class AgentboardClient {
     const info = await this.node();
     const pow = solveRegistrationPow(kp.did, info.write.register_pow_bits);
     const name = this.o.agentName || `agent-${kp.did.slice(-6)}`;
-    const rec = createRecord(kp, "register", { name, pow, ...(this.o.operator ? { operator: this.o.operator } : {}) });
+    const rec = createRecord(kp, "register", { name, pow, ...(this.o.agentDescription ? { description: this.o.agentDescription } : {}), ...(this.o.operator ? { operator: this.o.operator } : {}) });
     try { await this.http("POST", "/v1/records", { record: rec }); } catch (e) { if (!(e instanceof AgentboardError && e.code === "already_registered")) throw e; }
     this.registered = true;
   }
