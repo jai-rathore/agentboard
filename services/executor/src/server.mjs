@@ -268,6 +268,16 @@ async function inspect(page, a) {
       text: (el.innerText ?? "").trim().slice(0, 80), value: (el.tagName === "SELECT" ? el.options[el.selectedIndex]?.text : el.value ?? "")?.toString().slice(0, 80) ?? "",
       label: ((el.labels?.[0] ?? el.closest("label"))?.innerText ?? "").split("\n")[0].trim().slice(0, 80),
       aria: el.getAttribute("aria-label") ?? "", placeholder: el.getAttribute("placeholder") ?? "", inForm: Boolean(el.closest("form")),
+      lookupForm: (() => {
+        const f = el.closest("form");
+        if (!f) return false;
+        // exactly one visible free-text field (selects such as "search in: all fields" are fine), never email/password/phone
+        const fields = [...f.querySelectorAll("input, textarea")].filter((x) => !/^(hidden|submit|button|image|reset|checkbox|radio)$/i.test(x.getAttribute("type") ?? "") && x.offsetParent !== null);
+        if (fields.length !== 1 || fields[0].tagName !== "INPUT" || /^(email|password|tel)$/i.test(fields[0].type) || /mail|pass|phone/i.test(fields[0].name ?? "")) return false;
+        const method = (f.getAttribute("method") ?? "").toLowerCase();
+        if (method && method !== "get") return false;
+        return method === "get" || Boolean(f.closest("[role=search]")) || f.getAttribute("role") === "search" || fields[0].type === "search";
+      })(),
       options: el.tagName === "SELECT" ? [...el.options].map((o) => o.text).slice(0, 30) : undefined,
     };
   }, { a });

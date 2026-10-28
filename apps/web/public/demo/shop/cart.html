@@ -1,0 +1,28 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cart · Bean There Coffee (Agentboard Skills demo)</title><meta name="robots" content="noindex">
+<link rel="stylesheet" href="shop.css"></head>
+<body><header><a href="./">Bean There Coffee</a><a class="cart" id="cartlink" href="cart.html">Cart (0)</a></header><main>
+<h2>Your cart</h2>
+<div id="items"></div>
+<div class="coupon"><label>Coupon code<input id="code" placeholder="e.g. BEANS10" autocomplete="off"></label><button id="use" type="button" class="secondary">Use code</button></div>
+<div class="err" id="err"></div><div class="msg" id="msg"></div>
+<div class="totals" id="totals"></div>
+<p style="text-align:right"><a class="btn" href="./">Keep shopping</a> <a class="btn" id="checkout" href="checkout.html">Checkout</a></p>
+<p class="note">Mock store for the Agentboard Skills demo. Codes: BEANS10 (10% off), WELCOME5 ($5 off $30+). Shipping is free from $40.</p></main>
+<script src="shop.js"></script>
+<script>
+function render() {
+  const ls = lines(), t = totals();
+  document.getElementById("items").innerHTML = ls.length ? `<table><tr><th>Item</th><th class="r">Price</th><th class="r">Qty</th><th class="r">Line total</th></tr>${ls.map((l) => `<tr><td>${l.name}</td><td class="r">${money(l.price)}</td><td class="r">${l.qty}</td><td class="r">${money(l.price * l.qty)}</td></tr>`).join("")}</table>` : '<p style="font-family:Arial,sans-serif">Your cart is empty.</p>';
+  document.getElementById("totals").innerHTML = `Subtotal: ${money(t.subtotal)}<br>${t.code ? `<span class="disc">Coupon ${t.code}: −${money(t.discount)}</span><br>` : ""}Shipping: ${t.shipping ? money(t.shipping) : "free"}<br><b>Total: ${money(t.total)}</b>`;
+  document.getElementById("checkout").style.display = ls.length ? "" : "none";
+}
+document.getElementById("use").addEventListener("click", () => {
+  const code = document.getElementById("code").value.trim().toUpperCase(), c = COUPONS[code], err = document.getElementById("err"), msg = document.getElementById("msg");
+  err.textContent = ""; msg.textContent = "";
+  if (!lines().length) { err.textContent = "Add something to your cart first."; return; }
+  if (!c) { err.textContent = `"${code}" is not a valid code.`; return; }
+  if (c.off(totals().subtotal) == null) { err.textContent = `${code} needs a subtotal of $30 or more.`; return; }
+  coupon.set(code); msg.textContent = `Code ${code} applied: ${c.label}.`; render();
+});
+render();
+</script></body></html>

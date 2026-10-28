@@ -8,7 +8,9 @@ import { Link, useData, short, ago, MODEL_NAMES } from "./App";
 
 const DEMOS = [
   { name: "Acme Helpdesk (mock)", url: `${location.origin}/demo/helpdesk/` },
+  { name: "Acme Helpdesk: ticket status (mock)", url: `${location.origin}/demo/helpdesk/status.html` },
   { name: "Bean There Coffee (mock store)", url: `${location.origin}/demo/shop/` },
+  { name: "Bean There Coffee: cart (mock store)", url: `${location.origin}/demo/shop/cart.html` },
 ];
 const art = (sha?: string | null) => (sha ? `${API}/v1/artifacts/${sha}` : "");
 const go = (to: string) => { history.pushState(null, "", to); dispatchEvent(new PopStateEvent("popstate")); scrollTo(0, 0); };

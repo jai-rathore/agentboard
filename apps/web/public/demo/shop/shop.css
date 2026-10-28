@@ -1,0 +1,15 @@
+body{font-family:Georgia,serif;margin:0;background:#fbf7f2;color:#3b2a1a}
+header{background:#3b2a1a;color:#f5e6d3;padding:14px 24px;font-size:22px;display:flex;justify-content:space-between;align-items:center}
+header a{color:#f5e6d3;text-decoration:none}header .cart{font-family:Arial,sans-serif;font-size:15px;background:#5a4330;padding:6px 14px;border-radius:16px}
+main{max-width:860px;margin:20px auto;padding:0 16px}
+.bar{display:flex;gap:10px;align-items:flex-end;margin-bottom:14px}.bar label{font-size:13px;font-family:Arial,sans-serif;color:#6b5440}
+input,select{padding:8px;font-size:14px;box-sizing:border-box;border:1px solid #cdb9a3;border-radius:4px;display:block;margin-top:3px;font-family:Arial,sans-serif}
+button,.btn{background:#b5651d;color:#fff;border:0;padding:9px 18px;font-size:14px;border-radius:4px;cursor:pointer;font-family:Arial,sans-serif;text-decoration:none;display:inline-block}
+button.secondary{background:#e6d8c6;color:#3b2a1a}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.card{background:#fff;border:1px solid #e6d8c6;border-radius:8px;padding:10px;font-size:14px;display:flex;flex-direction:column;gap:4px}
+.card b{font-size:15px}.card .price{font-family:Arial,sans-serif;font-weight:bold;color:#7a3e0e}.card .cat{color:#998;font-size:12px;font-family:Arial,sans-serif}.card button{margin-top:auto;padding:6px 10px}
+.msg{font-family:Arial,sans-serif;font-size:13px;color:#1b5e20;min-height:18px;margin:6px 0}.err{color:#a40000;font-family:Arial,sans-serif;font-size:13px;margin-top:6px}
+table{width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px;background:#fff}td,th{padding:8px;border-bottom:1px solid #eee;text-align:left}td.r,th.r{text-align:right}
+.totals{margin-top:12px;font-family:Arial,sans-serif;font-size:15px;text-align:right;line-height:1.7}.totals b{font-size:18px}.disc{color:#1b5e20}
+.coupon{display:flex;gap:8px;align-items:flex-end;margin-top:14px;font-family:Arial,sans-serif;font-size:13px}
+.note{color:#998;font-size:12px;text-align:center;margin-top:30px}form label{display:block;margin-top:10px;font-family:Arial,sans-serif;font-size:13px}form input{width:100%}

@@ -58,6 +58,11 @@ export function approvalFor(action, el, skill = { steps: [], risk_flags: [] }, c
   if (!el) return { approval: "auto", reason: isClick ? "click on empty space" : "key outside any control", flags: [] };
   const label = `${el.text ?? ""} ${el.value ?? ""} ${el.aria ?? ""}`.trim();
   const control = el.tag === "button" || el.tag === "a" || el.role === "button" || (el.tag === "input" && /^(submit|button|image)$/i.test(el.type ?? ""));
+  // A read-only lookup form (role=search, a type=search box, or an explicit method="get" form with one
+  // text field and no email/password) only navigates to results, so Enter or its search button is fine.
+  if (el.lookupForm && (!control || !COMMIT_WORDS.test(`${el.text ?? ""} ${el.aria ?? ""} ${control && el.tag === "input" ? el.value ?? "" : ""}`))) {
+    return { approval: "auto", reason: `${isClick ? "click" : isEnter ? "Enter" : "Space"} in a read-only search/lookup form (GET) does not commit anything`, flags: [] };
+  }
   const committing = control ? COMMIT_WORDS.test(label) || /^submit$/i.test(el.type ?? "") : isEnter && el.inForm;
   const what = `${isClick ? "click" : isEnter ? "Enter" : "Space"} on ${el.tag}${label ? ` "${label.slice(0, 40)}"` : ""}`;
   if (!committing) return { approval: "auto", reason: `${what} does not commit anything`, flags: [] };

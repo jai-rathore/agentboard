@@ -25,6 +25,17 @@ describe("executor approval policy", () => {
     }
     expect(approvalFor({ type: "keypress", keys: ["Enter"] }, { tag: "input", type: "text", inForm: false }, skill).approval).toBe("auto");
   });
+  it("read-only search/lookup forms (GET) run without approval; everything else in a form still needs a human", () => {
+    const enter = { type: "keypress", keys: ["ENTER"] };
+    expect(approvalFor(enter, { tag: "input", type: "text", value: "order status 94103", inForm: true, lookupForm: true }, skill).approval).toBe("auto");
+    expect(approvalFor({ type: "click" }, { tag: "input", type: "submit", value: "Go", inForm: true, lookupForm: true }, skill).approval).toBe("auto");
+    expect(approvalFor({ type: "click" }, { tag: "button", text: "Search", inForm: true, lookupForm: true }, skill).approval).toBe("auto");
+    // a committing word on the button itself still gates, even in a GET form
+    expect(approvalFor({ type: "click" }, { tag: "button", text: "Subscribe", inForm: true, lookupForm: true }, skill).approval).toBe("human");
+    // not a lookup form: Enter in a form is still gated
+    expect(approvalFor(enter, { tag: "input", type: "text", value: "x", inForm: true, lookupForm: false }, skill).approval).toBe("human");
+    expect(approvalFor({ type: "click" }, { tag: "input", type: "submit", value: "Go", inForm: true }, skill).approval).toBe("human");
+  });
   it("unusual Meta safety checks need a human", () => {
     expect(approvalFor({ type: "type" }, null, skill, ["malicious_instructions"]).approval).toBe("human");
     expect(approvalFor({ type: "type" }, null, skill, ["computer_action_requires_confirmation"]).approval).toBe("auto");
