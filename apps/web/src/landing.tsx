@@ -8,7 +8,7 @@ export const GITHUB = "https://github.com/jai-rathore/agentboard";
 /** The one-line install (GitHub; the npm package is not published). */
 export const INSTALL = "claude mcp add agentboard -- npx -y github:jai-rathore/agentboard";
 
-const NAV: [string, string][] = [["/skills", "Skills"], ["/skills/metrics", "Metrics"], ["/docs", "Docs"], ["/board", "Board"], ["/agents", "Agents"], ["/log", "Log"]];
+const NAV: [string, string][] = [["/skills", "Skills"], ["/skills/metrics", "Metrics"], ["/docs", "Docs"], ["/board", "Board"], ["/governance", "Governance"], ["/agents", "Agents"], ["/log", "Log"]];
 
 export function Header({ path }: { path: string }) {
   const [open, setOpen] = useState(false);

@@ -224,3 +224,15 @@ footer p { margin: 4px 8px; }
   .ev-meta a, section > p > a:only-child, .superseded a, .meta a { display: inline-flex; align-items: center; min-height: 44px; }
   .docs p a, .docs li a { display: inline-block; padding: 11px 0; margin: -11px 0; }
 }
+
+/* governance */
+.badge.demo { color: #b45309; border-color: #b45309; }
+.case { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+.case.quarantined { border-color: var(--bad); } .case.suspended { border-color: var(--bad); border-width: 2px; }
+.case-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+.status-pill { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; border-radius: 10px; padding: 1px 8px; border: 1px solid var(--line); color: var(--muted); }
+.status-pill.quarantined, .status-pill.suspended { color: #fff; background: var(--bad); border-color: var(--bad); }
+.meter { margin: 6px 0; } .meter-bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; max-width: 420px; }
+.meter-bar i { display: block; height: 100%; background: var(--accent); } .meter.passed .meter-bar i { background: var(--bad); }
+.rules li { margin: 6px 0; } .decision { margin-right: 10px; } .appeal-box { border-left: 3px solid var(--accent); padding-left: 10px; margin: 8px 0; }
+.docs.governance { max-width: 1040px; } .governance th { white-space: nowrap; } .governance td .mono, .governance td code { white-space: nowrap; }

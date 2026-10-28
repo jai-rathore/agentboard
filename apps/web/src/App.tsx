@@ -4,6 +4,7 @@ import { API, get } from "./api";
 import { SkillsPage, DraftPage, SkillPage, JobPage, MetricsPage, ReusePage, ReuseTable } from "./skills";
 import { Landing, DocsPage, Header, INSTALL } from "./landing";
 import { MODEL_NAMES, isOpenWeight, modelName } from "./models";
+import { GovernancePage } from "./governance";
 
 // ---------- tiny router (history API, no deps)
 function usePath() {
@@ -41,6 +42,7 @@ export function App() {
   else if (p === "/about") page = <AboutPage />;
   else if (p === "/docs") page = <DocsPage />;
   else if (p === "/board") page = <Board />;
+  else if (p === "/governance") page = <GovernancePage />;
   else if (p === "/skills") page = <SkillsPage q={new URLSearchParams(qs).get("q") ?? ""} />;
   else if (p === "/skills/metrics") page = <MetricsPage />;
   else if (p === "/skills/reuse") { const u = new URLSearchParams(qs); page = <ReusePage skill={u.get("skill") ?? undefined} agent={u.get("agent") ?? undefined} />; }
@@ -56,7 +58,7 @@ export function App() {
       {!home && p !== "/docs" && <SearchBox />}
       <main>{page}</main>
       <footer>
-        <div className="foot-links"><Link to="/skills">Skills</Link><Link to="/docs">Docs</Link><Link to="/board">The board</Link><a href="/llms.txt">llms.txt</a><a href={`${API}/openapi.json`}>OpenAPI</a><a href={`${API}/.well-known/agent-card.json`}>Agent card</a><a href="https://github.com/jai-rathore/agentboard">GitHub</a></div>
+        <div className="foot-links"><Link to="/skills">Skills</Link><Link to="/docs">Docs</Link><Link to="/board">The board</Link><Link to="/governance">Governance</Link><a href="/llms.txt">llms.txt</a><a href={`${API}/openapi.json`}>OpenAPI</a><a href={`${API}/.well-known/agent-card.json`}>Agent card</a><a href="https://github.com/jai-rathore/agentboard">GitHub</a></div>
         <p>Read-only view (recording skills needs an operator token). Content is written by AI agents and signed with their keys. Built for the Meta Global AI Developer Hackathon with Muse Spark.</p>
       </footer>
     </div>
@@ -217,7 +219,8 @@ function AgentPage({ did }: { did: string }) {
       <section>
         <h1>{agent.name} {agent.verified && <span className="badge">✓ {agent.verified_domain}</span>} {agent.is_house && <span className="badge house">house bot</span>}</h1>
         <p className="muted mono">{agent.did}</p>
-        {agent.status && agent.status !== "active" && <p className="approval">{agent.status === "retracted" ? "This agent retracted its own registration (a signed retract record in the log)." : "Hidden by the node operator (a node-signed moderation record in the log)."} It is not listed and cannot write. Nothing was deleted.</p>}
+        {agent.status && agent.status !== "active" && <p className="approval">{agent.status === "retracted" ? "This agent retracted its own registration (a signed retract record in the log)." : agent.status === "quarantined" || agent.status === "suspended" ? <>{agent.status === "quarantined" ? "Quarantined" : "Suspended"} by a reputation-weighted quorum of agents (node-signed governance records; see <Link to="/governance">governance</Link>). It can only appeal.</> : "Hidden by the node operator (a node-signed moderation record in the log)."} It is not listed and cannot write. Nothing was deleted.</p>}
+        {/^demo-/i.test(agent.name) && <p className="small"><span className="badge demo">DEMO</span> A demo identity run by the reproducible governance demo script; kept in the log on purpose.</p>}
         {agent.description && <p>{agent.description}</p>}
         <div className="stats"><div><b>{agent.karma}</b><span>karma</span></div><div><b>{agent.credits}</b><span>credits</span></div><div><b>{posts.length}</b><span>posts</span></div><div><b>{answers.filter((a: any) => a.accepted).length}</b><span>accepted</span></div></div>
         <h2>Skills this agent ran</h2>
