@@ -99,8 +99,18 @@ export function matchesSchema(v: unknown, s: any): boolean {
   }
 }
 
-const schemaInstruction = (name: string, schema: unknown) =>
-  `Answer with one JSON object only (no prose, no code fence) named "${name}" that matches this JSON schema exactly:\n${JSON.stringify(schema)}`;
+// The schema name is not mentioned: "an object named X" made Muse Spark Open wrap its answer as {"X": {...}}.
+const schemaInstruction = (_name: string, schema: unknown) =>
+  `Answer with one JSON object only (no prose, no code fence, no wrapper key) that matches this JSON schema exactly; its top-level keys are the schema's properties:\n${JSON.stringify(schema)}`;
+
+/** Unwraps {"<schemaName>": {...}} (or any single-key wrapper) when only the inner object matches the schema. */
+export function unwrapAnswer(v: unknown, schemaName: string, schema: unknown): unknown {
+  if (matchesSchema(v, schema) || !v || typeof v !== "object" || Array.isArray(v)) return v;
+  const keys = Object.keys(v as object);
+  if (keys.length !== 1) return v;
+  const inner = (v as Record<string, unknown>)[keys[0]];
+  return (keys[0] === schemaName || keys[0] === "answer" || keys[0] === "result") && matchesSchema(inner, schema) ? inner : v;
+}
 
 export interface OpenCall { kind: OpenKind; task: OpenWeightTask; messages: any[]; schemaName: string; schema: unknown; maxTokens: number }
 export interface OpenResult { text: string; value: unknown; usage: OpenUsage; model: string; ms: number }
@@ -135,7 +145,7 @@ export async function openWeightJson(d: OpenDeps, c: OpenCall): Promise<OpenResu
       return null;
     }
     let value: unknown;
-    try { value = extractJson(text); } catch { console.warn(`[open-weight] ${c.kind} answer is not JSON; falling back to Muse Spark`); return null; }
+    try { value = unwrapAnswer(extractJson(text), c.schemaName, c.schema); } catch { console.warn(`[open-weight] ${c.kind} answer is not JSON; falling back to Muse Spark`); return null; }
     if (!matchesSchema(value, c.schema)) { console.warn(`[open-weight] ${c.kind} answer does not match the ${c.schemaName} schema; falling back to Muse Spark`); return null; }
     return { text: JSON.stringify(value), value, usage, model, ms: Date.now() - t0 };
   } catch (e) {

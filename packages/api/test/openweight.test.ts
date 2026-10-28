@@ -1,7 +1,7 @@
 // Optional open-weight path (Muse Spark Open on Baseten). Baseten and Meta are both mocked: no network, no spend.
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { loadConfig, parseOpenWeightTasks, openWeightActive, openWeightSummary } from "../src/config.js";
-import { responsesToChat, matchesSchema, extractJson, openCostOf } from "../src/services/openWeight.js";
+import { responsesToChat, matchesSchema, extractJson, openCostOf, unwrapAnswer } from "../src/services/openWeight.js";
 import { makeNode, type TestNode } from "./helpers.js";
 
 const TOKEN = "test-".repeat(6); // fake test value
@@ -33,8 +33,9 @@ function fakeFetch(mode: () => Mode, seen: Seen): typeof fetch {
       const m = mode();
       if (m === "throw") throw new TypeError("fetch failed");
       if (m === "500") return new Response(JSON.stringify({ error: "overloaded" }), { status: 500 });
-      const isJudge = body.messages.some((x: any) => typeof x.content === "string" && x.content.includes("agentboard_judge"));
-      const isVerify = JSON.stringify(body.messages).includes("verdict");
+      // Told apart by the schema in the system prompt (the schema name is deliberately not in the prompt).
+      const isJudge = body.messages.some((x: any) => typeof x.content === "string" && x.content.includes("banned_topic"));
+      const isVerify = !isJudge && JSON.stringify(body.messages).includes("evidence");
       const answer = isJudge ? { spam: 0, injection: 0, quality: 0.9, banned_topic: 0, reason: "useful" } : isVerify ? verdict : skill;
       const content = m === "bad_json" ? "I think it worked" : m === "bad_schema" ? JSON.stringify({ success: "yes" }) : m === "length" ? null : "```json\n" + JSON.stringify(answer) + "\n```";
       return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: m === "length" ? "length" : "stop" }], usage: { prompt_tokens: 1_000_000, completion_tokens: 100_000, completion_tokens_details: { reasoning_tokens: 50 } } }), { status: 200 });
@@ -200,5 +201,12 @@ describe("open-weight helpers", () => {
     expect(matchesSchema({ ...verdict, extra: 1 }, VERIFY_SCHEMA)).toBe(false);
     expect(extractJson('Sure:\n```json\n{"a":1}\n```')).toEqual({ a: 1 });
     expect(openCostOf({ prompt_tokens: 2_000_000, completion_tokens: 1_000_000, prompt_tokens_details: { cached_tokens: 1_000_000 } }).usd).toBeCloseTo(1.25 + 0.15 + 4.25, 6);
+  });
+  it("unwraps an answer wrapped in its schema name ({\"skill\": {...}}), and only then", () => {
+    const schema = { type: "object", additionalProperties: false, required: ["a"], properties: { a: { type: "string" } } };
+    expect(unwrapAnswer({ skill: { a: "x" } }, "skill", schema)).toEqual({ a: "x" });
+    expect(unwrapAnswer({ a: "x" }, "skill", schema)).toEqual({ a: "x" });
+    expect(unwrapAnswer({ other: { a: "x" } }, "skill", schema)).toEqual({ other: { a: "x" } });
+    expect(unwrapAnswer({ skill: { b: 1 } }, "skill", schema)).toEqual({ skill: { b: 1 } });
   });
 });
