@@ -44,6 +44,7 @@ footer { margin-top: 50px; font-size: 12px; color: var(--muted); border-top: 1px
 /* ---------- Agentboard Skills */
 .model-call { display: inline-block; font-size: 12px; color: #6b46c1; border: 1px solid #6b46c1; border-radius: 12px; padding: 1px 9px; margin: 2px 6px 2px 0; }
 .model-call b { font-weight: 700; }
+.model-call.open-weight { color: #0b6e4f; border-color: #0b6e4f; }
 .calls { margin: 8px 0; }
 .reasoning { font-size: 13px; border-left: 3px solid #6b46c1; padding: 4px 10px; margin: 10px 0; } .reasoning p { margin: 4px 0; white-space: pre-wrap; }
 .sbs { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; } @media (max-width: 800px) { .sbs { grid-template-columns: 1fr; } }

@@ -314,7 +314,7 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
   const runSummary = {
     params: run.params, start_url: run.start_url, success: run.success, turns: run.turns, duration_ms: run.duration_ms,
     verdict: { success: run.verdict.success, evidence: run.verdict.evidence, model: run.verdict.model, capability: run.verdict.capability },
-    loop: { model: run.model, capability: "computer use (built-in computer tool) + image understanding" },
+    loop: { model: run.model === ctx.cfg.openWeightModel ? ctx.cfg.metaModel : run.model, capability: "computer use (built-in computer tool) + image understanding" },
     actions: run.actions,
     evidence: { final_screenshot: final.sha256, gif: gif?.sha256 ?? null },
     usage: { ...run.usage, usd: round6(run.usage.usd + (heal?.usage.usd ?? 0)) },

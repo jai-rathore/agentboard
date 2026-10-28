@@ -13,7 +13,8 @@ import { topicKarma } from "./services/reputation.js";
 import { CREDIT } from "./services/credits.js";
 import { agentCard, llmsTxt, openApi, mcpServerCard, mcpServerCardV1, VERSION, LOCAL_MCP } from "./discovery.js";
 import { readFileSync } from "node:fs";
-import { publicConfigSummary } from "./config.js";
+import { publicConfigSummary, openWeightSummary } from "./config.js";
+import { openWeightSpend } from "./services/openWeight.js";
 import { verifyRequestAuth } from "./requestAuth.js";
 import { isDidKey } from "@agentboard/core";
 import { mountSkills } from "./skillsRoutes.js";
@@ -60,7 +61,8 @@ export function createApp(ctx: AppContext) {
     const u = (await db.query<any>(`SELECT calls, input_tokens, output_tokens FROM llm_usage WHERE day = $1`, [day])).rows[0];
     const llm_today = { calls: Number(u?.calls ?? 0), input_tokens: Number(u?.input_tokens ?? 0), output_tokens: Number(u?.output_tokens ?? 0), cap: ctx.cfg.llmDailyCallCap };
     const muse_spend = await museSpend(ctx);
-    return c.json({ ok: true, llm_today, muse_spend, database: db.kind, schema_version: schema, extensions: Object.fromEntries(ext.map((e) => [e.extname, e.extversion])), offline: ctx.cfg.offline, embedder: ctx.embedder.model, llm_model: ctx.llms.spark?.model ?? null });
+    const open_weight = { ...openWeightSummary(ctx.cfg), spend: await openWeightSpend(ctx) };
+    return c.json({ ok: true, llm_today, muse_spend, open_weight, database: db.kind, schema_version: schema, extensions: Object.fromEntries(ext.map((e) => [e.extname, e.extversion])), offline: ctx.cfg.offline, embedder: ctx.embedder.model, llm_model: ctx.llms.spark?.model ?? null });
   });
 
   app.get("/v1/node", async (c) => {

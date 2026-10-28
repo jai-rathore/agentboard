@@ -58,6 +58,19 @@ export interface Config {
   ipFlagsPerHour: number;
   /** AgentPeering ownership token (ap-verify-<32 hex>), served at /.well-known/agentpeering-verify when set. */
   agentpeeringVerifyToken?: string;
+  /**
+   * Optional open-weight path (off by default): Meta's Muse Spark Open served by Baseten's OpenAI-compatible
+   * Chat Completions API. Used only when LLM_OPEN_WEIGHT_ENABLED=true AND BASETEN_API_KEY is set, and only for the
+   * tasks listed (judge, verify, skill_write). Any error falls back to Muse Spark. Computer-use replay never uses it.
+   */
+  openWeightEnabled: boolean;
+  basetenApiKey?: string;
+  basetenBaseUrl: string;
+  openWeightModel: string;
+  openWeightTasks: OpenWeightTask[];
+  /** Open-weight guard: calls per UTC day and a lifetime USD ceiling, tracked apart from Meta spend. */
+  openWeightDailyCallCap: number;
+  openWeightSpendCapUsd: number;
 }
 
 const num = (v: string | undefined, d: number) => (v === undefined || v === "" ? d : Number(v));
@@ -111,10 +124,17 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ipVotesPerHour: num(env.IP_VOTES_PER_HOUR, 120),
     ipFlagsPerHour: num(env.IP_FLAGS_PER_HOUR, 30),
     agentpeeringVerifyToken: env.AGENTPEERING_VERIFY_TOKEN?.trim() || undefined,
+    openWeightEnabled: /^(1|true|yes|on)$/i.test(env.LLM_OPEN_WEIGHT_ENABLED?.trim() ?? ""),
+    basetenApiKey: env.BASETEN_API_KEY?.trim() || undefined,
+    basetenBaseUrl: (env.BASETEN_BASE_URL || "https://inference.baseten.co/v1").replace(/\/$/, ""),
+    openWeightModel: env.OPEN_WEIGHT_MODEL?.trim() || "meta-models/muse-spark-open",
+    openWeightTasks: parseOpenWeightTasks(env.OPEN_WEIGHT_TASKS),
+    openWeightDailyCallCap: num(env.OPEN_WEIGHT_DAILY_CALL_CAP, 50),
+    openWeightSpendCapUsd: num(env.OPEN_WEIGHT_SPEND_CAP_USD, 2),
     ...overrides,
   };
   // Contributor-program model variants are never used by this node.
-  for (const m of [cfg.metaModel, cfg.glimmerModel]) if (/contributor/i.test(m)) throw new Error(`refusing model "${m}": -contributor variants are not allowed`);
+  for (const m of [cfg.metaModel, cfg.glimmerModel, cfg.openWeightModel]) if (/contributor/i.test(m)) throw new Error(`refusing model "${m}": -contributor variants are not allowed`);
   if (!["local", "fireworks", "hash"].includes(cfg.embedProvider)) throw new Error(`EMBED_PROVIDER must be local, fireworks or hash`);
   if (!(cfg.llmMaxOutputTokens > 0)) throw new Error("LLM_MAX_OUTPUT_TOKENS must be positive");
   for (const [k, v] of [["SKILLS_OPERATOR_TOKEN", cfg.skillsOperatorToken], ["SKILLS_INTERNAL_SECRET", cfg.skillsInternalSecret]] as const) if (v && v.length < 24) throw new Error(`${k} must be at least 24 characters`);
@@ -125,6 +145,29 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     if (u.hostname === "api.meta.ai") throw new Error("META_PROXY_SECRET is for a proxy; META_BASE_URL points at Meta directly");
   }
   return cfg;
+}
+
+export const OPEN_WEIGHT_TASKS = ["judge", "verify", "skill_write"] as const;
+export type OpenWeightTask = (typeof OPEN_WEIGHT_TASKS)[number];
+/** Comma-separated task list; unset means all three. Unknown names are ignored. */
+export function parseOpenWeightTasks(v: string | undefined): OpenWeightTask[] {
+  if (v === undefined || !v.trim()) return [...OPEN_WEIGHT_TASKS];
+  return [...new Set(v.split(",").map((t) => t.trim().toLowerCase()).filter((t): t is OpenWeightTask => (OPEN_WEIGHT_TASKS as readonly string[]).includes(t)))];
+}
+/** The open-weight path runs a task only when switched on, a Baseten key is present, and the node is not offline. */
+export function openWeightActive(c: Config, task?: OpenWeightTask): boolean {
+  if (!c.openWeightEnabled || !c.basetenApiKey || c.offline || /contributor/i.test(c.openWeightModel)) return false;
+  return task ? c.openWeightTasks.includes(task) : true;
+}
+/** Open-weight status for /healthz and /v1/node: no key material, only whether one is configured. */
+export function openWeightSummary(c: Config) {
+  return {
+    provider: "baseten", model: c.openWeightModel, enabled: c.openWeightEnabled, key_configured: Boolean(c.basetenApiKey),
+    active: openWeightActive(c), tasks: openWeightActive(c) ? c.openWeightTasks : [], configured_tasks: c.openWeightTasks,
+    endpoint_host: new URL(c.basetenBaseUrl).host, image_input: true, video_input: true,
+    computer_use: "always Muse Spark", fallback: "Muse Spark on any open-weight error",
+    daily_call_cap: c.openWeightDailyCallCap, spend_cap_usd: c.openWeightSpendCapUsd,
+  };
 }
 
 /** Safe summary for logs and /v1/node: booleans only, never key material. */

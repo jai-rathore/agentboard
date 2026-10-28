@@ -9,6 +9,7 @@
  */
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
+import { openWeightJson, responsesToChat } from "./openWeight.js";
 
 export type MuseKind = "record" | "loop" | "verify" | "heal";
 export const OUTPUT_CAPS: Record<MuseKind, number> = { record: 1500, loop: 800, verify: 600, heal: 2000 };
@@ -18,7 +19,7 @@ export const PRICES: Record<string, { input: number; cached: number; output: num
 };
 const ALLOWED_FIELDS = new Set(["input", "instructions", "tools", "text", "reasoning", "max_output_tokens", "parallel_tool_calls", "metadata"]);
 
-export interface MuseUsage { input_tokens: number; cached_tokens: number; output_tokens: number; reasoning_tokens: number; usd: number }
+export interface MuseUsage { input_tokens: number; cached_tokens: number; output_tokens: number; reasoning_tokens: number; usd: number; provider?: "baseten" }
 
 export function costOf(model: string, u: { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number }; output_tokens_details?: { reasoning_tokens?: number } }): MuseUsage {
   const p = PRICES[model] ?? PRICES["muse-spark-1.3"];
@@ -31,7 +32,7 @@ export function costOf(model: string, u: { input_tokens?: number; output_tokens?
 const today = () => new Date().toISOString().slice(0, 10);
 
 export async function museSpend(ctx: AppContext) {
-  const rows = (await ctx.db.query<any>(`SELECT day, kind, calls, input_tokens, cached_tokens, output_tokens, reasoning_tokens, cost_micro FROM muse_spend`)).rows;
+  const rows = (await ctx.db.query<any>(`SELECT day, kind, calls, input_tokens, cached_tokens, output_tokens, reasoning_tokens, cost_micro FROM muse_spend WHERE kind NOT LIKE 'open:%'`)).rows;
   const d = today();
   const t = rows.filter((r) => r.day === d);
   const sum = (rs: any[], k: string) => rs.reduce((s, r) => s + Number(r[k]), 0);
@@ -48,10 +49,10 @@ export async function museSpend(ctx: AppContext) {
 /** Reserve one call: atomically counts it against today's cap, and refuses once lifetime spend reaches the ceiling. */
 async function reserve(ctx: AppContext, kind: MuseKind) {
   if (ctx.cfg.offline || ctx.cfg.museDailyCallCap <= 0 || !(ctx.cfg.metaProxySecret || ctx.cfg.metaApiKey)) throw new HttpError(503, "muse_disabled", "Muse calls are disabled on this node");
-  const total = Number((await ctx.db.query<any>(`SELECT COALESCE(SUM(cost_micro),0)::float8 AS c FROM muse_spend`)).rows[0]?.c ?? 0) / 1e6;
+  const total = Number((await ctx.db.query<any>(`SELECT COALESCE(SUM(cost_micro),0)::float8 AS c FROM muse_spend WHERE kind NOT LIKE 'open:%'`)).rows[0]?.c ?? 0) / 1e6;
   if (total >= ctx.cfg.museSpendCapUsd) throw new HttpError(429, "muse_spend_cap", `Muse spend ceiling reached ($${total.toFixed(4)} of $${ctx.cfg.museSpendCapUsd})`);
   const d = today();
-  const callsToday = Number((await ctx.db.query<any>(`SELECT COALESCE(SUM(calls),0)::int AS n FROM muse_spend WHERE day = $1`, [d])).rows[0]?.n ?? 0);
+  const callsToday = Number((await ctx.db.query<any>(`SELECT COALESCE(SUM(calls),0)::int AS n FROM muse_spend WHERE day = $1 AND kind NOT LIKE 'open:%'`, [d])).rows[0]?.n ?? 0);
   if (callsToday >= ctx.cfg.museDailyCallCap) throw new HttpError(429, "muse_daily_cap", `daily Muse call cap (${ctx.cfg.museDailyCallCap}) reached`);
   await ctx.db.query(`INSERT INTO muse_spend (day, kind, calls) VALUES ($1,$2,1) ON CONFLICT (day, kind) DO UPDATE SET calls = muse_spend.calls + 1`, [d, kind]);
 }
@@ -70,13 +71,34 @@ export function sanitize(body: Record<string, unknown>, kind: MuseKind, model: s
   return { ...body, model, max_output_tokens: Math.min(Number(body.max_output_tokens) || cap, cap), store: false };
 }
 
-export interface MuseResult { response: any; usage: MuseUsage; model: string; kind: MuseKind; ms: number }
+export interface MuseResult { response: any; usage: MuseUsage; model: string; kind: MuseKind; ms: number; provider?: "baseten" }
+
+/**
+ * Optional open-weight route for skill drafting (record) and verification (verify): Muse Spark Open on Baseten.
+ * Returns null when the switch is off, the task is not selected, the body uses tools, or the call fails; the caller
+ * then runs the normal Muse Spark path. Output is shaped like a Responses API result so callers need no changes.
+ */
+async function openWeightResponses(ctx: AppContext, kind: MuseKind, body: Record<string, unknown>): Promise<MuseResult | null> {
+  const task = kind === "record" ? "skill_write" : kind === "verify" ? "verify" : null;
+  if (!task || !ctx.cfg.openWeightEnabled || !ctx.cfg.basetenApiKey) return null;
+  const chat = responsesToChat(body as Record<string, any>);
+  if (!chat) return null;
+  const r = await openWeightJson(ctx, { kind: kind as "record" | "verify", task, ...chat, maxTokens: Math.min(Number(body.max_output_tokens) || OUTPUT_CAPS[kind], OUTPUT_CAPS[kind]) });
+  if (!r) return null;
+  const response = { status: "completed", model: r.model, output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: r.text }] }], usage: { input_tokens: r.usage.input_tokens, output_tokens: r.usage.output_tokens } };
+  return { response, usage: r.usage, model: r.model, kind, ms: r.ms, provider: "baseten" };
+}
 
 /** One guarded Responses API call. Retries 5xx and network errors with backoff (each attempt is reserved and counted). */
 export async function museResponses(ctx: AppContext, kind: MuseKind, body: Record<string, unknown>, attempts = 3): Promise<MuseResult> {
   const model = ctx.cfg.metaModel;
   if (/contributor/i.test(model)) throw new HttpError(500, "model_not_allowed", "contributor models are never used");
   const payload = JSON.stringify(sanitize(body, kind, model));
+  // Optional open-weight route (off by default); the same field/tool allowlist above applies to it.
+  if (ctx.cfg.openWeightEnabled && ctx.cfg.basetenApiKey) {
+    const open = await openWeightResponses(ctx, kind, body);
+    if (open) return open;
+  }
   const viaProxy = Boolean(ctx.cfg.metaProxySecret);
   const url = `${ctx.cfg.metaBaseUrl.replace(/\/$/, "")}/responses`;
   let last = "";

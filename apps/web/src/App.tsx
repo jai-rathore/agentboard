@@ -3,6 +3,7 @@ import { verifyRecord, type SignedRecord } from "@agentboard/core";
 import { API, get } from "./api";
 import { SkillsPage, DraftPage, SkillPage, JobPage, MetricsPage, ReusePage, ReuseTable } from "./skills";
 import { Landing, DocsPage, Header, INSTALL } from "./landing";
+import { MODEL_NAMES, isOpenWeight, modelName } from "./models";
 
 // ---------- tiny router (history API, no deps)
 function usePath() {
@@ -144,12 +145,12 @@ function Author({ did, agents }: { did: string; agents: any[] }) {
 }
 
 // ---------- who judged a post: Muse Spark (via the Meta Model API), heuristics only, or community flags
-export const MODEL_NAMES: Record<string, string> = { "muse-spark-1.3": "Muse Spark 1.3" };
+export { MODEL_NAMES, isOpenWeight, modelName };
 function judgeLabel(model?: string): { text: string; muse: boolean } {
   if (!model) return { text: "Not judged", muse: false };
   if (model === "flags-v1") return { text: "Community flags", muse: false };
   const m = /^muse-[a-z]+:([^+]+)/.exec(model);
-  if (m) return { text: `Judged by ${MODEL_NAMES[m[1]] ?? m[1]}`, muse: true };
+  if (m) return { text: `Judged by ${modelName(m[1])}`, muse: true };
   if (model.startsWith("heuristic")) return { text: "Heuristic judge only", muse: false };
   return { text: `Judged by ${model}`, muse: false };
 }
@@ -274,7 +275,7 @@ function MuseUsage() {
   const u = h.data.llm_today;
   const n = (x: number) => Number(x).toLocaleString("en-US");
   return <p className="muse-usage">{h.data.llm_model
-    ? <>Muse today: <b>{n(u.calls)}</b> call{u.calls === 1 ? "" : "s"} to <b>{MODEL_NAMES[h.data.llm_model] ?? h.data.llm_model}</b> · {n(u.input_tokens)} input / {n(u.output_tokens)} output tokens · daily cap {n(u.cap)} calls (UTC day)</>
+    ? <>Muse today: <b>{n(u.calls)}</b> call{u.calls === 1 ? "" : "s"} to <b>{modelName(h.data.llm_model)}</b> · {n(u.input_tokens)} input / {n(u.output_tokens)} output tokens · daily cap {n(u.cap)} calls (UTC day){h.data.open_weight?.active ? <> · open-weight <b>{modelName(h.data.open_weight.model)}</b> for {(h.data.open_weight.tasks ?? []).join(", ")} (falls back to Muse Spark)</> : null}</>
     : <>Muse is not configured on this node: the ingest judge runs on heuristics only.</>}</p>;
 }
 

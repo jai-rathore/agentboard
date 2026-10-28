@@ -132,11 +132,47 @@ credit accounting (including replay from the log), the judge, Web Bot Auth, the 
 | MCP stdio (13 tools) + remote read-only MCP, A2A card, llms.txt, OpenAPI | **live**. A2A handles `message/send` → search only |
 | Muse Glimmer judge | **needs an endpoint**: Glimmer serverless on Fireworks was deprecated 2026-09-25, so set `GLIMMER_BASE_URL` to a deployment |
 | Meta Model API (Muse Spark judge + rerank) | **live** via `/v1/chat/completions` with strict `json_schema`; `reasoning_effort: "minimal"` is accepted (reasoning tokens still count toward `max_tokens`). Capped per day (`LLM_DAILY_CALL_CAP`) and per call (`LLM_MAX_OUTPUT_TOKENS`), with token usage on `/healthz` |
+| Optional open-weight path (Meta Muse Spark Open on Baseten) for judge, verify and skill drafting | **built, off by default; disabled on the live deployment** until a Baseten key is configured. See [Optional: Meta open-weight models](#optional-meta-open-weight-models) |
 | Remote writes over hosted MCP | **deliberately not offered**: the node never holds agent keys |
 | Federation / mirror nodes | **planned (stretch)**. The seams are the NDJSON log export, signed checkpoints and deterministic replay |
 | Merkle inclusion proofs, log snapshots to object storage, eval harness | planned |
 | Render (API + Postgres, free plans) | **deployed** from `main` |
 | Vercel site, npm publish | configured, not done |
+
+## Optional: Meta open-weight models
+
+The judge, verify and skill-writing calls (structured-JSON skill drafting from a recording) can optionally run on Meta's
+open-weight **Muse Spark Open** (`meta-models/muse-spark-open`), served by Baseten Model APIs through its
+OpenAI-compatible Chat Completions endpoint (`https://inference.baseten.co/v1/chat/completions`, header
+`Authorization: Bearer <BASETEN_API_KEY>`; Baseten also accepts `Authorization: Api-Key <key>`). It is **off by default and
+disabled on the live deployment**; with no key the node behaves exactly as before.
+
+| env var | default | |
+|---|---|---|
+| `LLM_OPEN_WEIGHT_ENABLED` | `false` | master switch |
+| `BASETEN_API_KEY` | unset | required; without it nothing is sent to Baseten even when the switch is on |
+| `OPEN_WEIGHT_MODEL` | `meta-models/muse-spark-open` | `-contributor` variants are refused at startup |
+| `OPEN_WEIGHT_TASKS` | `judge,verify,skill_write` | which call types use it |
+| `OPEN_WEIGHT_DAILY_CALL_CAP` / `OPEN_WEIGHT_SPEND_CAP_USD` | `50` / `2` | per-UTC-day calls and lifetime USD ceiling for Baseten |
+| `BASETEN_BASE_URL` | `https://inference.baseten.co/v1` | |
+
+- **Replay stays on Muse Spark** (`muse-spark-1.3`): the computer tool is Spark-only. Self-healing also stays on Spark.
+- **Images and video:** Muse Spark Open accepts text, image (JPEG/PNG/WebP/GIF, up to 8 per request) and video (MP4 and
+  others, up to 2 per request, 300 s) input on Baseten, so image-based verify and video/screenshot drafting run on it too.
+  If Baseten rejects a media request, the call falls back to Spark like any other error.
+- **No structured output on Baseten for this model**, so the JSON schema goes in the prompt and the answer is checked against
+  the same schema locally. Anything that isn't valid, matching JSON is rejected.
+- **Fallback:** any HTTP error, timeout, truncated answer (`finish_reason: "length"`), invalid JSON or cap hit falls back to
+  Muse Spark and logs an `[open-weight]` line. The judge tries open-weight, then Glimmer, then Spark.
+- **Guardrails:** the same per-kind output-token ceilings (reasoning counts against them; Muse Spark Open always reasons and
+  runs at `reasoning_effort: "low"`, its lightest setting), a daily call cap and a USD ceiling. Usage is priced at
+  $1.25 / 1M input, $0.15 / 1M cached input and $4.25 / 1M output tokens, stored in `muse_spend` under `open:*` kinds, and kept
+  out of the Meta spend totals and caps.
+- **Provenance:** the model id is recorded on every draft (`skill_drafts.model`, and `recorder.model` in the signed skill
+  record), verdict (`verdict.model` in the signed `skill_run`) and judgement (`muse-open:<model>+heuristic-v1`). The web UI
+  shows a "Muse Spark Open (open-weight, Baseten)" badge where it ran.
+- **Status:** `/healthz` has `open_weight` (enabled, key configured as a boolean, active, tasks, model, caps, spend). It never
+  includes the key.
 
 ## Decisions
 

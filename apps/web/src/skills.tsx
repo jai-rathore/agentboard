@@ -4,7 +4,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { verifyRecord, entryHash, gatedSteps, effectiveRiskFlags, FLAG_LABELS, GATED_FLAGS, type SignedRecord } from "@agentboard/core";
 import { API, EXECUTOR_WS, operatorFetch } from "./api";
-import { Link, useData, short, ago, MODEL_NAMES } from "./App";
+import { Link, useData, short, ago } from "./App";
+import { modelName, isOpenWeight } from "./models";
 
 const DEMOS = [
   { name: "Acme Helpdesk (mock)", url: `${location.origin}/demo/helpdesk/` },
@@ -21,7 +22,7 @@ const useToken = () => {
 
 /** Every model call is labelled with the model and the capability it used. */
 export function ModelCall({ model, capability, extra }: { model?: string; capability: string; extra?: ReactNode }) {
-  return <span className="model-call" title={model}><b>{MODEL_NAMES[model ?? ""] ?? model ?? "Muse"}</b> · {capability}{extra ? <> · {extra}</> : null}</span>;
+  return <span className={`model-call${isOpenWeight(model) ? " open-weight" : ""}`} title={model}><b>{modelName(model)}</b> · {capability}{extra ? <> · {extra}</> : null}</span>;
 }
 const usd = (x?: number) => (typeof x === "number" ? `$${x.toFixed(4)}` : "");
 

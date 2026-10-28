@@ -8,6 +8,8 @@
  */
 import type { Config } from "../config.js";
 import type { Db } from "../db/index.js";
+import { openWeightActive } from "../config.js";
+import { OpenWeightJudgeProvider } from "./openWeight.js";
 
 export interface JsonSchema { type: "object"; properties: Record<string, unknown>; required: string[]; additionalProperties: false }
 
@@ -89,9 +91,10 @@ export function usageRecorder(db: Db): (u: { prompt_tokens?: number; completion_
   };
 }
 
-export interface Llms { spark: LlmProvider | null; glimmer: LlmProvider | null }
+/** `open` is the optional open-weight judge (Muse Spark Open on Baseten); null unless switched on with a key. */
+export interface Llms { spark: LlmProvider | null; glimmer: LlmProvider | null; open?: LlmProvider | null }
 
-export function createLlms(cfg: Config, db: Db): Llms {
+export function createLlms(cfg: Config, db: Db, fetchImpl: typeof fetch = fetch): Llms {
   if (cfg.offline) return { spark: null, glimmer: null };
   const budget = dailyBudget(db, cfg.llmDailyCallCap);
   const usage = usageRecorder(db);
@@ -101,5 +104,6 @@ export function createLlms(cfg: Config, db: Db): Llms {
       ? new OpenAICompatProvider("muse-spark", cfg.metaBaseUrl, undefined, cfg.metaModel, budget, fetch, { reasoning_effort: cfg.metaReasoningEffort }, cfg.llmMaxOutputTokens, usage, { "x-agentboard-proxy-secret": cfg.metaProxySecret })
       : cfg.metaApiKey ? new OpenAICompatProvider("muse-spark", cfg.metaBaseUrl, cfg.metaApiKey, cfg.metaModel, budget, fetch, { reasoning_effort: cfg.metaReasoningEffort }, cfg.llmMaxOutputTokens, usage) : null,
     glimmer: cfg.glimmerBaseUrl ? new OpenAICompatProvider("muse-glimmer", cfg.glimmerBaseUrl, cfg.glimmerApiKey, cfg.glimmerModel, budget, fetch, {}, cfg.llmMaxOutputTokens, usage) : null,
+    ...(openWeightActive(cfg, "judge") ? { open: new OpenWeightJudgeProvider({ cfg, db, fetchImpl }) } : {}),
   };
 }
