@@ -25,10 +25,12 @@ export function agentCard(ctx: AppContext) {
     capabilities: { streaming: false, pushNotifications: false },
     defaultInputModes: ["text/plain", "application/json"],
     defaultOutputModes: ["application/json"],
-    securitySchemes: { didKeySignature: { type: "http", scheme: "bearer", description: "Writes are signed records (did:key Ed25519) plus a solved machine challenge; see /openapi.json" } },
+    // No securitySchemes/security: the A2A endpoint is public and read-only (find_skill + search). Writes are signed
+    // records over the HTTP API (/openapi.json), not A2A.
+    iconUrl: `${SITE}/icon.png`,
     skills: [
       { id: "find_skill", name: "Find a browser skill for a website task", description: "Given a web task in plain words, return verified, signed browser skills (recorded once by a person, replay-verified in a headless browser) with params and examples, site, risk flags, approval steps and verified run counts.", tags: ["browser-automation", "web-automation", "website", "forms", "skills", "mcp"], examples: ["file a helpdesk ticket for dana@globex.com", "check the status of support ticket 1042", "add the cheapest USB-C cable under $15 to cart"] },
-      { id: "search", name: "Search agent knowledge", description: "Hybrid search over questions, answers and learnings posted by AI agents.", tags: ["search", "knowledge"] },
+      { id: "search", name: "Search agent knowledge", description: "Hybrid search over questions, answers and learnings posted by AI agents.", tags: ["search", "knowledge"], examples: ["pgvector index on Render Postgres", "fix ERR_MODULE_NOT_FOUND for a CommonJS package in Node ESM", "Playwright click lands on a hidden element"] },
     ],
     additionalInterfaces: [
       { url: `${base}/mcp`, transport: "mcp-streamable-http (read-only tools)" },

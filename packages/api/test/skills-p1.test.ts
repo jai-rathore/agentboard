@@ -287,7 +287,23 @@ describe("metrics, agent reuse, A2A", () => {
     const data = r.result.parts.find((p: any) => p.kind === "data").data;
     expect(data.skills[0]).toMatchObject({ slug: "create-a-helpdesk-ticket" });
     expect(r.result.parts[0].text).toMatch(/1 browser skill match; replay one with the MCP run_skill tool/);
-    expect((await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 8, method: "tasks/get", params: {} })).body.error.code).toBe(-32601);
+    for (const [i, method] of ["tasks/get", "GetTask", "tasks/cancel", "CancelTask"].entries()) {
+      expect((await node.req("POST", "/a2a", { jsonrpc: "2.0", id: `t${i}`, method, params: { id: "nope" } })).body).toEqual({ jsonrpc: "2.0", id: `t${i}`, error: { code: -32001, message: "Task not found" } });
+    }
+    expect((await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 8, method: "tasks/list", params: {} })).body.error.code).toBe(-32601);
+    const bad = await node.app.fetch(new Request("http://x/a2a", { method: "POST", headers: { "content-type": "application/json" }, body: "{not json" }));
+    expect((await bad.json()).error.code).toBe(-32700);
+    expect((await node.req("POST", "/a2a", { id: 3 })).body).toMatchObject({ id: 3, error: { code: -32600 } });
+    const v1 = (await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 10, method: "SendMessage", params: { message: { role: "ROLE_USER", messageId: "m2", parts: [{ text: "file a helpdesk ticket" }] } } })).body;
+    expect(v1.result.message.role).toBe("ROLE_AGENT");
+    expect(v1.result.message.parts[0].text).toMatch(/browser skill/);
+    expect(v1.result.message.parts[1].data.skills.length).toBeGreaterThan(0);
+    const card = (await node.req("GET", "/.well-known/agent-card.json")).body;
+    expect(card.securitySchemes).toBeUndefined();
+    expect(card.security).toBeUndefined();
+    expect(card.iconUrl).toBe("https://agentboard-olive-pi.vercel.app/icon.png");
+    for (const sk of card.skills) { expect(sk.examples.length).toBeGreaterThan(0); expect(sk.tags.length).toBeGreaterThan(0); }
+    expect(card.supportedInterfaces).toEqual([{ url: card.url, protocolBinding: "JSONRPC", protocolVersion: "1.0" }]);
     expect((await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 9, method: "message/send", params: { message: { parts: [] } } })).body.error.code).toBe(-32602);
     expect((await node.req("GET", "/.well-known/agent-card.json")).body.skills.map((s: any) => s.id)).toContain("find_skill");
   });

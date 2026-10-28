@@ -256,13 +256,20 @@ export function createApp(ctx: AppContext) {
 
   // ---------------- minimal A2A JSON-RPC: read-only message/send (knowledge search + find_skill)
   app.post("/a2a", async (c) => {
-    const req = await c.req.json().catch(() => null);
-    const id = req?.id ?? null;
-    if (req?.method !== "message/send") return c.json({ jsonrpc: "2.0", id, error: { code: -32601, message: "only message/send (read-only search + skills) is implemented" } });
-    const text = (req.params?.message?.parts ?? []).filter((p: any) => p?.kind === "text" || p?.type === "text").map((p: any) => p.text).join(" ").trim();
-    if (!text) return c.json({ jsonrpc: "2.0", id, error: { code: -32602, message: "send a text part with your search query" } });
+    const raw = await c.req.text();
+    let req: any;
+    try { req = JSON.parse(raw); } catch { return c.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }); }
+    const id = req && typeof req === "object" && "id" in req ? req.id : null;
+    const rpcErr = (code: number, message: string) => c.json({ jsonrpc: "2.0", id, error: { code, message } });
+    if (!req || typeof req !== "object" || Array.isArray(req) || typeof req.method !== "string") return rpcErr(-32600, "Invalid Request");
+    // Answers are returned inline as messages; no tasks are ever created, so every task lookup is "not found".
+    if (["tasks/get", "GetTask", "tasks/cancel", "CancelTask", "tasks/resubscribe", "SubscribeToTask"].includes(req.method)) return rpcErr(-32001, "Task not found");
+    if (req.method !== "message/send" && req.method !== "SendMessage") return rpcErr(-32601, "Method not found: this agent implements message/send (SendMessage), tasks/get (GetTask) and tasks/cancel (CancelTask)");
+    const text = (req.params?.message?.parts ?? []).filter((p: any) => typeof p?.text === "string" && (p.kind === undefined || p.kind === "text") && (p.type === undefined || p.type === "text")).map((p: any) => p.text).join(" ").trim();
+    if (!text) return rpcErr(-32602, "send a text part with your search query");
     const [r, skills] = await Promise.all([searchPosts(ctx, { q: text, limit: 5 }), findSkills(ctx, text, 3)]);
-    return c.json({ jsonrpc: "2.0", id, result: {
+    const v1 = req.method === "SendMessage";
+    const message = {
       kind: "message", role: "agent", messageId: crypto.randomUUID(),
       parts: [
         { kind: "text", text: [
@@ -274,7 +281,12 @@ export function createApp(ctx: AppContext) {
           // browser skills: replay through MCP run_skill (submit/send/buy/delete steps wait for a human)
           skills: skills.map((k: any) => ({ slug: k.slug, version: k.version, name: k.name, summary: k.summary, params: k.params, approval_required_steps: k.approval_required_steps, url: `${ctx.cfg.skillsWebUrl}/s/${k.cid}` })) }) },
       ],
-    } });
+    };
+    // A2A 1.0 SendMessage wraps the reply ({message}); the 0.3 message/send returns the message itself.
+    if (!v1) return c.json({ jsonrpc: "2.0", id, result: message });
+    // 1.0 JSON: parts are {text} / {data} without "kind", roles are ROLE_*.
+    const parts = message.parts.map(({ kind: _k, ...p }: any) => p);
+    return c.json({ jsonrpc: "2.0", id, result: { message: { messageId: message.messageId, role: "ROLE_AGENT", parts } } });
   });
 
   return app;
