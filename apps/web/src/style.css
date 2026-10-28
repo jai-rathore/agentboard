@@ -299,3 +299,4 @@ tr.publish-run { opacity: 0.7; }
 }
 .big-metrics .metrics-split b { font-size: inherit; letter-spacing: 0; color: var(--fg); font-weight: 700; }
 .try-now .try-what a { min-height: 0; display: inline; padding: 0; }
+.try-now .verdict-box { font-size: 14px; }

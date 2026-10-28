@@ -7,9 +7,10 @@ import { sha256, leadingZeroBits } from "@agentboard/core";
 import { API, get } from "./api";
 import { Link } from "./App";
 import { fmtDur } from "./skills";
+import { modelName } from "./models";
 
 type Status = { enabled: boolean; daily_cap: number; per_ip_per_day: number; remaining_today: number; skills: { slug: string; name?: string; eligible: boolean; params?: any[]; start_url?: string | null }[] };
-type Cached = { reason: string; run?: string; page?: string; gif?: string | null; shot?: string | null; evidence?: string | null; at?: string | null; kind?: string | null };
+type Cached = { reason: string; run?: string; page?: string; gif?: string | null; shot?: string | null; evidence?: string | null; model?: string | null; at?: string | null; kind?: string | null };
 type Phase = { k: "idle" } | { k: "work"; msg: string } | { k: "live"; id: string } | { k: "cached"; c: Cached } | { k: "error"; msg: string };
 
 /** Errors that mean "live replay is paused right now", answered with the latest verified run. */
@@ -35,7 +36,7 @@ async function latestVerified(slug: string): Promise<Omit<Cached, "reason"> | nu
   const x = (r?.runs ?? []).find((y: any) => y.outcome === "verified");
   if (!x) return null;
   const d = await get<any>(`/v1/skills/runs/${x.run}`).catch(() => null);
-  return { run: x.run, page: `/skills/runs/${x.run}`, gif: d?.evidence?.gif ?? null, shot: d?.evidence?.final_screenshot ?? null, evidence: x.evidence ?? d?.verdict?.evidence ?? null, at: x.at, kind: x.kind };
+  return { run: x.run, page: `/skills/runs/${x.run}`, gif: d?.evidence?.gif ?? null, shot: d?.evidence?.final_screenshot ?? null, evidence: x.evidence ?? d?.verdict?.evidence ?? null, model: d?.models?.verifier ?? d?.verdict?.model ?? null, at: x.at, kind: x.kind };
 }
 
 export function TryItNow({ slug: want, params: wantParams, title = true }: { slug?: string; params?: any[]; title?: boolean }) {
@@ -49,7 +50,7 @@ export function TryItNow({ slug: want, params: wantParams, title = true }: { slu
 
   const fallback = async (reason: string, fromApi?: any) => {
     let c: Cached = { reason };
-    if (fromApi?.run_record) c = { reason, run: fromApi.run_record, page: `/skills/runs/${fromApi.run_record}`, gif: fromApi.gif_url ?? null, shot: fromApi.final_screenshot_url ?? null, evidence: fromApi.verdict?.evidence ?? null, at: fromApi.verified_at ?? null, kind: fromApi.trigger ?? null };
+    if (fromApi?.run_record) c = { reason, run: fromApi.run_record, page: `/skills/runs/${fromApi.run_record}`, gif: fromApi.gif_url ?? null, shot: fromApi.final_screenshot_url ?? null, evidence: fromApi.verdict?.evidence ?? null, model: fromApi.verdict?.model ?? null, at: fromApi.verified_at ?? null, kind: fromApi.trigger ?? null };
     else { const l = await latestVerified(sk.slug).catch(() => null); if (l) c = { reason, ...l }; }
     setPhase({ k: "cached", c });
   };
@@ -82,7 +83,7 @@ export function TryItNow({ slug: want, params: wantParams, title = true }: { slu
   const busy = phase.k === "work" || phase.k === "live";
   return <section className="try-now" aria-live="polite">
     {title && <h2>Try it now <span className="small muted">real replay, no sign-up</span></h2>}
-    <p className="small try-what">Replays <Link to={`/skills/${sk.slug}`}><b>{sk.name ?? sk.slug}</b></Link>{sk.start_url ? <> live on <b>{host(sk.start_url)}</b> (a real site)</> : null}: an executor drives a headless browser with Muse Spark's computer tool, Muse Spark checks the final screenshot, and the node signs the run.</p>
+    <p className="small try-what">Replays <Link to={`/skills/${sk.slug}`}><b>{sk.name ?? sk.slug}</b></Link>{sk.start_url ? <> live on <b>{host(sk.start_url)}</b> (a real site)</> : null}: an executor drives a headless browser with Muse Spark's computer tool, a Meta model checks the final screenshot, and the node signs the run.</p>
     {params.map((x: any) => <label key={x.name} className="small">{x.name} <span className="muted">e.g. {x.example}</span><input value={vals[x.name] ?? ""} disabled={busy} onChange={(e) => setVals({ ...vals, [x.name]: e.target.value })} /></label>)}
     {(phase.k === "idle" || phase.k === "error" || phase.k === "work") && <button className="btn primary try-btn" disabled={busy || params.some((x: any) => !(vals[x.name] ?? "").trim())} onClick={start}>{phase.k === "work" ? "Working…" : "▶ Try it now"}</button>}
     {phase.k === "work" && <p className="small muted">{phase.msg}</p>}
@@ -129,7 +130,7 @@ function LiveJob({ id, onStalled }: { id: string; onStalled: (why: string) => vo
     </div>
     {!done && <p className="small muted">{job?.message ?? "Waking the executor"}{!turns && " (on a cold start the free-tier executor can take 30–60 s to wake up)"}</p>}
     {job?.frame_url ? <img className="media live try-frame" src={job.frame_url} alt="the executor's browser, live" /> : !done && <div className="try-frame placeholder small muted">waiting for the first browser frame…</div>}
-    {job?.verdict && <div className={`verdict-box ${job.verdict.success ? "good" : "badv"}`}><p><b>{job.verdict.success ? "✓ Verified by Muse Spark" : "✗ Not verified"}</b>: {job.verdict.evidence}</p></div>}
+    {job?.verdict && <div className={`verdict-box ${job.verdict.success ? "good" : "badv"}`}><p><b>{job.verdict.success ? "✓ Verified" : "✗ Not verified"}</b>{job.verdict.model ? <> by {modelName(job.verdict.model)}</> : null}: {job.verdict.evidence}</p></div>}
     {job?.run_record && <p className="small"><Link to={`/skills/runs/${job.run_record}`}><b>→ Signed run record</b></Link>: inputs, step screenshots, the verdict, the models and an in-browser Ed25519 signature check.</p>}
     {done && !job.run_record && job.status !== "completed" && <p className="small muted">{job.message}</p>}
     {err && <p className="err small">{err}</p>}
@@ -142,7 +143,7 @@ function CachedRun({ c }: { c: Cached }) {
     {c.run ? <>
       <p className="small">Here is the <b>latest verified run</b> of this skill instead, {c.kind === "publish" ? "the run that verified the recording when the skill was published" : "a signed replay"}{c.at ? <>, from {new Date(c.at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</> : null}. It is a cached run, not a new replay.</p>
       {(c.gif || c.shot) && <img className="media try-frame" src={c.gif ?? c.shot!} alt="steps of the latest verified run" />}
-      {c.evidence && <div className="verdict-box good"><p><b>✓ Verified by Muse Spark</b>: {c.evidence}</p></div>}
+      {c.evidence && <div className="verdict-box good"><p><b>✓ Verified</b>{c.model ? <> by {modelName(c.model)}</> : null}: {c.evidence}</p></div>}
       <p className="small"><Link to={c.page!}><b>→ Signed run record</b></Link> (check its signature in your browser)</p>
     </> : <p className="small muted">No verified run of this skill is stored yet.</p>}
   </div>;

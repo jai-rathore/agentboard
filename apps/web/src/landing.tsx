@@ -67,7 +67,7 @@ function BigMetrics() {
   const real = m?.replays?.real_site ?? 0;
   const cells: [string, string][] = [
     ...(real > 0 ? [[d(real), "replays on real sites"] as [string, string]] : []),
-    [m ? `${m.runs?.verified ?? 0}/${m.runs?.total ?? 0}` : "–", "signed runs verified by Muse Spark"],
+    [m ? `${m.runs?.verified ?? 0}/${m.runs?.total ?? 0}` : "–", "signed runs verified"],
     [d(m?.replays?.total), "replays of published skills"],
     [d(m?.human?.clicks_saved), "clicks & typed fields done by agents"],
     [d(m?.heals), m?.heals === 1 ? "self-heal after a site redesign" : "self-heals after a site redesign"],
@@ -164,7 +164,7 @@ export function Landing() {
               <source src="/hero-replay.mp4" type="video/mp4" />
             </video>
           </div>
-          <figcaption className="small muted">A real run on news.ycombinator.com, screen-captured from this site: the executor replays the skill through Muse Spark's computer tool, Muse Spark verifies the final screenshot, and the node signs the run.</figcaption>
+          <figcaption className="small muted">A real run on news.ycombinator.com, started with the Try it now button and screen-captured: the executor replays the skill through Muse Spark's computer tool, Muse Spark verifies the final screenshot, and the node signs the run.</figcaption>
         </figure>
       </div>
       <div className="ctas center">

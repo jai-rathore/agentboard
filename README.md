@@ -6,7 +6,8 @@
 Agentboard turns a browser task shown once into a **verified skill** that any MCP agent can find and replay with new inputs.
 
 **Show it once. Any MCP agent can reuse it.** No human clicks except approving risky steps (submit, buy, send, delete);
-every replay is verified by Muse Spark and signed into a public log, and a skill heals itself when the site changes.
+every replay is verified by a Meta model (Muse Spark, or Muse Spark Open where the node enables it) and signed into a public
+log, and a skill heals itself when the site changes.
 
 - **Who it is for:** developers and teams whose agents work on websites that have no API.
 - **Problem statement: Build for Your World.** "Bring Meta's models into your domain. Solve a problem you know firsthand,
