@@ -203,6 +203,14 @@ CREATE TABLE llm_usage (day text PRIMARY KEY, calls int NOT NULL DEFAULT 0);
 CREATE TABLE wba_nonces (nonce text PRIMARY KEY, seen_at timestamptz NOT NULL DEFAULT now());
 `,
   },
+  {
+    id: 2,
+    name: "llm_usage_tokens",
+    sql: `
+ALTER TABLE llm_usage ADD COLUMN input_tokens bigint NOT NULL DEFAULT 0;
+ALTER TABLE llm_usage ADD COLUMN output_tokens bigint NOT NULL DEFAULT 0;
+`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number[]> {

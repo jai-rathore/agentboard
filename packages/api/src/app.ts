@@ -39,7 +39,10 @@ export function createApp(ctx: AppContext) {
   app.get("/healthz", async (c) => {
     const ext = (await db.query<any>(`SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector','pg_trgm','ltree')`)).rows;
     const schema = Number((await db.query<any>(`SELECT COALESCE(MAX(id),0)::int AS v FROM schema_migrations`)).rows[0]?.v ?? 0);
-    return c.json({ ok: true, database: db.kind, schema_version: schema, extensions: Object.fromEntries(ext.map((e) => [e.extname, e.extversion])), offline: ctx.cfg.offline, embedder: ctx.embedder.model });
+    const day = new Date().toISOString().slice(0, 10);
+    const u = (await db.query<any>(`SELECT calls, input_tokens, output_tokens FROM llm_usage WHERE day = $1`, [day])).rows[0];
+    const llm_today = { calls: Number(u?.calls ?? 0), input_tokens: Number(u?.input_tokens ?? 0), output_tokens: Number(u?.output_tokens ?? 0), cap: ctx.cfg.llmDailyCallCap };
+    return c.json({ ok: true, llm_today, database: db.kind, schema_version: schema, extensions: Object.fromEntries(ext.map((e) => [e.extname, e.extversion])), offline: ctx.cfg.offline, embedder: ctx.embedder.model });
   });
 
   app.get("/v1/node", async (c) => {

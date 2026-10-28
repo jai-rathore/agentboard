@@ -16,6 +16,9 @@ export interface Config {
   glimmerApiKey?: string;
   glimmerModel: string;
   llmDailyCallCap: number;
+  /** Hard per-call ceiling on output tokens (reasoning tokens count against it). */
+  llmMaxOutputTokens: number;
+  metaReasoningEffort: string;
   offline: boolean; // force mock providers even if keys exist
   challengeTtlMs: number;
   challengeDifficulty: number;
@@ -47,6 +50,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     glimmerApiKey: env.GLIMMER_API_KEY || env.FIREWORKS_API_KEY || undefined,
     glimmerModel: env.GLIMMER_MODEL || "accounts/fireworks/models/muse-glimmer-30b",
     llmDailyCallCap: num(env.LLM_DAILY_CALL_CAP, 0),
+    llmMaxOutputTokens: num(env.LLM_MAX_OUTPUT_TOKENS, 500),
+    metaReasoningEffort: env.META_REASONING_EFFORT || "minimal",
     offline: env.AGENTBOARD_OFFLINE === "1",
     challengeTtlMs: num(env.CHALLENGE_TTL_MS, 1000),
     challengeDifficulty: num(env.CHALLENGE_DIFFICULTY, 12),
@@ -58,6 +63,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     webBotAuthAllowHttp: false,
     ...overrides,
   };
+  // Contributor-program model variants are never used by this node.
+  for (const m of [cfg.metaModel, cfg.glimmerModel]) if (/contributor/i.test(m)) throw new Error(`refusing model "${m}": -contributor variants are not allowed`);
+  if (!(cfg.llmMaxOutputTokens > 0)) throw new Error("LLM_MAX_OUTPUT_TOKENS must be positive");
   return cfg;
 }
 
@@ -65,7 +73,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 export function publicConfigSummary(c: Config) {
   return {
     database: c.databaseUrl ? "postgres" : "pglite",
-    llm: { meta: Boolean(c.metaApiKey) && !c.offline && c.llmDailyCallCap > 0, glimmer: Boolean(c.glimmerBaseUrl) && !c.offline && c.llmDailyCallCap > 0 },
+    llm: { daily_call_cap: c.llmDailyCallCap, max_output_tokens: c.llmMaxOutputTokens, meta: Boolean(c.metaApiKey) && !c.offline && c.llmDailyCallCap > 0, glimmer: Boolean(c.glimmerBaseUrl) && !c.offline && c.llmDailyCallCap > 0 },
     embeddings: Boolean(c.fireworksApiKey) && !c.offline ? c.embedModel : "local-hash-768 (offline fallback)",
     challenge: { ttl_ms: c.challengeTtlMs, difficulty_bits: c.challengeDifficulty },
     register_pow_bits: c.registerPowBits,

@@ -104,7 +104,7 @@ export async function adjudicateTopic(ctx: AppContext, req: TopicRequest, cands:
     user: JSON.stringify({ requested: { path: req.path, title: req.title, summary: req.summary }, existing: cands.map((c) => ({ path: c.path, title: c.title, summary: c.summary })) }),
     schemaName: "topic_dedup",
     schema: ADJ_SCHEMA,
-    maxTokens: 200,
+    maxTokens: 350,
   });
   if (!r) return h;
   if (r.decision !== "new" && !cands.some((c) => c.path === r.target_path)) return h; // model named a non-candidate

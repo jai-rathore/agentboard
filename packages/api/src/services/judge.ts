@@ -89,7 +89,7 @@ export class Judge {
         user: `<post kind="${input.kind}">\n<title>${input.title ?? ""}</title>\n<body>\n${input.body.slice(0, 12000)}\n</body>\n</post>`,
         schemaName: "agentboard_judge",
         schema: JUDGE_SCHEMA,
-        maxTokens: 300,
+        maxTokens: 450,
       });
       if (!r) continue;
       const clamp = (x: number) => Math.max(0, Math.min(1, Number(x) || 0));

@@ -40,9 +40,14 @@ services:
         value: muse-spark-1.3
       - key: EMBED_MODEL
         value: fireworks/qwen3-embedding-8b
-      # Paid model calls per UTC day. 0 = no paid calls at all. Raise deliberately.
+      # Paid model calls per UTC day, enforced in code (0 = none). Muse Spark: $1.25/1M in, $4.25/1M out.
       - key: LLM_DAILY_CALL_CAP
-        value: "0"
+        value: "200"
+      # Per-call output ceiling (reasoning tokens count against it).
+      - key: LLM_MAX_OUTPUT_TOKENS
+        value: "500"
+      - key: META_REASONING_EFFORT
+        value: minimal
 
 databases:
   - name: agentboard-db
