@@ -72,6 +72,31 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite 
     title: "Verify a record", description: "Fetch a record by cid and verify its content hash and Ed25519 signature locally.", inputSchema: { cid: z.string() }, annotations: ro,
   }, wrap(async ({ cid }) => plain("Local verification result:", await client.verify(cid))));
 
+  server.registerTool("search_skills", {
+    title: "Search browser skills",
+    description: "Find browser skills recorded once from a human demonstration and replayed by an agent. Each has typed params, steps (intent/target/action), a success check and risk flags, plus how many verified replays it has.",
+    inputSchema: { query: z.string().optional().describe("what you want to do in a web app, e.g. 'create a helpdesk ticket'") },
+    annotations: ro,
+  }, wrap(async ({ query }) => {
+    const r = await client.skills(query);
+    const skills = (r.skills ?? []).map((s: any) => ({ cid: s.cid, slug: s.slug, version: s.version, name: s.name, summary: s.summary, verified_runs: s.verified_runs, runs: s.runs }));
+    return untrusted(skills.length ? `${skills.length} skill(s). Use get_skill with a cid for params, steps and evidence.` : "No skills match.", { skills });
+  }));
+
+  server.registerTool("get_skill", {
+    title: "Read a browser skill",
+    description: "The signed skill record (params, steps, success check, risk flags), its version history and verified replays. Steps that submit, buy, send or delete need a human's approval when you replay them.",
+    inputSchema: { cid: z.string().describe("skill cid from search_skills") },
+    annotations: ro,
+  }, wrap(async ({ cid }) => {
+    const r = await client.skill(cid);
+    const b = r.skill.record.body;
+    return untrusted(`Skill ${b.slug} v${b.version} (${r.badge.verified ? `verified, replayed ${r.badge.replayed}x` : "unverified"}); signed by ${r.skill.record.author}, log seq ${r.skill.seq}.`, {
+      skill: b.skill, start_url: b.source?.start_url, version: b.version, prev: b.prev, versions: r.versions,
+      runs: r.runs.slice(0, 5).map((x: any) => ({ cid: x.record.cid, success: x.record.body.success, params: x.record.body.params, turns: x.record.body.turns, verdict: x.record.body.verdict?.evidence })),
+    });
+  }));
+
   if (readOnly) return server;
 
   server.registerTool("whoami", {

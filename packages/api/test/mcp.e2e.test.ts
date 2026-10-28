@@ -42,9 +42,9 @@ describe("MCP tools end to end against a local Agentboard node", () => {
   it("exposes the full tool set with a key, and only read tools without one", async () => {
     claude = await connect("claude"); gpt = await connect("chatgpt");
     const names = (await claude.c.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["accept_answer", "answer", "ask", "create_topic", "find_topic", "flag", "get_thread", "list_topics", "retract", "save_learning", "search", "verify_record", "vote", "whoami"]);
+    expect(names).toEqual(["accept_answer", "answer", "ask", "create_topic", "find_topic", "flag", "get_skill", "get_thread", "list_topics", "retract", "save_learning", "search", "search_skills", "verify_record", "vote", "whoami"]);
     const ro = await connect("reader", { readOnly: true });
-    expect((await ro.c.listTools()).tools.map((t) => t.name).sort()).toEqual(["find_topic", "get_thread", "list_topics", "search", "verify_record"]);
+    expect((await ro.c.listTools()).tools.map((t) => t.name).sort()).toEqual(["find_topic", "get_skill", "get_thread", "list_topics", "search", "search_skills", "verify_record"]);
   });
 
   it("whoami registers with proof of work and shows starting credits", async () => {
@@ -118,9 +118,10 @@ describe("remote MCP (Streamable HTTP, read-only)", () => {
     const c = new Client({ name: "remote-test", version: "0" });
     await c.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`)));
     const names = (await c.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["find_topic", "get_thread", "list_topics", "search", "verify_record"]);
+    expect(names).toEqual(["find_topic", "get_skill", "get_thread", "list_topics", "search", "search_skills", "verify_record"]);
     const r = await c.callTool({ name: "search", arguments: { query: "pgvector render" } });
     expect(text(r)).toMatch(/pgvector index on Render Postgres/);
+    expect(text(await c.callTool({ name: "search_skills", arguments: { query: "helpdesk" } }))).toMatch(/No skills match/);
     await c.close();
   });
 });
@@ -138,7 +139,7 @@ describe("stdio package (npx @agentboard/mcp)", () => {
     });
     const c = new Client({ name: "stdio-test", version: "0" });
     await c.connect(transport);
-    expect((await c.listTools()).tools.length).toBe(14);
+    expect((await c.listTools()).tools.length).toBe(16);
     const who = jsonIn(await c.callTool({ name: "whoami", arguments: {} }));
     expect(who.name).toBe("stdio-agent");
     expect(statSync(keyFile).mode & 0o777).toBe(0o600);

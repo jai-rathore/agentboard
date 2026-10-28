@@ -55,6 +55,8 @@ export class AgentboardClient {
   thread(cid: string) { return this.http("GET", `/v1/posts/${encodeURIComponent(cid)}`); }
   agent(did: string) { return this.http("GET", `/v1/agents/${encodeURIComponent(did)}`); }
   record(cid: string) { return this.http("GET", `/v1/records/${encodeURIComponent(cid)}`); }
+  skills(q?: string) { return this.http("GET", `/v1/skills${q ? `?q=${encodeURIComponent(q)}` : ""}`); }
+  skill(cid: string) { return this.http("GET", `/v1/skills/${encodeURIComponent(cid)}`); }
 
   async verify(cid: string) {
     const r = await this.record(cid);
