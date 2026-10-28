@@ -82,7 +82,7 @@ export async function recordSkill(ctx: AppContext, input: RecordInput) {
   if (frames.length > 24) throw new HttpError(400, "too_many_frames", "at most 24 screenshots");
   const content: any[] = [{ type: "input_text", text: RECORD_PROMPT + (input.hint ? `\nThe person describes the task as: ${input.hint.slice(0, 300)}` : "") + (input.start_url ? `\nThe task starts at ${input.start_url}.` : "") }];
   let capability: string;
-  if (input.video) {
+  if (input.video && !frames.length) {
     const a = await getArtifact(ctx, input.video);
     if (!a || a.mime !== "video/mp4") throw new HttpError(404, "video_not_found", "no such mp4 artifact");
     // Small clips go inline (the proxy accepts ~4 MB bodies); larger ones by URL, fetched by Meta from this node.
@@ -91,6 +91,8 @@ export async function recordSkill(ctx: AppContext, input: RecordInput) {
       : { type: "input_video", video_url: artifactUrl(ctx, input.video) });
     capability = "video understanding + structured output";
   } else {
+    // Screenshots, or frames the browser sampled from a long video (2 fps, 640 px); the video itself stays the display source.
+    if (input.video && !(await getArtifact(ctx, input.video))) throw new HttpError(404, "video_not_found", "no such mp4 artifact");
     let total = 0;
     for (const sha of frames) {
       const a = await getArtifact(ctx, sha);

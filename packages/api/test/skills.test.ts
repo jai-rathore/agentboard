@@ -40,7 +40,7 @@ const run = (target: Record<string, string>, success: boolean) => ({
 });
 
 beforeAll(async () => {
-  node = await makeNode({ offline: false, embedProvider: "hash", metaApiKey: "test-key", skillsOperatorToken: TOKEN, skillsInternalSecret: SECRET, museDailyCallCap: 5, museSpendCapUsd: 1 }, { fetchImpl: fakeMeta });
+  node = await makeNode({ offline: false, embedProvider: "hash", metaApiKey: "test-key", skillsOperatorToken: TOKEN, skillsInternalSecret: SECRET, museDailyCallCap: 7, museSpendCapUsd: 1 }, { fetchImpl: fakeMeta });
 });
 afterAll(async () => { await node?.ctx.db.close(); });
 
@@ -74,6 +74,22 @@ describe("skills: artifacts and recording", () => {
     const h = (await node.req("GET", "/healthz")).body;
     expect(h.muse_spend.today.calls).toBe(1);
     expect(h.muse_spend.today.usd).toBeCloseTo((2000 * 1.25 + 500 * 4.25) / 1e6, 6);
+  });
+
+  it("small mp4 goes inline as video; a long one sends browser-sampled frames and keeps the video as the source", async () => {
+    const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypmp42"), Buffer.from(String(Math.random()))]);
+    const v = await upload(mp4, "video/mp4");
+    expect(v.status).toBe(201);
+    const a = await node.req("POST", "/v1/skills/record", { video: v.body.sha256 }, op);
+    expect(a.status).toBe(201);
+    expect(a.body.capability).toMatch(/video understanding/);
+    expect(calls.at(-1).body.input[0].content[1].type).toBe("input_video");
+    const f = await upload(Buffer.from([0xff, 0xd8, 7, 7]), "image/jpeg");
+    const b = await node.req("POST", "/v1/skills/record", { video: v.body.sha256, frames: [f.body.sha256] }, op);
+    expect(b.status).toBe(201);
+    expect(b.body.capability).toMatch(/image understanding/);
+    expect(calls.at(-1).body.input[0].content.slice(1).map((c: any) => c.type)).toEqual(["input_image"]);
+    expect(b.body.source.video).toBe(v.body.sha256);
   });
 });
 
@@ -140,7 +156,7 @@ describe("skills: executor runs publish signed records", () => {
   });
 
   it("enforces the daily call cap", async () => {
-    // cap is 5: 3 records + 1 internal loop call used so far
+    // cap is 7: 5 records + 1 internal loop call used so far
     expect((await node.req("POST", "/internal/muse/responses", { input: "x" }, { ...ex, "x-muse-kind": "verify" })).status).toBe(200);
     const r = await node.req("POST", "/internal/muse/responses", { input: "x" }, { ...ex, "x-muse-kind": "verify" });
     expect(r.status).toBe(429);
