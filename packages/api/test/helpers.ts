@@ -1,4 +1,4 @@
-import { createRecord, generateKeyPair, solveChallenge, solveRegistrationPow, type KeyPair, type Challenge, type SignedRecord } from "@agentboard/core";
+import { createRecord, generateKeyPair, exportSeedHex, solveChallenge, solveRegistrationPow, type KeyPair, type Challenge, type SignedRecord } from "@agentboard/core";
 import { loadConfig, type Config } from "../src/config.js";
 import { buildContext, type ContextOverrides } from "../src/bootstrap.js";
 import { createApp } from "../src/app.js";
@@ -14,9 +14,41 @@ export const TEST_CFG: Partial<Config> = {
   publicBaseUrl: "http://agentboard.test",
 };
 
+/**
+ * Tests run on embedded PGlite by default. Set TEST_DATABASE_URL (e.g.
+ * postgres://agentboard@127.0.0.1:54329/postgres) to run every suite against a real Postgres with
+ * pgvector/pg_trgm/ltree: each node gets a fresh throwaway database.
+ */
+export async function testDatabaseUrl(): Promise<string | undefined> {
+  const admin = process.env.TEST_DATABASE_URL;
+  if (!admin) return undefined;
+  const pg = (await import("pg")).default;
+  const name = `ab_test_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const c = new pg.Client({ connectionString: admin });
+  await c.connect();
+  await c.query(`CREATE DATABASE ${name}`);
+  await c.end();
+  const u = new URL(admin);
+  u.pathname = `/${name}`;
+  return u.toString();
+}
+
+export async function dropTestDatabase(url: string) {
+  const pg = (await import("pg")).default;
+  const c = new pg.Client({ connectionString: process.env.TEST_DATABASE_URL });
+  await c.connect();
+  await c.query(`DROP DATABASE IF EXISTS ${new URL(url).pathname.slice(1)} WITH (FORCE)`);
+  await c.end();
+}
+
 export async function makeNode(cfg: Partial<Config> = {}, o: ContextOverrides = {}) {
-  const config = loadConfig({}, { ...TEST_CFG, ...cfg });
+  const databaseUrl = await testDatabaseUrl();
+  const config = loadConfig({}, { ...TEST_CFG, ...(databaseUrl ? { databaseUrl, nodeSigningKey: exportSeedHex(generateKeyPair()) } : {}), ...cfg });
   const ctx = await buildContext(config, o);
+  if (databaseUrl) {
+    const close = ctx.db.close.bind(ctx.db);
+    ctx.db.close = async () => { await close(); await dropTestDatabase(databaseUrl); };
+  }
   const app = createApp(ctx);
   const req = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
     const res = await app.request(path, { method, headers: { "content-type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });

@@ -6,7 +6,9 @@
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@10.34.6",
-  "engines": { "node": ">=20.19" },
+  "engines": {
+    "node": ">=20.19"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
@@ -15,7 +17,10 @@
     "dev:api": "pnpm --filter @agentboard/api run dev",
     "dev:web": "pnpm --filter @agentboard/web run dev",
     "migrate": "pnpm --filter @agentboard/api run migrate",
-    "scout": "tsx scripts/scout.ts"
+    "scout": "tsx scripts/scout.ts",
+    "test:pg": "TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://agentboard@127.0.0.1:54329/postgres} vitest run",
+    "pg:start": "scripts/local-pg.sh start",
+    "pg:stop": "scripts/local-pg.sh stop"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

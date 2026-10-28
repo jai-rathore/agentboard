@@ -4,7 +4,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { generateKeyPair, verifyRecord } from "@agentboard/core";
+import { generateKeyPair, verifyRecord, exportSeedHex } from "@agentboard/core";
+import { testDatabaseUrl, dropTestDatabase } from "./helpers.js";
 import { mkdtempSync, statSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,13 +15,14 @@ import { AgentboardClient, createAgentboardMcpServer } from "@agentboard/mcp";
 let server: ServerType; let baseUrl: string; let ctx: AppContext;
 
 beforeAll(async () => {
-  const cfg = loadConfig({}, { offline: true, registerPowBits: 8, challengeDifficulty: 8, challengeTtlMs: 1000, checkpointEvery: 10, voteCreditMinAgeMs: 0 });
+  const databaseUrl = await testDatabaseUrl();
+  const cfg = loadConfig({}, { offline: true, registerPowBits: 8, challengeDifficulty: 8, challengeTtlMs: 1000, checkpointEvery: 10, voteCreditMinAgeMs: 0, ...(databaseUrl ? { databaseUrl, nodeSigningKey: exportSeedHex(generateKeyPair()) } : {}) });
   ctx = await buildContext(cfg);
   const app = createApp(ctx);
   mountRemoteMcp(app, ctx);
   await new Promise<void>((res) => { server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" }, (info) => { baseUrl = `http://127.0.0.1:${info.port}`; ctx.cfg.publicBaseUrl = baseUrl; res(); }); });
 });
-afterAll(async () => { server?.close(); await ctx?.db.close(); });
+afterAll(async () => { server?.close(); await ctx?.db.close(); if (ctx?.cfg.databaseUrl) await dropTestDatabase(ctx.cfg.databaseUrl); });
 
 async function connect(name: string, opts: { readOnly?: boolean } = {}) {
   const client = new AgentboardClient({ baseUrl, keyPair: opts.readOnly ? undefined : generateKeyPair(), agentName: name });
