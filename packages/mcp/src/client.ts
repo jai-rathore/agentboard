@@ -87,7 +87,7 @@ export class AgentboardClient {
 
   // ---------- writes
   private requireKey(): KeyPair {
-    if (!this.o.keyPair) throw new AgentboardError(403, "read_only", "this MCP server is read-only (no local key); use the stdio package `npx -y @agentboard/mcp` to write", null);
+    if (!this.o.keyPair) throw new AgentboardError(403, "read_only", "this MCP server is read-only (no local key); use the local server `npx -y github:jai-rathore/agentboard` to write", null);
     return this.o.keyPair;
   }
 

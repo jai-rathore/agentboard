@@ -202,13 +202,26 @@ describe("public log and checkpoints", () => {
 
 describe("discovery", () => {
   it("serves llms.txt, agent card, openapi, mcp card", async () => {
-    expect((await node.req("GET", "/llms.txt")).body).toMatch(/npx -y @agentboard\/mcp/);
+    const llms = (await node.req("GET", "/llms.txt")).body;
+    expect(llms).toMatch(/^# Agentboard Skills/);
+    expect(llms).toMatch(/npx -y github:jai-rathore\/agentboard/);
+    expect(llms).not.toMatch(/@agentboard\/mcp|agent-only/);
     const card = (await node.req("GET", "/.well-known/agent-card.json")).body;
-    expect(card.skills.map((s: any) => s.id)).toContain("search");
+    expect(card.skills.map((s: any) => s.id)).toEqual(["find_skill", "search"]);
+    expect(card.supportedInterfaces[0]).toMatchObject({ protocolBinding: "JSONRPC", protocolVersion: "1.0" });
+    expect(card["x-agentboard"].mcp_stdio).toBe("npx -y github:jai-rathore/agentboard");
     const oa = (await node.req("GET", "/openapi.json")).body;
     expect(oa.openapi).toBe("3.1.0");
     expect(Object.keys(oa.paths)).toContain("/v1/records");
-    expect((await node.req("GET", "/.well-known/mcp.json")).body.packages[0].name).toBe("@agentboard/mcp");
+    expect((await node.req("GET", "/.well-known/mcp.json")).body.packages[0].run).toBe("npx -y github:jai-rathore/agentboard");
+    const v1 = await node.app.fetch(new Request("http://x/mcp/server-card"));
+    expect(v1.headers.get("content-type")).toBe("application/mcp-server-card+json");
+    expect(v1.headers.get("access-control-allow-origin")).toBe("*");
+    expect((await v1.json()).name).toBe("io.github.jai-rathore/agentboard-skills");
+    const sm = await node.app.fetch(new Request("http://x/.well-known/mcp/server-card.json"));
+    expect(sm.headers.get("content-type")).toMatch(/^application\/json/);
+    expect(sm.headers.get("access-control-allow-origin")).toBe("*");
+    expect((await sm.json()).tools.map((t: any) => t.name)).toContain("search_skills");
   });
   it("answers A2A message/send with search results", async () => {
     const r = await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { role: "user", parts: [{ kind: "text", text: "pgvector render" }] } } });

@@ -42,9 +42,11 @@ describe("MCP tools end to end against a local Agentboard node", () => {
   it("exposes the full tool set with a key, and only read tools without one", async () => {
     claude = await connect("claude"); gpt = await connect("chatgpt");
     const names = (await claude.c.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["accept_answer", "answer", "ask", "create_topic", "find_skill", "find_topic", "flag", "get_skill", "get_thread", "list_topics", "retract", "run_skill", "save_learning", "search", "skill_run_status", "verify_record", "vote", "whoami"]);
+    expect(names).toEqual(["accept_answer", "answer", "ask", "create_topic", "find_skill", "find_topic", "flag", "get_skill", "get_thread", "list_topics", "retract", "run_skill", "save_learning", "search", "search_skills", "skill_run_status", "verify_record", "vote", "whoami"]);
+    const runSkill = (await claude.c.listTools()).tools.find((t) => t.name === "run_skill")!;
+    expect(runSkill.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, openWorldHint: true });
     const ro = await connect("reader", { readOnly: true });
-    expect((await ro.c.listTools()).tools.map((t) => t.name).sort()).toEqual(["find_skill", "find_topic", "get_skill", "get_thread", "list_topics", "search", "skill_run_status", "verify_record"]);
+    expect((await ro.c.listTools()).tools.map((t) => t.name).sort()).toEqual(["find_skill", "find_topic", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "verify_record"]);
   });
 
   it("whoami registers with proof of work and shows starting credits", async () => {
@@ -118,7 +120,7 @@ describe("remote MCP (Streamable HTTP, read-only)", () => {
     const c = new Client({ name: "remote-test", version: "0" });
     await c.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`)));
     const names = (await c.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["find_skill", "find_topic", "get_skill", "get_thread", "list_topics", "search", "skill_run_status", "verify_record"]);
+    expect(names).toEqual(["find_skill", "find_topic", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "verify_record"]);
     const r = await c.callTool({ name: "search", arguments: { query: "pgvector render" } });
     expect(text(r)).toMatch(/pgvector index on Render Postgres/);
     expect(text(await c.callTool({ name: "find_skill", arguments: { query: "helpdesk" } }))).toMatch(/No skills match/);
@@ -126,7 +128,7 @@ describe("remote MCP (Streamable HTTP, read-only)", () => {
   });
 });
 
-describe("stdio package (npx @agentboard/mcp)", () => {
+describe("stdio package (npx -y github:jai-rathore/agentboard)", () => {
   it("starts over stdio, creates a 0600 identity file, and serves tools", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agentboard-mcp-"));
     const keyFile = join(dir, "identity.json");
@@ -139,7 +141,7 @@ describe("stdio package (npx @agentboard/mcp)", () => {
     });
     const c = new Client({ name: "stdio-test", version: "0" });
     await c.connect(transport);
-    expect((await c.listTools()).tools.length).toBe(18);
+    expect((await c.listTools()).tools.length).toBe(19);
     const who = jsonIn(await c.callTool({ name: "whoami", arguments: {} }));
     expect(who.name).toBe("stdio-agent");
     expect(statSync(keyFile).mode & 0o777).toBe(0o600);

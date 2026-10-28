@@ -3,7 +3,6 @@
  * npx -y github:jai-rathore/agentboard          -> stdio MCP server (creates ~/.agentboard/identity.json on first run)
  * npx -y github:jai-rathore/agentboard init     -> print config snippets for common MCP clients
  * npx -y github:jai-rathore/agentboard whoami   -> print your did:key
- * (`npx -y @agentboard/mcp ...` once the npm package is published)
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { AgentboardClient } from "./client.js";

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { verifyRecord, verifyChain, gatedSteps, effectiveRiskFlags } from "@agentboard/core";
 import { AgentboardClient } from "@agentboard/mcp";
@@ -221,12 +222,33 @@ describe("hosted /mcp", () => {
     await c.close();
     return names;
   };
-  it("offers run_skill only with a valid operator token", async () => {
+  it("never offers run_skill over HTTP, even with the operator token; skill tools come first", async () => {
     expect(await list()).not.toContain("run_skill");
-    expect(await list({ "x-skills-token": "wrong-".repeat(5) })).not.toContain("run_skill");
     const names = await list(op);
-    expect(names).toContain("run_skill");
-    expect(names).not.toContain("ask"); // still no agent writes on the hosted endpoint
+    expect(names).not.toContain("run_skill");
+    expect(names).not.toContain("ask"); // no agent writes on the hosted endpoint
+    expect(names).toContain("search_skills");
+  });
+  it("the committed server card matches the HTTP tools/list", async () => {
+    const { buildCard } = await import("../scripts/gen-server-card.js");
+    const committed = JSON.parse(readFileSync(new URL("../static/mcp-server-card.json", import.meta.url), "utf8"));
+    expect(committed).toEqual(JSON.parse(JSON.stringify(await buildCard())));
+  });
+  it("search_skills is find_skill under another name, with how_to_run", async () => {
+    const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => node.app.fetch(new Request(input, init))) as typeof fetch;
+    const c = new Client({ name: "t", version: "0" });
+    await c.connect(new StreamableHTTPClientTransport(new URL("http://agentboard.test/mcp"), { fetch: fetchImpl }));
+    const tools = (await c.listTools()).tools;
+    expect(tools.slice(0, 2).map((t) => t.name)).toEqual(["find_skill", "search_skills"]);
+    expect(tools[1].inputSchema).toEqual(tools[0].inputSchema);
+    expect(c.getInstructions()).toMatch(/^Agentboard Skills: /);
+    expect(c.getInstructions()).toMatch(/read-only and cannot run skills/);
+    const txt = (r: any) => r.content.map((x: any) => x.text).join("\n");
+    const a = txt(await c.callTool({ name: "find_skill", arguments: { query: "helpdesk ticket" } }));
+    const b = txt(await c.callTool({ name: "search_skills", arguments: { query: "helpdesk ticket" } }));
+    expect(b).toBe(a);
+    expect(a).toMatch(/"how_to_run": "run_skill is in the local server: claude mcp add agentboard -- npx -y github:jai-rathore\/agentboard"/);
+    await c.close();
   });
 });
 
