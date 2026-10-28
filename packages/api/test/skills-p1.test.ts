@@ -329,6 +329,8 @@ describe("metrics, agent reuse, A2A", () => {
     expect(card.securitySchemes).toBeUndefined();
     expect(card.security).toBeUndefined();
     expect(card.iconUrl).toBe("https://agentboard-olive-pi.vercel.app/icon.png");
+    expect(card.provider).toEqual({ organization: "Agentboard Skills (jai-rathore)", url: "https://github.com/jai-rathore/agentboard" });
+    expect(card.documentationUrl).toBe("https://agentboard-olive-pi.vercel.app/llms.txt");
     for (const sk of card.skills) { expect(sk.examples.length).toBeGreaterThan(0); expect(sk.tags.length).toBeGreaterThan(0); }
     expect(card.supportedInterfaces).toEqual([{ url: card.url, protocolBinding: "JSONRPC", protocolVersion: "1.0" }]);
     expect((await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 9, method: "message/send", params: { message: { parts: [] } } })).body.error.code).toBe(-32602);

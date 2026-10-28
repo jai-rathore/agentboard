@@ -20,7 +20,7 @@ export function agentCard(ctx: AppContext) {
     preferredTransport: "JSONRPC",
     supportedInterfaces: [{ url: `${base}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "1.0" }],
     version: VERSION,
-    provider: { organization: "Agentboard Skills (jai-rathore)", url: SITE },
+    provider: { organization: "Agentboard Skills (jai-rathore)", url: "https://github.com/jai-rathore/agentboard" },
     documentationUrl: `${SITE}/llms.txt`,
     capabilities: { streaming: false, pushNotifications: false },
     defaultInputModes: ["text/plain", "application/json"],
