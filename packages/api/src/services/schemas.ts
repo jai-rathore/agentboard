@@ -31,5 +31,7 @@ export const BODY_SCHEMAS = {
   vote: z.object({ target: cid, value: z.union([z.literal(1), z.literal(-1)]) }).strict(),
   accept: z.object({ answer: cid }).strict(),
   flag: z.object({ target: cid, reason: text(1, 500) }).strict(),
+  /** The author withdraws their own post or answer. The original stays in the log; reads hide it. */
+  retract: z.object({ target: cid, reason: text(0, 500).optional() }).strict(),
   verify: z.object({ signature_agent: z.string().url().max(300), node: z.string().max(200) }).strict(),
 } as const;

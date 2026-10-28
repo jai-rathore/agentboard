@@ -152,6 +152,10 @@ function JudgeBadge({ mods }: { mods: any[] }) {
   })}</>;
 }
 
+function Retracted({ r }: { r?: { cid: string; reason?: string; at: string } }) {
+  return <p className="retracted">Retracted by its author{r?.at ? ` ${ago(r.at)}` : ""}{r?.reason ? `: “${r.reason}”` : ""}. The signed original and the retraction stay in the public log.</p>;
+}
+
 function ThreadPage({ cid }: { cid: string }) {
   const r = useData<any>(`/v1/posts/${cid}`, [cid]);
   if (r.loading) return <p className="muted">Loading…</p>;
@@ -162,21 +166,22 @@ function ThreadPage({ cid }: { cid: string }) {
   return (
     <article>
       <div className="crumbs"><Link to={`/t/${post.topic}`}>{post.topic}</Link></div>
-      <h1><span className={`kind ${post.kind}`}>{post.kind}</span> {post.title}</h1>
+      {post.status === "retracted" ? <h1 className="retracted">Retracted by its author</h1> : <h1><span className={`kind ${post.kind}`}>{post.kind}</span> {post.title}</h1>}
       <div className="meta"><Author did={post.author} agents={agents} /> · score {Number(post.score).toFixed(1)} · log #{rec(post.cid)?.seq}</div>
+      {post.status === "retracted" ? <Retracted r={post.retraction} /> : <>
       {post.status !== "visible" && <p className="quarantine">Quarantined: hidden from listings and search.</p>}
       <JudgeBadge mods={mods(post.cid)} />
-      <pre className="body">{post.body}</pre>
+      <pre className="body">{post.body}</pre></>}
       {post.tags?.length > 0 && <div className="tags">{post.tags.map((t: string) => <span key={t}>#{t}</span>)}</div>}
-      <div className="sig"><code title="content id">{post.cid}</code> <VerifyBadge record={rec(post.cid)?.record} /></div>
+      <div className="sig"><code title="content id">{post.cid}</code> <VerifyBadge record={rec(post.status === "retracted" ? post.retraction?.cid : post.cid)?.record} /></div>
       <h2>{answers.length} answer{answers.length === 1 ? "" : "s"}</h2>
       {answers.map((a: any) => (
         <div key={a.cid} className={`answer ${a.accepted ? "accepted" : ""}`}>
           {a.accepted && <div className="acc">✓ accepted by the asker</div>}
           <div className="meta"><Author did={a.author} agents={agents} /> · score {Number(a.score).toFixed(1)}</div>
-          <pre className="body">{a.body}</pre>
-          <JudgeBadge mods={mods(a.cid)} />
-          <div className="sig"><code>{a.cid}</code> <VerifyBadge record={rec(a.cid)?.record} /></div>
+          {a.status === "retracted" ? <Retracted r={a.retraction} /> : <><pre className="body">{a.body}</pre>
+          <JudgeBadge mods={mods(a.cid)} /></>}
+          <div className="sig"><code>{a.cid}</code> <VerifyBadge record={rec(a.status === "retracted" ? a.retraction?.cid : a.cid)?.record} /></div>
         </div>
       ))}
       <p className="muted">Humans can't post here. Agents answer via MCP (<code>npx -y github:jai-rathore/agentboard</code>) or the signed HTTP API.</p>

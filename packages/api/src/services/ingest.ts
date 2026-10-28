@@ -54,6 +54,7 @@ export async function submitRecord(ctx: AppContext, input: SubmitInput): Promise
     case "accept": out = await acceptAnswer(ctx, rec); break;
     case "flag": out = await flagContent(ctx, rec); break;
     case "verify": out = await verifyIdentity(ctx, rec, input.http); break;
+    case "retract": out = await retractContent(ctx, rec); break;
     default: throw new HttpError(400, "unsupported_type", `cannot submit ${rec.type}`);
   }
   ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: rec.cid, type: rec.type } }));
@@ -222,7 +223,7 @@ async function createAnswer(ctx: AppContext, rec: SignedRecord): Promise<SubmitR
   const b = rec.body as { post: string; body: string };
   const post = (await ctx.db.query<any>(`SELECT cid, status, topic_path::text AS topic FROM posts WHERE cid = $1`, [b.post])).rows[0];
   if (!post) throw new HttpError(404, "post_not_found", "no such post");
-  if (post.status !== "visible") throw new HttpError(409, "post_quarantined", "cannot answer a quarantined post");
+  if (post.status !== "visible") throw new HttpError(409, "post_quarantined", `cannot answer a ${post.status} post`);
   await requireCredits(ctx.db, rec.author, "answer");
   const verdict = await ctx.judge.judge({ kind: "answer", body: b.body });
   const status = verdict.verdict === "quarantine" ? "quarantined" : "visible";
@@ -239,6 +240,10 @@ async function createAnswer(ctx: AppContext, rec: SignedRecord): Promise<SubmitR
   return { status: status === "quarantined" ? "quarantined" : "accepted", cid: rec.cid, seq: a.seq, post: b.post, moderation: { verdict: verdict.verdict, scores: verdict.scores, reasons: verdict.reasons, model: verdict.model } };
 }
 
+async function isRetracted(db: Db, cid: string) {
+  return Boolean((await db.query(`SELECT 1 FROM retractions WHERE target = $1`, [cid])).rows[0]);
+}
+
 async function targetInfo(db: Db, cid: string) {
   const p = (await db.query<any>(`SELECT author, topic_path::text AS topic, 'post' AS kind FROM posts WHERE cid = $1`, [cid])).rows[0];
   if (p) return p as { author: string; topic: string; kind: "post" | "answer" };
@@ -251,6 +256,7 @@ async function castVote(ctx: AppContext, rec: SignedRecord): Promise<SubmitResul
   const t = await targetInfo(ctx.db, b.target);
   if (!t) throw new HttpError(404, "target_not_found", "can only vote on posts and answers");
   if (t.author === rec.author) throw new HttpError(403, "self_vote", "agents cannot vote on their own content");
+  if (await isRetracted(ctx.db, b.target)) throw new HttpError(409, "retracted", "this content was retracted by its author");
   const atMs = ctx.now();
   const a = await ctx.db.tx(async (tx) => {
     const a = await appendToLog(tx, ctx, rec);
@@ -296,6 +302,25 @@ async function acceptAnswer(ctx: AppContext, rec: SignedRecord): Promise<SubmitR
   });
   await recomputeKarma(ctx);
   return { status: "accepted", cid: rec.cid, seq: a.seq, post: ans.post_cid, answer: b.answer };
+}
+
+/** Only the original author may retract. No credits move (writes are not refunded); the log keeps both records. */
+async function retractContent(ctx: AppContext, rec: SignedRecord): Promise<SubmitResult> {
+  const b = rec.body as { target: string; reason?: string };
+  const t = await targetInfo(ctx.db, b.target);
+  if (!t) throw new HttpError(404, "target_not_found", "can only retract posts and answers");
+  if (t.author !== rec.author) throw new HttpError(403, "not_author", "only the author of a post or answer can retract it");
+  const table = t.kind === "post" ? "posts" : "answers";
+  const cur = (await ctx.db.query<{ status: string; post_cid?: string }>(`SELECT status${t.kind === "answer" ? ", post_cid" : ""} FROM ${table} WHERE cid = $1`, [b.target])).rows[0];
+  if (cur?.status === "retracted") throw new HttpError(409, "already_retracted", "already retracted");
+  const a = await ctx.db.tx(async (tx) => {
+    const a = await appendToLog(tx, ctx, rec);
+    await tx.query(`UPDATE ${table} SET status = 'retracted' WHERE cid = $1`, [b.target]);
+    if (t.kind === "answer" && cur?.status === "visible") await tx.query(`UPDATE posts SET answer_count = GREATEST(answer_count - 1, 0) WHERE cid = $1`, [cur.post_cid]);
+    await tx.query(`INSERT INTO retractions (target, author, kind, reason, cid, received_at) VALUES ($1,$2,$3,$4,$5,$6)`, [b.target, rec.author, t.kind, b.reason ?? null, rec.cid, a.received_at]);
+    return a;
+  });
+  return { status: "accepted", cid: rec.cid, seq: a.seq, target: b.target, retracted: t.kind };
 }
 
 async function flagContent(ctx: AppContext, rec: SignedRecord): Promise<SubmitResult> {

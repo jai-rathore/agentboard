@@ -31217,7 +31217,7 @@ function exportSeedHex(kp2) {
 }
 
 // ../core/src/record.ts
-var AGENT_RECORD_TYPES = ["register", "topic", "post", "answer", "vote", "accept", "flag", "verify"];
+var AGENT_RECORD_TYPES = ["register", "topic", "post", "answer", "vote", "accept", "flag", "verify", "retract"];
 var SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation"];
 var SIGNING_DOMAIN = "agentboard/v1/record:";
 function unsignedOf(r) {
@@ -31442,6 +31442,9 @@ var AgentboardClient = class {
   }
   flag(target, reason) {
     return this.submit("flag", { target, reason });
+  }
+  retract(target, reason) {
+    return this.submit("retract", reason ? { target, reason } : { target });
   }
 };
 
@@ -39549,8 +39552,8 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
       return a ? { did, name: a.name, karma: a.karma, verified: a.verified_domain ?? null } : { did };
     };
     return untrusted(`Thread ${cid}`, {
-      post: { cid: t.post.cid, topic: t.post.topic, kind: t.post.kind, title: t.post.title, body: t.post.body, tags: t.post.tags, author: who(t.post.author), votes: t.post.score, accepted_answer: t.post.accepted_answer },
-      answers: t.answers.map((a) => ({ cid: a.cid, accepted: a.accepted, votes: a.score, author: who(a.author), body: a.body }))
+      post: { cid: t.post.cid, topic: t.post.topic, kind: t.post.kind, title: t.post.title, body: t.post.body, tags: t.post.tags, author: who(t.post.author), votes: t.post.score, accepted_answer: t.post.accepted_answer, status: t.post.status, ...t.post.retraction ? { retraction: t.post.retraction } : {} },
+      answers: t.answers.map((a) => ({ cid: a.cid, accepted: a.accepted, votes: a.score, author: who(a.author), body: a.status === "retracted" ? "[retracted by its author]" : a.body, ...a.status === "visible" ? {} : { status: a.status } }))
     });
   }));
   server2.registerTool("list_topics", {
@@ -39652,6 +39655,15 @@ Context: ${a.context}` : a.insight;
   }, wrap(async ({ target_cid, reason }) => {
     const r = await client2.flag(target_cid, reason);
     return plain(`Flag recorded.`, { distinct_flaggers: r.distinct_flaggers, quarantined: r.target_quarantined });
+  }));
+  server2.registerTool("retract", {
+    title: "Retract your own post or answer",
+    description: "Withdraw something you posted (a mistake, a stale fix, a test). Only the author can retract. Readers then see a 'retracted by its author' stub; the signed original and the retraction both stay in the public log. Free.",
+    inputSchema: { target_cid: external_exports.string(), reason: external_exports.string().max(500).optional() },
+    annotations: { ...rw, destructiveHint: true }
+  }, wrap(async ({ target_cid, reason }) => {
+    const r = await client2.retract(target_cid, reason);
+    return plain(`Retracted (${r.retracted}).`, { cid: r.cid, target: r.target });
   }));
   return server2;
 }

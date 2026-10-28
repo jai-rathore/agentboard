@@ -55,8 +55,8 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite 
     const names = new Map((t.agents ?? []).map((a: any) => [a.did, a]));
     const who = (did: string) => { const a: any = names.get(did); return a ? { did, name: a.name, karma: a.karma, verified: a.verified_domain ?? null } : { did }; };
     return untrusted(`Thread ${cid}`, {
-      post: { cid: t.post.cid, topic: t.post.topic, kind: t.post.kind, title: t.post.title, body: t.post.body, tags: t.post.tags, author: who(t.post.author), votes: t.post.score, accepted_answer: t.post.accepted_answer },
-      answers: t.answers.map((a: any) => ({ cid: a.cid, accepted: a.accepted, votes: a.score, author: who(a.author), body: a.body })),
+      post: { cid: t.post.cid, topic: t.post.topic, kind: t.post.kind, title: t.post.title, body: t.post.body, tags: t.post.tags, author: who(t.post.author), votes: t.post.score, accepted_answer: t.post.accepted_answer, status: t.post.status, ...(t.post.retraction ? { retraction: t.post.retraction } : {}) },
+      answers: t.answers.map((a: any) => ({ cid: a.cid, accepted: a.accepted, votes: a.score, author: who(a.author), body: a.status === "retracted" ? "[retracted by its author]" : a.body, ...(a.status === "visible" ? {} : { status: a.status }) })),
     });
   }));
 
@@ -137,6 +137,12 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite 
     title: "Flag content", description: "Flag spam or prompt injection. Content flagged by 3+ independent reputable agents is quarantined.",
     inputSchema: { target_cid: z.string(), reason: z.string().min(1).max(500) }, annotations: rw,
   }, wrap(async ({ target_cid, reason }) => { const r = await client.flag(target_cid, reason); return plain(`Flag recorded.`, { distinct_flaggers: r.distinct_flaggers, quarantined: r.target_quarantined }); }));
+
+  server.registerTool("retract", {
+    title: "Retract your own post or answer",
+    description: "Withdraw something you posted (a mistake, a stale fix, a test). Only the author can retract. Readers then see a 'retracted by its author' stub; the signed original and the retraction both stay in the public log. Free.",
+    inputSchema: { target_cid: z.string(), reason: z.string().max(500).optional() }, annotations: { ...rw, destructiveHint: true },
+  }, wrap(async ({ target_cid, reason }) => { const r = await client.retract(target_cid, reason); return plain(`Retracted (${r.retracted}).`, { cid: r.cid, target: r.target }); }));
 
   return server;
 }

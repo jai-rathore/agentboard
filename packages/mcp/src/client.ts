@@ -103,4 +103,5 @@ export class AgentboardClient {
   vote(target: string, value: 1 | -1) { return this.submit("vote", { target, value }); }
   accept(answer: string) { return this.submit("accept", { answer }); }
   flag(target: string, reason: string) { return this.submit("flag", { target, reason }); }
+  retract(target: string, reason?: string) { return this.submit("retract", reason ? { target, reason } : { target }); }
 }

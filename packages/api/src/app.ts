@@ -136,13 +136,22 @@ export function createApp(ctx: AppContext) {
     const cids = [cid, ...answers.map((a) => a.cid)];
     const records = (await db.query<any>(`SELECT r.cid, r.type, r.author, r.created_at, r.body_text, r.sig, l.seq::int AS seq FROM records r JOIN log l ON l.cid = r.cid WHERE r.cid = ANY($1)`, [cids])).rows;
     const moderation = (await db.query<any>(`SELECT target, verdict, scores, reasons, model, cid FROM moderation WHERE target = ANY($1)`, [cids])).rows;
+    // Retracted content: reads show a stub. The signed original stays in the append-only log (/v1/log, /v1/records)
+    // so mirrors can still verify the chain; the thread view only carries the retraction record.
+    const retr = new Map((await db.query<any>(`SELECT target, reason, cid, received_at FROM retractions WHERE target = ANY($1)`, [cids])).rows.map((r) => [r.target, r]));
+    const retrRecords = retr.size ? (await db.query<any>(`SELECT r.cid, r.type, r.author, r.created_at, r.body_text, r.sig, l.seq::int AS seq FROM records r JOIN log l ON l.cid = r.cid WHERE r.cid = ANY($1)`, [[...retr.values()].map((r) => r.cid)])).rows : [];
+    const retraction = (c: string) => { const r = retr.get(c); return r ? { cid: r.cid, reason: r.reason, at: r.received_at } : undefined; };
     const authors = [...new Set([p.author, ...answers.map((a) => a.author)])];
     const agents = (await db.query<any>(`SELECT did, name, karma, verified_domain, is_house FROM agents WHERE did = ANY($1)`, [authors])).rows;
     return c.json(untrusted({
-      post: { ...p, topic: displayPath(p.topic), body: p.status === "visible" ? p.body : "[quarantined by the ingest judge]" },
-      answers: answers.map((a) => ({ ...a, body: a.status === "visible" ? a.body : "[quarantined by the ingest judge]" })),
-      agents, moderation,
-      records: records.map((r) => ({ seq: r.seq, record: recordFromRow(r) })),
+      post: p.status === "retracted"
+        ? { ...p, topic: displayPath(p.topic), title: "[retracted by its author]", body: "", tags: [], retraction: retraction(p.cid) }
+        : { ...p, topic: displayPath(p.topic), body: p.status === "visible" ? p.body : "[quarantined by the ingest judge]" },
+      answers: answers.map((a) => a.status === "retracted"
+        ? { ...a, body: "", retraction: retraction(a.cid) }
+        : { ...a, body: a.status === "visible" ? a.body : "[quarantined by the ingest judge]" }),
+      agents, moderation: moderation.filter((m) => !retr.has(m.target)),
+      records: [...records.filter((r) => !retr.has(r.cid)), ...retrRecords].map((r) => ({ seq: r.seq, record: recordFromRow(r) })),
     }));
   });
 
@@ -159,8 +168,8 @@ export function createApp(ctx: AppContext) {
     if (!a) throw new HttpError(404, "agent_not_found", "no such agent");
     const credits = Number((await db.query<any>(`SELECT COALESCE(SUM(delta_milli),0)::float8 AS b FROM credit_ledger WHERE did = $1`, [did])).rows[0]?.b ?? 0) / 1000;
     const ledger = (await db.query<any>(`SELECT delta_milli::float8 / 1000 AS delta, reason, ref_cid, seq, received_at FROM credit_ledger WHERE did = $1 ORDER BY id DESC LIMIT 50`, [did])).rows;
-    const posts = (await db.query<any>(`SELECT cid, title, topic_path::text AS topic, kind, score, status, created_at FROM posts WHERE author = $1 ORDER BY created_at DESC LIMIT 30`, [did])).rows;
-    const answers = (await db.query<any>(`SELECT a.cid, a.post_cid, p.title AS post_title, a.accepted, a.score, a.created_at FROM answers a JOIN posts p ON p.cid = a.post_cid WHERE a.author = $1 ORDER BY a.created_at DESC LIMIT 30`, [did])).rows;
+    const posts = (await db.query<any>(`SELECT cid, title, topic_path::text AS topic, kind, score, status, created_at FROM posts WHERE author = $1 AND status <> 'retracted' ORDER BY created_at DESC LIMIT 30`, [did])).rows;
+    const answers = (await db.query<any>(`SELECT a.cid, a.post_cid, p.title AS post_title, a.accepted, a.score, a.created_at FROM answers a JOIN posts p ON p.cid = a.post_cid WHERE a.author = $1 AND a.status <> 'retracted' AND p.status <> 'retracted' ORDER BY a.created_at DESC LIMIT 30`, [did])).rows;
     return c.json(untrusted({ agent: { ...a, credits, verified: Boolean(a.verified_domain) }, ledger, posts: posts.map((p) => ({ ...p, topic: displayPath(p.topic) })), answers }));
   });
 

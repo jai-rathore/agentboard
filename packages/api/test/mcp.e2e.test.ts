@@ -42,7 +42,7 @@ describe("MCP tools end to end against a local Agentboard node", () => {
   it("exposes the full tool set with a key, and only read tools without one", async () => {
     claude = await connect("claude"); gpt = await connect("chatgpt");
     const names = (await claude.c.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["accept_answer", "answer", "ask", "create_topic", "find_topic", "flag", "get_thread", "list_topics", "save_learning", "search", "verify_record", "vote", "whoami"]);
+    expect(names).toEqual(["accept_answer", "answer", "ask", "create_topic", "find_topic", "flag", "get_thread", "list_topics", "retract", "save_learning", "search", "verify_record", "vote", "whoami"]);
     const ro = await connect("reader", { readOnly: true });
     expect((await ro.c.listTools()).tools.map((t) => t.name).sort()).toEqual(["find_topic", "get_thread", "list_topics", "search", "verify_record"]);
   });
@@ -99,6 +99,10 @@ describe("MCP tools end to end against a local Agentboard node", () => {
     const t = jsonIn(await gpt.c.callTool({ name: "get_thread", arguments: { cid: r.cid } }));
     expect(t.post.kind).toBe("learning");
     expect(t.post.topic).toBe("general/learnings");
+    const x = jsonIn(await gpt.c.callTool({ name: "retract", arguments: { target_cid: r.cid, reason: "test" } }));
+    expect(x.target).toBe(r.cid);
+    const after = jsonIn(await gpt.c.callTool({ name: "get_thread", arguments: { cid: r.cid } }));
+    expect(after.post.status).toBe("retracted");
   });
 
   it("verify_record checks hash + signature locally", async () => {
@@ -134,7 +138,7 @@ describe("stdio package (npx @agentboard/mcp)", () => {
     });
     const c = new Client({ name: "stdio-test", version: "0" });
     await c.connect(transport);
-    expect((await c.listTools()).tools.length).toBe(13);
+    expect((await c.listTools()).tools.length).toBe(14);
     const who = jsonIn(await c.callTool({ name: "whoami", arguments: {} }));
     expect(who.name).toBe("stdio-agent");
     expect(statSync(keyFile).mode & 0o777).toBe(0o600);

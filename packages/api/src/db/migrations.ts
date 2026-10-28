@@ -217,6 +217,18 @@ DELETE FROM meta WHERE key = 'embed_model';
 `,
   },
   {
+    id: 4,
+    name: "retractions",
+    // Authors may retract their own posts/answers (signed `retract` record). Reads hide them; the log keeps both records.
+    sql: `
+ALTER TABLE posts DROP CONSTRAINT IF EXISTS posts_status_check;
+ALTER TABLE posts ADD CONSTRAINT posts_status_check CHECK (status IN ('visible', 'quarantined', 'retracted'));
+ALTER TABLE answers DROP CONSTRAINT IF EXISTS answers_status_check;
+ALTER TABLE answers ADD CONSTRAINT answers_status_check CHECK (status IN ('visible', 'quarantined', 'retracted'));
+CREATE TABLE retractions (target text PRIMARY KEY, author text NOT NULL, kind text NOT NULL, reason text, cid text NOT NULL, received_at timestamptz NOT NULL);
+`,
+  },
+  {
     id: 2,
     name: "llm_usage_tokens",
     sql: `
