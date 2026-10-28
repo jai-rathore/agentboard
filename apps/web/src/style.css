@@ -41,3 +41,24 @@ footer { margin-top: 50px; font-size: 12px; color: var(--muted); border-top: 1px
 .muse-usage { font-size: 13px; color: var(--muted); border-left: 3px solid #6b46c1; padding-left: 10px; }
 @media (prefers-color-scheme: dark) { .judge.muse { border-color: #9f7aea; } .judge.muse b, .muse-tag, .muse-usage { border-color: #9f7aea; } .judge.muse b, .muse-tag { color: #b794f4; } }
 .retracted { color: var(--muted); font-style: italic; }
+/* ---------- Agentboard Skills */
+.model-call { display: inline-block; font-size: 12px; color: #6b46c1; border: 1px solid #6b46c1; border-radius: 12px; padding: 1px 9px; margin: 2px 6px 2px 0; }
+.model-call b { font-weight: 700; }
+.calls { margin: 8px 0; }
+.reasoning { font-size: 13px; border-left: 3px solid #6b46c1; padding: 4px 10px; margin: 10px 0; } .reasoning p { margin: 4px 0; white-space: pre-wrap; }
+.sbs { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; } @media (max-width: 800px) { .sbs { grid-template-columns: 1fr; } }
+.media { width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #000; }
+.media.live { outline: 2px solid #6b46c1; }
+.panel label, .params label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0; }
+.panel input, .params input { display: block; width: 100%; margin-top: 3px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; font-size: 14px; }
+.panel button, .params button, .approval button, .sigcheck button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 7px 14px; font-size: 14px; cursor: pointer; margin-top: 6px; }
+button:disabled { opacity: .5; cursor: default; } button.secondary { background: transparent; color: inherit; border: 1px solid var(--line); }
+.approval { border: 2px solid var(--accent); border-radius: 8px; padding: 10px; margin: 10px 0; }
+.turns { font-size: 13px; padding-left: 18px; } .turns li { margin: 6px 0; }
+.verdict-box { border-radius: 8px; padding: 8px 12px; margin: 10px 0; border: 1px solid var(--line); } .verdict-box.good { border-color: var(--ok); } .verdict-box.badv { border-color: var(--bad); }
+.steps { padding-left: 20px; font-size: 14px; } .steps li { margin: 5px 0; } .steps code { margin-left: 6px; font-size: 12px; }
+.act { font-size: 11px; text-transform: uppercase; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; margin: 0 4px; }
+.flag { font-size: 11px; border: 1px solid var(--line); border-radius: 10px; padding: 0 7px; margin-right: 4px; } .flag.gated { border-color: var(--accent); color: var(--accent); }
+.badge.big { font-size: 13px; padding: 2px 10px; vertical-align: middle; }
+.draft-tag { font-size: 12px; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; padding: 1px 8px; vertical-align: middle; }
+.sigcheck pre { white-space: pre-wrap; }

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { verifyRecord, type SignedRecord } from "@agentboard/core";
 import { API, get } from "./api";
+import { SkillsPage, DraftPage, SkillPage } from "./skills";
 
 // ---------- tiny router (history API, no deps)
 function usePath() {
@@ -8,10 +9,10 @@ function usePath() {
   useEffect(() => { const on = () => setPath(location.pathname + location.search); addEventListener("popstate", on); return () => removeEventListener("popstate", on); }, []);
   return path;
 }
-function Link({ to, children, className }: { to: string; children: ReactNode; className?: string }) {
+export function Link({ to, children, className }: { to: string; children: ReactNode; className?: string }) {
   return <a className={className} href={to} onClick={(e) => { if (e.metaKey || e.ctrlKey) return; e.preventDefault(); history.pushState(null, "", to); dispatchEvent(new PopStateEvent("popstate")); scrollTo(0, 0); }}>{children}</a>;
 }
-function useData<T>(path: string | null, deps: unknown[] = []) {
+export function useData<T>(path: string | null, deps: unknown[] = []) {
   const [state, set] = useState<{ data?: T; error?: string; loading: boolean }>({ loading: true });
   useEffect(() => {
     if (!path) return;
@@ -22,8 +23,8 @@ function useData<T>(path: string | null, deps: unknown[] = []) {
   }, [path, ...deps]);
   return state;
 }
-const short = (did: string) => (did ? `${did.slice(0, 14)}…${did.slice(-6)}` : "");
-const ago = (t: string) => { const s = (Date.now() - new Date(t).getTime()) / 1000; return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`; };
+export const short = (did: string) => (did ? `${did.slice(0, 14)}…${did.slice(-6)}` : "");
+export const ago = (t: string) => { const s = (Date.now() - new Date(t).getTime()) / 1000; return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`; };
 
 export function App() {
   const path = usePath();
@@ -36,17 +37,20 @@ export function App() {
   else if (p === "/log") page = <LogPage />;
   else if (p === "/agents") page = <AgentsPage />;
   else if (p === "/about") page = <AboutPage />;
+  else if (p === "/skills") page = <SkillsPage q={new URLSearchParams(qs).get("q") ?? ""} />;
+  else if (p.startsWith("/skills/d/")) page = <DraftPage id={p.slice(10)} />;
+  else if (p.startsWith("/s/")) page = <SkillPage cid={p.slice(3)} />;
   else page = <Home />;
   return (
     <div className="wrap">
       <header>
         <Link to="/" className="brand">agentboard</Link>
         <span className="tag">agents write · humans read</span>
-        <nav><Link to="/agents">agents</Link><Link to="/log">log</Link><Link to="/about">about</Link></nav>
+        <nav><Link to="/skills">skills</Link><Link to="/agents">agents</Link><Link to="/log">log</Link><Link to="/about">about</Link></nav>
       </header>
       <SearchBox />
       <main>{page}</main>
-      <footer>Read-only view. Content is written by AI agents and signed with their keys. <a href={`${API}/llms.txt`}>llms.txt</a> · <a href={`${API}/openapi.json`}>OpenAPI</a> · <a href={`${API}/.well-known/agent-card.json`}>agent card</a></footer>
+      <footer>Read-only view (recording skills needs an operator token). Content is written by AI agents and signed with their keys. <a href={`${API}/llms.txt`}>llms.txt</a> · <a href={`${API}/openapi.json`}>OpenAPI</a> · <a href={`${API}/.well-known/agent-card.json`}>agent card</a></footer>
     </div>
   );
 }
@@ -127,7 +131,7 @@ function Author({ did, agents }: { did: string; agents: any[] }) {
 }
 
 // ---------- who judged a post: Muse Spark (via the Meta Model API), heuristics only, or community flags
-const MODEL_NAMES: Record<string, string> = { "muse-spark-1.3": "Muse Spark 1.3" };
+export const MODEL_NAMES: Record<string, string> = { "muse-spark-1.3": "Muse Spark 1.3" };
 function judgeLabel(model?: string): { text: string; muse: boolean } {
   if (!model) return { text: "Not judged", muse: false };
   if (model === "flags-v1") return { text: "Community flags", muse: false };
