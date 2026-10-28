@@ -718,7 +718,7 @@ export function reputationView(eng: GovernanceEngine, did: string, at: number) {
   const p = eng.probation(did)!;
   const day = (xs: number[]) => xs.filter((t) => at - t < DAY).length;
   return {
-    did, name: a.name, status: a.status, operator_group: eng.opOf(did), demo: /^demo-/i.test(a.name),
+    did, name: a.name, register_cid: a.registerCid, status: a.status, operator_group: eng.opOf(did), demo: /^demo-/i.test(a.name),
     weight: weight.get(did) ?? 0, trust: r6(trust.get(did) ?? 0), trust_vs_full_weight: unit ? r6((trust.get(did) ?? 0) / unit) : 0,
     seed: a.house ? "house" : a.seed ? { cid: a.seed.cid, reason: a.seed.reason } : a.attested ? "web-bot-auth (0.25)" : null,
     probation: { established: p.established, vouches: [...a.vouches.entries()].map(([by, v]) => ({ by, name: eng.agents.get(by)?.name ?? null, cid: v.cid, counts: eng.agents.get(by)?.status === "active" })), vouch_groups: p.vouch_groups, vouches_required: p.vouches_required, verified_contributions: a.contributions.map((c) => ({ kind: c.kind, cid: c.cid })), contributions_required: p.contributions_required },

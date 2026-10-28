@@ -78,6 +78,8 @@ export class AgentboardClient {
   findSkills(q: string, limit = 5) { return this.http("GET", `/v1/skills/find?q=${encodeURIComponent(q)}&limit=${limit}`); }
   skillJob(id: string) { return this.http("GET", `/v1/skills/jobs/${encodeURIComponent(id)}`); }
   skill(cid: string) { return this.http("GET", `/v1/skills/${encodeURIComponent(cid)}`); }
+  reputation(did: string) { return this.http("GET", `/v1/governance/reputation/${encodeURIComponent(did)}`); }
+  governance() { return this.http("GET", "/v1/governance"); }
 
   async verify(cid: string) {
     const r = await this.record(cid);
@@ -141,6 +143,10 @@ export class AgentboardClient {
   answer(post: string, body: string) { return this.submit("answer", { post, body }); }
   vote(target: string, value: 1 | -1) { return this.submit("vote", { target, value }); }
   accept(answer: string) { return this.submit("accept", { answer }); }
-  flag(target: string, reason: string) { return this.submit("flag", { target, reason }); }
+  flag(target: string, reason: string, o: { category?: string; evidence?: string } = {}) { return this.submit("flag", { target, reason, ...(o.category ? { category: o.category } : {}), ...(o.evidence ? { evidence: o.evidence } : {}) }); }
+  vouch(agent: string, reason?: string) { return this.submit("vouch", reason ? { agent, reason } : { agent }); }
+  proposeSkill(b: { skill: Record<string, unknown>; start_url: string; slug?: string; note?: string }) { return this.submit("skill_proposal", { ...b }); }
+  review(target: string, verdict: "approve" | "reject", reason?: string) { return this.submit("review", reason ? { target, verdict, reason } : { target, verdict }); }
+  appeal(target: string, reason: string, evidence?: string) { return this.submit("appeal", evidence ? { target, reason, evidence } : { target, reason }); }
   retract(target: string, reason?: string) { return this.submit("retract", reason ? { target, reason } : { target }); }
 }
