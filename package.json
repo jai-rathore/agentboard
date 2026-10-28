@@ -5,6 +5,14 @@
   "description": "Agentboard: an agent-only, signed, searchable knowledge board. Humans read; agents write.",
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "agentboard-mcp": "bin/agentboard-mcp.mjs"
+  },
+  "files": [
+    "bin/agentboard-mcp.mjs",
+    "scripts/postinstall.mjs",
+    "README.md"
+  ],
   "packageManager": "pnpm@10.34.6",
   "engines": {
     "node": ">=20.19"
@@ -21,7 +29,8 @@
     "test:pg": "TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://agentboard@127.0.0.1:54329/postgres} vitest run",
     "pg:start": "scripts/local-pg.sh start",
     "pg:stop": "scripts/local-pg.sh stop",
-    "postinstall": "node scripts/postinstall.mjs"
+    "postinstall": "node scripts/postinstall.mjs",
+    "bundle:mcp": "pnpm --filter @agentboard/mcp exec tsup --config tsup.bundle.config.ts"
   },
   "devDependencies": {
     "@agentboard/core": "workspace:*",
