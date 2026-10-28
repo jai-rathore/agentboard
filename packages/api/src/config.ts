@@ -48,6 +48,18 @@ export interface Config {
   skillsAgentRunCredits: number;
   skillsAgentRunsPerAgentDay: number;
   skillsAgentRunsPerDay: number;
+  /**
+   * Public, no-token replay trigger (POST /v1/skills/:slug/public-replay and the remote MCP try_skill): only for
+   * allowlisted slugs whose steps are non-destructive. Off unless PUBLIC_REPLAY_DAILY_CAP > 0 (default 0).
+   */
+  publicReplaySkills: string[];
+  publicReplayDailyCap: number;
+  publicReplayPerIpPerDay: number;
+  publicReplayPowBits: number;
+  publicReplayChallengeTtlMs: number;
+  /** Muse headroom a public replay needs before it starts (calls left today, USD left under the lifetime cap). */
+  publicReplayMinMuseCalls: number;
+  publicReplayMinMuseUsd: number;
   /** New agents (younger than this, or with fewer verified contributions) cannot spend agent-funded run credits. */
   agentRunProbationHours: number;
   agentRunMinContributions: number;
@@ -117,6 +129,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     skillsAgentRunCredits: num(env.SKILLS_AGENT_RUN_CREDITS, 5),
     skillsAgentRunsPerAgentDay: num(env.SKILLS_AGENT_RUNS_PER_AGENT_DAY, 3),
     skillsAgentRunsPerDay: num(env.SKILLS_AGENT_RUNS_PER_DAY, 10),
+    publicReplaySkills: (env.PUBLIC_REPLAY_SKILLS ?? "").split(",").map((x) => x.trim().toLowerCase()).filter((x) => /^[a-z0-9][a-z0-9-]{0,80}$/.test(x)),
+    publicReplayDailyCap: num(env.PUBLIC_REPLAY_DAILY_CAP, 0),
+    publicReplayPerIpPerDay: num(env.PUBLIC_REPLAY_PER_IP_PER_DAY, 3),
+    publicReplayPowBits: num(env.PUBLIC_REPLAY_POW_BITS, 16),
+    publicReplayChallengeTtlMs: num(env.PUBLIC_REPLAY_CHALLENGE_TTL_MS, 5 * 60_000),
+    publicReplayMinMuseCalls: num(env.PUBLIC_REPLAY_MIN_MUSE_CALLS, 20),
+    publicReplayMinMuseUsd: num(env.PUBLIC_REPLAY_MIN_MUSE_USD, 0.15),
     agentRunProbationHours: num(env.AGENT_RUN_PROBATION_HOURS, 24),
     agentRunMinContributions: num(env.AGENT_RUN_MIN_CONTRIBUTIONS, 1),
     ipRegisterPerHour: num(env.IP_REGISTER_PER_HOUR, 5),
@@ -179,6 +198,6 @@ export function publicConfigSummary(c: Config) {
     challenge: { ttl_ms: c.challengeTtlMs, difficulty_bits: c.challengeDifficulty },
     register_pow_bits: c.registerPowBits,
     checkpoint_every: c.checkpointEvery,
-    skills: { enabled: Boolean(c.skillsOperatorToken) && c.museDailyCallCap > 0 && !c.offline, executor: Boolean(c.skillsInternalSecret), muse_daily_call_cap: c.museDailyCallCap, muse_spend_cap_usd: c.museSpendCapUsd, agent_runs: { credits: c.skillsAgentRunCredits, per_agent_day: c.skillsAgentRunsPerAgentDay, per_day: c.skillsAgentRunsPerDay } },
+    skills: { enabled: Boolean(c.skillsOperatorToken) && c.museDailyCallCap > 0 && !c.offline, executor: Boolean(c.skillsInternalSecret), muse_daily_call_cap: c.museDailyCallCap, muse_spend_cap_usd: c.museSpendCapUsd, agent_runs: { credits: c.skillsAgentRunCredits, per_agent_day: c.skillsAgentRunsPerAgentDay, per_day: c.skillsAgentRunsPerDay }, public_replay: { enabled: c.publicReplayDailyCap > 0 && c.publicReplaySkills.length > 0, daily_cap: c.publicReplayDailyCap, per_ip_per_day: c.publicReplayPerIpPerDay, skills: c.publicReplaySkills } },
   };
 }

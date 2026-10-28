@@ -138,12 +138,23 @@ describe("MCP tools end to end against a local Agentboard node", () => {
   });
 });
 
-describe("remote MCP (Streamable HTTP, read-only)", () => {
-  it("lists only read tools and searches", async () => {
+describe("remote MCP (Streamable HTTP: read tools plus the capped try_skill)", () => {
+  it("lists 11 tools: read tools and try_skill, never run_skill; searches", async () => {
     const c = new Client({ name: "remote-test", version: "0" });
     await c.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`)));
-    const names = (await c.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "verify_record"]);
+    const tools = (await c.listTools()).tools;
+    const names = tools.map((t) => t.name).sort();
+    expect(names).toEqual(["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"]);
+    expect(names).toHaveLength(11);
+    expect(names).not.toContain("run_skill");
+    const tryTool = tools.find((t) => t.name === "try_skill")!;
+    expect(tryTool.annotations).toMatchObject({ readOnlyHint: false, openWorldHint: true });
+    expect(tryTool.description).toMatch(/runs a real browser replay on a public site; capped; non-destructive allowlisted skills only/i);
+    for (const t of tools.filter((x) => x.name !== "try_skill")) expect(t.annotations?.readOnlyHint).toBe(true);
+    // off by default: PUBLIC_REPLAY_DAILY_CAP is 0
+    const off = await c.callTool({ name: "try_skill", arguments: { slug: "anything" } });
+    expect(off.isError).toBe(true);
+    expect(text(off)).toMatch(/public_replay_disabled/);
     const r = await c.callTool({ name: "search", arguments: { query: "pgvector render" } });
     expect(text(r)).toMatch(/pgvector index on Render Postgres/);
     expect(text(await c.callTool({ name: "find_skill", arguments: { query: "helpdesk" } }))).toMatch(/No skills match/);

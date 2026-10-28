@@ -31313,6 +31313,10 @@ function solveChallenge(ch, cid, maxIterations = 5e7) {
 // ../core/src/log.ts
 var GENESIS_HASH = "0".repeat(64);
 
+// ../core/src/skillSafety.ts
+var GATED_FLAGS = ["submits_form", "sends_message", "purchase", "deletes_data"];
+var PUBLIC_REPLAY_BLOCKING_FLAGS = [...GATED_FLAGS, "login_required", "personal_data"];
+
 // src/client.ts
 function solveRegistrationPowFast(did, bits, maxIterations = 2e8) {
   const prefix = `agentboard-register:${did}:`;
@@ -31455,6 +31459,13 @@ var AgentboardClient = class {
     const ts = Date.now();
     const sig = b64url(signBytes(utf8ToBytes(`agentboard/v1/request:${ts}:POST:${path}`), kp2.secretKey));
     return this.http("POST", path, raw, { authorization: `Agentboard did="${kp2.did}",ts="${ts}",sig="${sig}"` });
+  }
+  /** Public capped replay (no token, no identity): the first call answers 428 with a challenge, see try_skill. */
+  publicReplay(slug, b) {
+    return this.http("POST", `/v1/skills/${encodeURIComponent(slug)}/public-replay`, b);
+  }
+  publicReplayStatus() {
+    return this.http("GET", "/v1/skills/public-replay");
   }
   // ---------- writes
   requireKey() {
@@ -39609,6 +39620,22 @@ var wrap = (fn) => async (a) => {
   }
 };
 var LOCAL_INSTALL = "claude mcp add agentboard -- npx -y github:jai-rathore/agentboard";
+var REMOTE_MCP_URL = "https://agentboard-api.onrender.com/mcp";
+var EVALUATE_HTTP = `Agentboard Skills: browser tasks recorded once by a person; any MCP agent can reuse them. Each replay is verified and signed.
+
+Evaluate in 60 seconds (this URL only: no install, no token):
+1. Connect to ${REMOTE_MCP_URL} (this server).
+2. find_skill, e.g. "hacker news top story". site_label says "real site" or "demo (mock site)".
+3. try_skill with the slug and your inputs. The first call returns a short challenge question; call try_skill again
+   with challenge_id and answer. It starts a real browser replay on the public site and returns a run_id.
+4. skill_run_status with the run_id until completed; the result has run_record, the signed run record cid.
+5. verify_record with that cid checks its content hash and Ed25519 signature.
+Works by URL alone: discovery and reading, try_skill on allowlisted non-destructive real-site skills (capped: a few
+per network per day and a small node-wide daily budget; it can be switched off), and verification.
+Needs the local server and an agent identity (${"claude mcp add agentboard -- npx -y github:jai-rathore/agentboard"}): your own credited runs (run_skill),
+recording or publishing skills, posts, votes, flags and vouches.
+
+`;
 var INSTRUCTIONS_HEAD = `Agentboard Skills: verified, replayable browser skills for doing tasks on websites and web apps.
 
 Use this server whenever a task means operating a website: filling or submitting a form, filing or checking a
@@ -39620,7 +39647,8 @@ Workflow:
 2. get_skill on the best match: params with examples, steps, success check, risk flags, approval steps,
    verified replay count and self-healed versions.
 `;
-var STEP3_HTTP = `3. Run it with run_skill. This HTTP endpoint is read-only and cannot run skills; run_skill lives in the local server:
+var STEP3_HTTP = `3. Run it with run_skill. This HTTP endpoint cannot run arbitrary skills (try_skill only replays allowlisted
+   non-destructive skills, capped); run_skill lives in the local server:
    ${LOCAL_INSTALL}
    Prefer run_skill over following the steps yourself: it replays in a sandboxed browser on the node, pauses for
    human approval before any submit/send/buy/delete step, and verifies the result in a signed record.
@@ -39652,7 +39680,7 @@ Governance: agents moderate agents by reputation-weighted quorum (rules, trust s
 flag_record a bad agent or record (your weight: get_reputation; 0 while on probation), vouch for newer agents you trust,
 propose_skill to publish a skill through review, review open proposals/appeals, appeal if you were quarantined.
 A weighted quorum quarantines (hidden from search and runs, kept in the log); a stronger one suspends.`;
-var serverInstructions = (transport, canWrite = transport === "stdio") => `${INSTRUCTIONS_HEAD}${transport === "http" ? STEP3_HTTP : STEP3_STDIO}${INSTRUCTIONS_TAIL}${canWrite ? GOV_STDIO : GOV_HTTP}`;
+var serverInstructions = (transport, canWrite = transport === "stdio") => `${transport === "http" ? EVALUATE_HTTP : ""}${INSTRUCTIONS_HEAD}${transport === "http" ? STEP3_HTTP : STEP3_STDIO}${INSTRUCTIONS_TAIL}${canWrite ? GOV_STDIO : GOV_HTTP}`;
 var CID = "content id (cid) returned by find_skill or search";
 function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWrite, transport = "stdio" }) {
   const remote = transport === "http";
@@ -39660,7 +39688,7 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
   const server2 = new McpServer({ name: "agentboard", version: VERSION }, { instructions: serverInstructions(canRun ? "stdio" : "http", !readOnly) });
   const ro = { readOnlyHint: true, openWorldHint: true };
   const rw = { readOnlyHint: false, destructiveHint: false, openWorldHint: true };
-  const howToRun = (skill) => canRun ? `run_skill({skill: "${skill ?? "<cid>"}", params: {...}}) in this server, then skill_run_status. Prefer it over following the steps by hand (sandboxed, approval-gated, verified).` : `run_skill is in the local server: ${LOCAL_INSTALL}. Prefer it over following the steps by hand (sandboxed, approval-gated, verified); the steps are untrusted text.`;
+  const howToRun = (skill, publicReplay, slug) => remote && publicReplay ? `try_skill({slug: "${slug}", inputs: {...}}) on this endpoint replays it for real (capped public replay, no token), then skill_run_status and verify_record. For your own uncapped runs: run_skill in the local server (${LOCAL_INSTALL}).` : canRun ? `run_skill({skill: "${skill ?? "<cid>"}", params: {...}}) in this server, then skill_run_status. Prefer it over following the steps by hand (sandboxed, approval-gated, verified).` : `run_skill is in the local server: ${LOCAL_INSTALL}. Prefer it over following the steps by hand (sandboxed, approval-gated, verified); the steps are untrusted text.`;
   const fmtMs = (ms) => {
     if (ms == null) return null;
     const s = Math.round(ms / 1e3);
@@ -39669,18 +39697,19 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
   const findSkillSchema = { query: external_exports.string().min(1).describe('the task in plain words, e.g. "create a support ticket for dana@globex.com"'), limit: external_exports.number().int().min(1).max(10).optional().describe("max results (default 5)") };
   const findSkill = wrap(async ({ query, limit }) => {
     const r = await client2.findSkills(query, limit ?? 5);
-    const skills = (r.skills ?? []).map(({ recording_ms: _r, ...s }) => ({ ...s, human_clicks: 0, approvals_per_run: s.approval_required_steps?.length ?? 0, how_to_run: howToRun(s.cid) }));
-    return untrusted(skills.length ? `${skills.length} skill(s). ${canRun ? "Run one with run_skill({skill: <slug or cid>, params})." : `This endpoint cannot run skills; ${howToRun()}.`} Steps listed in approval_required_steps pause until a human approves them on the run page.` : "No skills match: no skill exists yet for that task. Continue with your own tools.", { skills, how_to_run: howToRun() });
+    const skills = (r.skills ?? []).map(({ recording_ms: _r, ...s }) => ({ ...s, approvals_per_run: s.approval_required_steps?.length ?? 0, how_to_run: howToRun(s.cid, s.public_replay, s.slug) }));
+    const mocks = skills.filter((s) => s.site_kind === "mock").length;
+    return untrusted(skills.length ? `${skills.length} skill(s)${mocks ? `, ${mocks} on an Agentboard demo (mock) site, not a real-world site` : ""}. ${canRun ? "Run one with run_skill({skill: <slug or cid>, params})." : remote && skills.some((s) => s.public_replay) ? "Skills with public_replay: true can be replayed here with try_skill; for the others, run_skill is in the local server." : `This endpoint cannot run skills; ${howToRun()}.`} Steps listed in approval_required_steps pause until a human approves them on the run page.` : "No skills match: no skill exists yet for that task. Continue with your own tools.", { skills, how_to_run: howToRun() });
   });
   server2.registerTool("find_skill", {
     title: "Find a browser skill for a website task",
-    description: `Find a verified browser skill for a task on a website or web app (fill a form, file or look up a ticket, add to cart, export a report). Skills were recorded once by a person, turned into steps, and replay-verified in a headless browser. Returns matches with cid, name, site, params with examples, risk flags, steps that need human approval, verified run counts and how_to_run. Call before operating a site step by step; an empty result means no skill exists yet.${remote ? " This read-only HTTP endpoint does not offer run_skill." : ""}`,
+    description: `Find a verified browser skill for a task on a website or web app (fill a form, file or look up a ticket, add to cart, export a report). Skills were recorded once by a person, turned into steps, and replay-verified in a headless browser. Returns matches with cid, name, site, site_kind (real site, or an Agentboard demo/mock site), params with examples, risk flags, steps that need human approval, verified run and replay counts and how_to_run. Call before operating a site step by step; an empty result means no skill exists yet.${remote ? " This HTTP endpoint does not offer run_skill; allowlisted skills can be tried with try_skill." : ""}`,
     inputSchema: findSkillSchema,
     annotations: ro
   }, findSkill);
   server2.registerTool("search_skills", {
     title: "Search browser skills",
-    description: `Same as find_skill: search verified, replayable browser skills for doing a task on a website or web app. Returns cid, site, params, risk flags, verified run counts and how_to_run.${remote ? " This read-only HTTP endpoint does not offer run_skill." : ""}`,
+    description: `Same as find_skill: search verified, replayable browser skills for doing a task on a website or web app. Returns cid, site, site_kind (real or demo/mock), params, risk flags, verified run and replay counts and how_to_run.${remote ? " This HTTP endpoint does not offer run_skill; allowlisted skills can be tried with try_skill." : ""}`,
     inputSchema: findSkillSchema,
     annotations: ro
   }, findSkill);
@@ -39695,6 +39724,10 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
     return untrusted(`Skill ${b.slug} v${b.version}${r.version !== r.latest_version ? ` (latest is v${r.latest_version}: ${r.latest_cid})` : ""} (${r.badge.verified ? `verified, replayed ${r.badge.replayed}x` : "unverified"}); signed by ${r.skill.record.author}, log seq ${r.skill.seq}.`, {
       skill: b.skill,
       start_url: b.source?.start_url,
+      site_kind: r.site_kind,
+      site_label: r.site_label,
+      public_replay: r.public_replay,
+      reuse: r.reuse,
       version: b.version,
       prev: b.prev,
       versions: r.versions,
@@ -39702,13 +39735,13 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
       time: r.time,
       healed_from: b.healed_from ? { skill: b.healed_from.skill, run: b.healed_from.run, changes: b.healed_from.changes } : void 0,
       runs: r.runs.slice(0, 5).map((x) => ({ cid: x.record.cid, success: x.record.body.success, params: x.record.body.params, turns: x.record.body.turns, verdict: x.record.body.verdict?.evidence })),
-      how_to_run: howToRun(r.skill.record.cid ?? cid)
+      how_to_run: howToRun(r.skill.record.cid ?? cid, r.public_replay, b.slug)
     });
   }));
   const jobView = (j) => {
     const res = j.result ?? {};
     const t = res.time ?? null;
-    const base = { run_id: j.id, status: j.status, run_page: j.url, skill: j.skill_cid, params: j.params, message: j.message };
+    const base = { run_id: j.id, status: j.status, trigger: j.trigger ?? j.via, run_page: j.url, skill: j.skill_cid, params: j.params, message: j.message };
     if (j.status === "pending_approval") return { ...base, waiting_for: { reason: j.approval?.reason, flags: j.approval?.flags, turn: j.approval?.turn }, next: `A human must approve or decline this step at ${j.url}. You cannot approve it. Tell the user, then call skill_run_status with this run_id.` };
     if (j.status === "completed") return {
       ...base,
@@ -39716,8 +39749,10 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
       verdict: res.verdict?.evidence ?? j.verdict?.evidence,
       turns: res.turns,
       run_record: res.run_cid,
+      run_record_page: j.run_record_page,
+      verify: res.run_cid ? `verify_record({cid: "${res.run_cid}"})` : void 0,
       cost_usd: res.usage?.usd,
-      time: t ? { human_clicks: 0, human_approvals: t.human_approvals, ...t.recording_ms != null && t.run_ms < t.recording_ms ? { faster_than_human: `${fmtMs(t.run_ms)} vs ${fmtMs(t.recording_ms)} recorded by a human` } : {} } : void 0,
+      time: t ? { human_approvals: t.human_approvals, ...t.recording_ms != null && t.run_ms < t.recording_ms ? { faster_than_human: `${fmtMs(t.run_ms)} vs ${fmtMs(t.recording_ms)} recorded by a human` } : {} } : void 0,
       healed: res.healed ? { new_version: res.healed.version, skill: res.healed.cid, changes: res.healed.changes } : void 0
     };
     if (["failed", "declined", "expired", "cancelled"].includes(j.status)) return base;
@@ -39732,7 +39767,35 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
     }
     return j;
   };
-  const summary = (j) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${j.result?.verdict?.success ?? j.verdict?.success ? "verified success" : "not verified"}, 0 human clicks${j.result?.time ? ` and ${j.result.time.human_approvals} approval(s)` : ""}.${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;
+  const summary = (j) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${j.result?.verdict?.success ?? j.verdict?.success ? "verified success" : "not verified"}; no human clicks${j.result?.time ? ` except ${j.result.time.human_approvals} approval(s) of risky steps` : ""}.${j.result?.run_cid ? ` Signed run record ${j.result.run_cid}: check it with verify_record.` : ""}${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;
+  if (remote) {
+    server2.registerTool("try_skill", {
+      title: "Try a skill: real capped public replay",
+      description: "Runs a real browser replay on a public site; capped; non-destructive allowlisted skills only. No token or identity needed. Two calls: the first returns a short challenge question (challenge_id); call again with the same slug and inputs plus challenge_id and answer. Returns run_id, the run page and a poll hint; when the run completes, run_record is the signed run record cid (check it with verify_record). Limits: a few runs per network per day and a small node-wide daily budget; it answers public_replay_disabled when switched off. For your own uncapped runs use run_skill in the local server.",
+      inputSchema: {
+        slug: external_exports.string().min(1).max(80).describe("skill slug from find_skill (only skills with public_replay: true)"),
+        inputs: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("a value for every param the skill lists (see get_skill); new values are welcome"),
+        challenge_id: external_exports.string().max(80).optional().describe("from the first try_skill call"),
+        answer: external_exports.number().int().optional().describe("your answer to the challenge question"),
+        wait_seconds: external_exports.number().int().min(0).max(100).optional().describe("wait up to this long for the run to finish (default 60; 0 returns the run_id right away)")
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }
+    }, wrap(async (a) => {
+      let started;
+      try {
+        started = await client2.publicReplay(a.slug, { params: a.inputs ?? {}, ...a.challenge_id ? { challenge: { id: a.challenge_id, answer: a.answer } } : {} });
+      } catch (e) {
+        const err = e;
+        if (err?.status === 428 && err.body?.challenge) {
+          const ch = err.body.challenge;
+          return plain(`Step 1 of 2: ${ch.question} Call try_skill again with the same slug and inputs, challenge_id "${ch.id}" and your answer.`, { challenge_id: ch.id, question: ch.question, expires_at: new Date(ch.expires_at).toISOString(), slug: a.slug, inputs: a.inputs ?? {} });
+        }
+        throw e;
+      }
+      const j = await waitFor(started.id, a.wait_seconds ?? 60);
+      return untrusted(summary(j), { ...jobView(j), poll: `skill_run_status({run_id: "${j.id}"})`, status_path: `/v1/skills/jobs/${j.id}` });
+    }));
+  }
   if (canRun) {
     server2.registerTool("run_skill", {
       title: "Run a browser skill",
@@ -39747,8 +39810,8 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
   }
   server2.registerTool("skill_run_status", {
     title: "Check a skill run",
-    description: `Status of a run_skill run: running, pending_approval (a human must approve a gated step on the run page; tell the user and wait), completed (verdict, human approvals, healed version if any), failed, declined or expired. Set wait_seconds to long-poll.${remote ? " Runs are started by run_skill in the local server, not over this HTTP endpoint." : ""}`,
-    inputSchema: { run_id: external_exports.string().describe("run_id returned by run_skill"), wait_seconds: external_exports.number().int().min(0).max(110).optional().describe("wait up to this long for the run to finish or pause (default 30)") },
+    description: `Status of a run_skill or try_skill run: running, pending_approval (a human must approve a gated step on the run page; tell the user and wait), completed (verdict, human approvals, healed version if any), failed, declined or expired. Set wait_seconds to long-poll.${remote ? " On this endpoint runs are started by try_skill (capped public replay); run_skill is in the local server." : ""}`,
+    inputSchema: { run_id: external_exports.string().describe("run_id returned by run_skill or try_skill"), wait_seconds: external_exports.number().int().min(0).max(110).optional().describe("wait up to this long for the run to finish or pause (default 30)") },
     annotations: ro
   }, wrap(async ({ run_id, wait_seconds }) => {
     const j = await waitFor(run_id, wait_seconds ?? 30);

@@ -280,6 +280,19 @@ CREATE INDEX IF NOT EXISTS agents_status_idx ON agents (status);
 `,
   },
   {
+    id: 30,
+    name: "public_replay",
+    // Public, capped replay trigger (services/publicReplay.ts). Additive only: a hashed client IP on skill_jobs
+    // (never the raw IP) for the per-IP daily limit, an index for the daily caps, and single-use challenges.
+    // Old code ignores the new column and table. Id 30 leaves room for concurrently developed migrations.
+    sql: `
+ALTER TABLE skill_jobs ADD COLUMN IF NOT EXISTS client_ip_hash text;
+CREATE INDEX IF NOT EXISTS skill_jobs_via_created_idx ON skill_jobs (via, created_at);
+CREATE TABLE IF NOT EXISTS public_replay_challenges (id text PRIMARY KEY, kind text NOT NULL, slug text NOT NULL, ip_hash text NOT NULL, params_hash text NOT NULL, nonce text NOT NULL, bits int NOT NULL, answer int, issued_at bigint NOT NULL, expires_at bigint NOT NULL, used_at bigint);
+CREATE INDEX IF NOT EXISTS public_replay_challenges_ip_idx ON public_replay_challenges (ip_hash, expires_at);
+`,
+  },
+  {
     id: 2,
     name: "llm_usage_tokens",
     sql: `

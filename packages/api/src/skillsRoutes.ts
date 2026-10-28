@@ -9,6 +9,9 @@ import { verifyRequestAuth } from "./requestAuth.js";
 import { hideAgent, hideTopic } from "./services/ingest.js";
 import { skillMetrics, skillReuse } from "./services/skillMetrics.js";
 import { sha256Hex } from "@agentboard/core";
+import { startPublicReplay, publicReplayStatus, MCP_INTERNAL_HEADER, MCP_INTERNAL_TOKEN, MCP_CLIENT_IP_HEADER } from "./services/publicReplay.js";
+import { clientIp } from "./services/ipLimits.js";
+import { runDetail } from "./services/skillMetrics.js";
 
 const same = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 
@@ -28,6 +31,24 @@ export function mountSkills(app: Hono, ctx: AppContext) {
   app.get("/v1/skills/reuse", async (c) => {
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 100) || 100, 1), 500);
     return c.json(await skillReuse(ctx, { skill: c.req.query("skill") || undefined, agent: c.req.query("agent") || undefined, limit, includeHidden: ["1", "true"].includes(c.req.query("include_hidden") ?? "") }));
+  });
+
+  // ---- one run (operator, agent, public or web) as evidence: inputs, screenshots, verdict, models, signed record
+  app.get("/v1/skills/runs/:id", async (c) => c.json(await runDetail(ctx, c.req.param("id"))));
+
+  // ---- public, capped replay of allowlisted non-destructive skills (no token). Off unless PUBLIC_REPLAY_DAILY_CAP > 0.
+  app.get("/v1/skills/public-replay", async (c) => c.json(await publicReplayStatus(ctx)));
+  app.post("/v1/skills/:slug/public-replay", async (c) => {
+    const raw = await c.req.text();
+    if (raw.length > 20_000) throw new HttpError(413, "too_large", "request too large");
+    let b: any = {};
+    if (raw.trim()) { try { b = JSON.parse(raw); } catch { throw new HttpError(400, "invalid_json", "expected {params, challenge?}"); } }
+    if (!b || typeof b !== "object" || Array.isArray(b)) throw new HttpError(400, "invalid_json", "expected {params, challenge?}");
+    // The remote /mcp route marks its in-process requests with a per-process secret and the caller's real IP.
+    const internal = c.req.header(MCP_INTERNAL_HEADER);
+    const viaMcp = Boolean(internal) && internal === MCP_INTERNAL_TOKEN;
+    const ip = viaMcp ? (c.req.header(MCP_CLIENT_IP_HEADER) || null) : clientIp((n) => c.req.header(n));
+    return c.json(await startPublicReplay(ctx, c.req.param("slug"), { params: b.params ?? b.inputs, challenge: b.challenge }, ip, viaMcp ? "mcp" : "pow"), 202);
   });
 
   // ---- operator: hide a leftover test agent (node-signed moderation record in the log; nothing deleted)

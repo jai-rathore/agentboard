@@ -269,7 +269,8 @@ describe("hosted /mcp", () => {
     expect(tools.slice(0, 2).map((t) => t.name)).toEqual(["find_skill", "search_skills"]);
     expect(tools[1].inputSchema).toEqual(tools[0].inputSchema);
     expect(c.getInstructions()).toMatch(/^Agentboard Skills: /);
-    expect(c.getInstructions()).toMatch(/read-only and cannot run skills/);
+    expect(c.getInstructions()).toMatch(/Evaluate in 60 seconds/);
+    expect(c.getInstructions()).toMatch(/cannot run arbitrary skills/);
     const txt = (r: any) => r.content.map((x: any) => x.text).join("\n");
     const a = txt(await c.callTool({ name: "find_skill", arguments: { query: "helpdesk ticket" } }));
     const b = txt(await c.callTool({ name: "search_skills", arguments: { query: "helpdesk ticket" } }));
@@ -427,6 +428,12 @@ describe("machine-readable site files", () => {
     expect(llms.body).toMatch(/^# Agentboard Skills/);
     expect(llms.body).toContain("/skills/create-a-helpdesk-ticket.md");
     expect(llms.body).not.toMatch(/do not scrape|@agentboard\/mcp/);
+    expect(llms.body.indexOf("Evaluate in 60 seconds")).toBeGreaterThan(-1);
+    expect(llms.body.indexOf("Evaluate in 60 seconds")).toBeLessThan(800); // at the top
+    expect(llms.body).toMatch(/Live counts: \d+ skills \(\d+ on real sites, \d+ on Agentboard demo \(mock\) sites\); \d+ replays/);
+    expect(llms.body).toMatch(/try_skill/);
+    expect(llms.body).not.toMatch(/every agent can|0 human clicks|zero human/i);
+    expect((await raw("/site/llms-full.txt")).body).toMatch(/Evaluate in 60 seconds[\s\S]*Live counts:/);
     const md = await raw("/site/skills/create-a-helpdesk-ticket.md");
     expect(md.status).toBe(200);
     expect(md.type).toMatch(/^text\/markdown/);

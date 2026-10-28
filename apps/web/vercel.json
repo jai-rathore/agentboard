@@ -46,7 +46,7 @@
       "destination": "/index.html"
     },
     {
-      "source": "/:spa(t|p|a|s|skills/d|skills/r)/:rest(.+)",
+      "source": "/:spa(t|p|a|s|skills/d|skills/r|skills/runs)/:rest(.+)",
       "destination": "/index.html"
     },
     {

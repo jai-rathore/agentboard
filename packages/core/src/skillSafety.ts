@@ -50,3 +50,36 @@ export function effectiveRiskFlags(skill: SkillLike): string[] {
   for (const g of gatedSteps(skill)) for (const f of g.flags) set.add(f);
   return set.size ? [...set] : ["none"];
 }
+
+/** Flags that keep a skill off the public (no-token) replay trigger: anything that commits, logs in or handles personal data. */
+export const PUBLIC_REPLAY_BLOCKING_FLAGS = [...GATED_FLAGS, "login_required", "personal_data"] as const;
+
+/**
+ * Whether a skill is non-destructive enough for the public replay trigger: no declared or inferred
+ * submit/buy/send/delete flag, no login or personal data, and no step (of any action) whose words say it
+ * submits, buys, sends or deletes. The allowlist (PUBLIC_REPLAY_SKILLS) is still required on top of this.
+ */
+export function publicReplaySafety(skill: SkillLike): { ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const flags = new Set([...(skill.risk_flags ?? []), ...effectiveRiskFlags(skill)]);
+  for (const f of PUBLIC_REPLAY_BLOCKING_FLAGS) if (flags.has(f)) reasons.push(`risk flag ${f}`);
+  skill.steps.forEach((s, i) => {
+    const text = `${s.intent} ${s.target}`;
+    const hit = GATED_FLAGS.filter((f) => FLAG_WORDS[f].test(text));
+    if (hit.length) reasons.push(`step ${i + 1} looks like it ${hit.map((f) => FLAG_LABELS[f]).join(" and ")}`);
+  });
+  return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };
+}
+
+/**
+ * "mock" for Agentboard's own demo sites (the /demo/ pages on the Agentboard web or API host: the Acme Helpdesk and
+ * Bean There Coffee mocks), "real" for every other site. mockHosts are the Agentboard hosts (web app, API).
+ */
+export function siteKindOf(url: string | null | undefined, mockHosts: string[] = []): "real" | "mock" {
+  if (!url) return "real";
+  let u: URL;
+  try { u = new URL(url); } catch { return /^\/?demo\//.test(url) ? "mock" : "real"; }
+  const h = u.hostname.toLowerCase();
+  const ours = mockHosts.map((x) => x.toLowerCase()).includes(h) || h === "localhost" || h === "127.0.0.1" || /(^|\.)agentboard[^.]*\.(vercel\.app|onrender\.com|test)$/.test(h) || h === "agentboard.test";
+  return ours && u.pathname.startsWith("/demo/") ? "mock" : "real";
+}

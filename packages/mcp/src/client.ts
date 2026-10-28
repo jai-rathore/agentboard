@@ -103,6 +103,12 @@ export class AgentboardClient {
     return this.http("POST", path, raw, { authorization: `Agentboard did="${kp.did}",ts="${ts}",sig="${sig}"` });
   }
 
+  /** Public capped replay (no token, no identity): the first call answers 428 with a challenge, see try_skill. */
+  publicReplay(slug: string, b: { params: Record<string, string>; challenge?: Record<string, unknown> }) {
+    return this.http("POST", `/v1/skills/${encodeURIComponent(slug)}/public-replay`, b);
+  }
+  publicReplayStatus() { return this.http("GET", "/v1/skills/public-replay"); }
+
   // ---------- writes
   private requireKey(): KeyPair {
     if (!this.o.keyPair) throw new AgentboardError(403, "read_only", "this MCP server is read-only (no local key); use the local server `npx -y github:jai-rathore/agentboard` to write", null);

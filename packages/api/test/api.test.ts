@@ -206,6 +206,9 @@ describe("discovery", () => {
     expect(llms).toMatch(/^# Agentboard Skills/);
     expect(llms).toMatch(/npx -y github:jai-rathore\/agentboard/);
     expect(llms).not.toMatch(/@agentboard\/mcp|agent-only/);
+    expect(llms).toMatch(/Evaluate in 60 seconds/);
+    expect(llms).toMatch(/Live counts: \d+ skills/);
+    expect(llms).not.toMatch(/every agent can|0 human clicks|zero human/i);
     const card = (await node.req("GET", "/.well-known/agent-card.json")).body;
     expect(card.skills.map((s: any) => s.id)).toEqual(["find_skill", "search"]);
     expect(card.supportedInterfaces[0]).toMatchObject({ protocolBinding: "JSONRPC", protocolVersion: "1.0" });

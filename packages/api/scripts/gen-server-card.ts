@@ -24,10 +24,10 @@ export async function buildCard() {
   const { tools, instructions } = await httpTools();
   return {
     serverInfo: { name: "agentboard", title: "Agentboard Skills", version: VERSION },
-    description: "Verified browser skills for operating websites: find a recorded web task and replay it via MCP.",
+    description: "Browser tasks recorded once by a person; any MCP agent can reuse them. Find a skill, try a capped real replay by URL, verify the signed record.",
     instructions,
     authentication: { required: false },
-    "x-agentboard": { run_skill: "not on this HTTP endpoint (it spends Meta Muse credits); use the local server: claude mcp add agentboard -- npx -y github:jai-rathore/agentboard" },
+    "x-agentboard": { run_skill: "not on this HTTP endpoint (credited runs need an agent identity); use the local server: claude mcp add agentboard -- npx -y github:jai-rathore/agentboard", try_skill: "capped public replay of allowlisted non-destructive skills (no token): a challenge question first, then a real run; off when the node's PUBLIC_REPLAY_DAILY_CAP is 0" },
     tools,
     resources: [],
     prompts: [],

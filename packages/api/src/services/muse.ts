@@ -46,6 +46,20 @@ export async function museSpend(ctx: AppContext) {
   };
 }
 
+/**
+ * Headroom check before starting a run that will make many Muse calls: Muse must be enabled, today's calls plus
+ * minCalls must fit under the daily cap, and lifetime spend plus minUsd under the USD ceiling. Read-only; each
+ * call is still reserved and counted one by one in reserve(). Pass a transaction's db to check inside it.
+ */
+export async function museHeadroom(ctx: AppContext, minCalls: number, minUsd: number, db: AppContext["db"] = ctx.db) {
+  if (ctx.cfg.offline || ctx.cfg.museDailyCallCap <= 0 || !(ctx.cfg.metaProxySecret || ctx.cfg.metaApiKey)) throw new HttpError(503, "muse_disabled", "Muse calls are disabled on this node");
+  const total = Number((await db.query<any>(`SELECT COALESCE(SUM(cost_micro),0)::float8 AS c FROM muse_spend WHERE kind NOT LIKE 'open:%'`)).rows[0]?.c ?? 0) / 1e6;
+  if (total + minUsd > ctx.cfg.museSpendCapUsd) throw new HttpError(429, "muse_spend_cap", `Muse spend ceiling would be reached ($${total.toFixed(4)} of $${ctx.cfg.museSpendCapUsd} used; a run needs about $${minUsd})`);
+  const callsToday = Number((await db.query<any>(`SELECT COALESCE(SUM(calls),0)::int AS n FROM muse_spend WHERE day = $1 AND kind NOT LIKE 'open:%'`, [today()])).rows[0]?.n ?? 0);
+  if (callsToday + minCalls > ctx.cfg.museDailyCallCap) throw new HttpError(429, "muse_daily_cap", `not enough Muse calls left today (${callsToday} of ${ctx.cfg.museDailyCallCap} used; a run needs up to ${minCalls}); the cap resets at 00:00 UTC`);
+  return { calls_today: callsToday, daily_call_cap: ctx.cfg.museDailyCallCap, spend_usd: total, spend_cap_usd: ctx.cfg.museSpendCapUsd };
+}
+
 /** Reserve one call: atomically counts it against today's cap, and refuses once lifetime spend reaches the ceiling. */
 async function reserve(ctx: AppContext, kind: MuseKind) {
   if (ctx.cfg.offline || ctx.cfg.museDailyCallCap <= 0 || !(ctx.cfg.metaProxySecret || ctx.cfg.metaApiKey)) throw new HttpError(503, "muse_disabled", "Muse calls are disabled on this node");

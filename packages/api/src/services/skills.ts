@@ -1,5 +1,5 @@
 /**
- * Agentboard Skills: "show it once, every agent can do it".
+ * Agentboard Skills: "show it once, any MCP agent can reuse it".
  *   record   : an mp4 or screenshots of a browser task -> Muse Spark (video/image understanding +
  *              structured output) -> a strict-JSON skill draft (params, steps, success check, risk flags).
  *   replay   : the executor service drives headless Chromium with Spark's built-in computer tool.
@@ -16,6 +16,7 @@ import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
 import { appendToLog } from "./log.js";
 import { museResponses, outputText, reasoningSummary, type MuseUsage } from "./muse.js";
+import { siteKind, SITE_LABEL, replayCountsBySlug } from "./skillMetrics.js";
 
 export const ARTIFACT_MIME = ["video/mp4", "image/jpeg", "image/png", "image/gif"] as const;
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
@@ -301,7 +302,8 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
   }
   const time = timeSaved(await recordingMs(ctx, source), run);
   const job = run.job_id ? (await ctx.db.query<any>(`SELECT id, via, requested_by FROM skill_jobs WHERE id = $1`, [run.job_id])).rows[0] : null;
-  const requestedBy = job ? (job.via === "agent" ? { via: "agent", agent: job.requested_by, job: job.id } : { via: "operator", job: job.id }) : { via: "web" };
+  // Who triggered the run: an agent paying credits, the public capped trigger, the operator (token), or the web replay panel.
+  const requestedBy = job ? (job.via === "agent" ? { via: "agent", agent: job.requested_by, job: job.id } : job.via === "public" ? { via: "public", job: job.id } : { via: "operator", job: job.id }) : { via: "web" };
 
   // ---- drift: verified replays of a published skill whose steps no longer match the site
   const stale = current && run.success ? [...new Set([...staleSteps(current.body.skill, run.actions), ...run.step_changes.map((c) => c.step)])].sort((a, b) => a - b) : [];
@@ -322,6 +324,7 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
     ...(current ? { drift: { stale_steps: stale, reported: run.step_changes, healed: Boolean(heal && !heal.unchanged), ...(healError ? { error: healError } : {}) } } : {}),
     executor: run.executor,
     requested_by: requestedBy,
+    trigger: requestedBy.via,
   };
   const runRec = sysRecord(ctx, "skill_run", { skill: published?.cid ?? skillCid!, ...runSummary });
   let healed: SignedRecord | null = null;
@@ -372,11 +375,26 @@ const latestSkillsSql = `
     WHERE s.status = 'active' AND NOT EXISTS (SELECT 1 FROM agents g WHERE g.did = s.proposer AND g.status IN ('quarantined', 'suspended'))
       AND s.version = (SELECT max(version) FROM skills x WHERE x.slug = s.slug AND x.status = 'active')`;
 
+/** Real-site vs Agentboard demo (mock) site, from where the skill starts, plus replay counts that leave out publishing runs. */
+async function withSite(ctx: AppContext, rows: any[]) {
+  const counts = await replayCountsBySlug(ctx);
+  const out = [];
+  for (const r of rows) {
+    const body = JSON.parse((await ctx.db.query<any>(`SELECT body_text FROM records WHERE cid = $1`, [r.cid])).rows[0].body_text);
+    const kind = siteKind(ctx, body.source?.start_url);
+    const c = counts.get(r.slug) ?? { replays: 0, verified_replays: 0, new_input_replays: 0 };
+    out.push({ ...r, site_kind: kind, site_label: SITE_LABEL[kind], start_url: body.source?.start_url ?? null, ...c, public_replay: ctx.cfg.publicReplayDailyCap > 0 && ctx.cfg.publicReplaySkills.includes(r.slug) });
+  }
+  return out;
+}
+
 export async function listSkills(ctx: AppContext, q?: string) {
   const like = q?.trim() ? `%${q.trim().toLowerCase()}%` : null;
-  return (await ctx.db.query<any>(`${latestSkillsSql}
+  const rows = await withSite(ctx, (await ctx.db.query<any>(`${latestSkillsSql}
       AND ($1::text IS NULL OR lower(s.name || ' ' || s.summary || ' ' || s.slug) LIKE $1)
-    ORDER BY s.created_at DESC LIMIT 100`, [like])).rows;
+    ORDER BY s.created_at DESC LIMIT 100`, [like])).rows);
+  // real-site skills first, newest first within each group
+  return [...rows.filter((r) => r.site_kind === "real"), ...rows.filter((r) => r.site_kind !== "real")];
 }
 
 const STOP = new Set(["a", "an", "the", "to", "for", "of", "on", "in", "and", "or", "my", "with", "how", "do", "i"]);
@@ -391,7 +409,10 @@ export async function findSkills(ctx: AppContext, q: string, limit = 5) {
     const score = words.length ? words.filter((w) => hay.includes(w)).length / words.length : 1;
     if (score > 0) scored.push({ r, body, score });
   }
-  scored.sort((a, b) => b.score - a.score || b.r.verified_runs - a.r.verified_runs);
+  // equal relevance: real sites before Agentboard's demo (mock) sites, then more verified runs
+  const mock = (x: { body: any }) => (siteKind(ctx, x.body.source?.start_url) === "mock" ? 1 : 0);
+  scored.sort((a, b) => b.score - a.score || mock(a) - mock(b) || b.r.verified_runs - a.r.verified_runs);
+  const counts = await replayCountsBySlug(ctx);
   const out = [];
   for (const { r, body, score } of scored.slice(0, Math.min(10, limit))) {
     const rec = await recordingMs(ctx, body.source);
@@ -399,7 +420,9 @@ export async function findSkills(ctx: AppContext, q: string, limit = 5) {
       cid: r.cid, slug: r.slug, version: r.version, name: r.name, summary: r.summary, match: Math.round(score * 100) / 100,
       params: body.skill.params, start_url: body.source?.start_url ?? null, success_check: body.skill.success_check,
       risk_flags: effectiveRiskFlags(body.skill), approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, intent: body.skill.steps[g.index].intent, flags: g.flags })),
-      verified_runs: r.verified_runs, runs: r.runs, recording_ms: rec, healed: Boolean(body.healed_from),
+      site_kind: siteKind(ctx, body.source?.start_url), site_label: SITE_LABEL[siteKind(ctx, body.source?.start_url)],
+      verified_runs: r.verified_runs, runs: r.runs, ...(counts.get(r.slug) ?? { replays: 0, verified_replays: 0, new_input_replays: 0 }), recording_ms: rec, healed: Boolean(body.healed_from),
+      public_replay: ctx.cfg.publicReplayDailyCap > 0 && ctx.cfg.publicReplaySkills.includes(r.slug),
       url: `${ctx.cfg.skillsWebUrl}/s/${r.cid}`,
     });
   }
@@ -437,6 +460,9 @@ export async function getSkill(ctx: AppContext, cidOrSlug: string) {
     heal_run: healRun ? toRecord(healRun) : null,
     safety: { risk_flags: effectiveRiskFlags(body.skill), declared_flags: body.skill.risk_flags, approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, flags: g.flags })), gated_flags: GATED_FLAGS },
     time: { human_clicks: 0, approvals_per_run: gatedSteps(body.skill).length, recording_ms: recording, fastest_run_ms: fastest, agent_faster: recording != null && fastest != null && fastest < recording, approval_human_ms: APPROVAL_HUMAN_MS, verified_runs: verifiedRuns.length, saved_total_ms: savedTotal },
+    site_kind: siteKind(ctx, body.source?.start_url), site_label: SITE_LABEL[siteKind(ctx, body.source?.start_url)],
+    reuse: (await replayCountsBySlug(ctx)).get(s.slug) ?? { replays: 0, verified_replays: 0, new_input_replays: 0 },
+    public_replay: ctx.cfg.publicReplayDailyCap > 0 && ctx.cfg.publicReplaySkills.includes(s.slug),
     badge: { verified: verifiedRuns.length > 0 || Boolean(healRun && JSON.parse(healRun.body_text).success), replayed: runs.length, runs_this_version: runs.length, verified_runs_this_version: verifiedRuns.length, runs_all_versions: allRuns, verified_runs_all_versions: allVerified, versions: versions.length, healed: Boolean(body.healed_from) },
     node: ctx.node.did,
   };

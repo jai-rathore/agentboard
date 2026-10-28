@@ -1,4 +1,4 @@
-// Agentboard Skills: show it once, every agent can do it.
+// Agentboard Skills: show it once, any MCP agent can reuse it.
 // Record (video/screenshots -> Muse Spark -> strict-JSON skill), replay live in the executor (Muse Spark's
 // computer tool driving headless Chromium), and read published, node-signed skills with their evidence.
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -8,10 +8,10 @@ import { Link, useData, short, ago } from "./App";
 import { modelName, isOpenWeight } from "./models";
 
 const DEMOS = [
-  { name: "Acme Helpdesk (mock)", url: `${location.origin}/demo/helpdesk/` },
-  { name: "Acme Helpdesk: ticket status (mock)", url: `${location.origin}/demo/helpdesk/status.html` },
-  { name: "Bean There Coffee (mock store)", url: `${location.origin}/demo/shop/` },
-  { name: "Bean There Coffee: cart (mock store)", url: `${location.origin}/demo/shop/cart.html` },
+  { name: "Acme Helpdesk (demo site)", url: `${location.origin}/demo/helpdesk/` },
+  { name: "Acme Helpdesk: ticket status (demo site)", url: `${location.origin}/demo/helpdesk/status.html` },
+  { name: "Bean There Coffee (demo site, mock store)", url: `${location.origin}/demo/shop/` },
+  { name: "Bean There Coffee: cart (demo site, mock store)", url: `${location.origin}/demo/shop/cart.html` },
 ];
 const art = (sha?: string | null) => (sha ? `${API}/v1/artifacts/${sha}` : "");
 const go = (to: string) => { history.pushState(null, "", to); dispatchEvent(new PopStateEvent("popstate")); scrollTo(0, 0); };
@@ -60,10 +60,19 @@ export function SkillView({ skill, diff }: { skill: any; diff?: any[] }) {
 export const fmtDur = (ms?: number | null) => { if (ms == null) return "n/a"; if (ms < 10000) return `${(ms / 1000).toFixed(1)} s`; const s = Math.round(ms / 1000); return s < 60 ? `${s} s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min`; };
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
-/** Lead with human input (0 clicks + approvals). Show human-vs-agent wall clock only when the agent was faster. */
+/** Lead with human input: no clicks except approvals of risky steps. Show human-vs-agent wall clock only when the agent was faster. */
 export function HumanInput({ approvals }: { approvals: number }) {
-  return <span className="human-input"><b>👆 0 human clicks</b> · {plural(approvals, "approval")}</span>;
+  return <span className="human-input"><b>👆 No human clicks</b> except approving risky steps (submit, buy, send, delete) · {plural(approvals, "approval")}</span>;
 }
+/** "real site" or "demo (mock site)": Agentboard's own /demo/ pages are never presented as real-world tools. */
+export function SiteBadge({ kind }: { kind?: string }) {
+  if (!kind) return null;
+  return kind === "mock"
+    ? <span className="badge site mock" title="Runs on an Agentboard demo page (a mock site we host), not a real-world site">demo (mock site)</span>
+    : <span className="badge site real" title="Runs on a real public website">real site</span>;
+}
+const TRIGGER: Record<string, string> = { public: "public trigger (no token, capped)", agent: "an agent (signed, paid in credits)", operator: "the operator (token)", web: "the operator (web replay panel)" };
+export const triggerLabel = (t?: string) => TRIGGER[t ?? ""] ?? t ?? "unknown";
 export function Faster({ recording, run }: { recording?: number | null; run?: number | null }) {
   if (recording == null || run == null || !(run < recording)) return null;
   return <span className="faster small"> · ⚡ agent {fmtDur(run)} vs {fmtDur(recording)} for the human</span>;
@@ -91,27 +100,26 @@ function StepDiff({ before, after, changes }: { before: any; after: any; changes
 
 /** "✓ 5 verified replays · all versions": the same count on the list, the home page and the skill page header. */
 export const ReplaysBadge = ({ verified, big }: { verified: number; big?: boolean }) =>
-  verified > 0 ? <span className={`badge${big ? " big" : ""}`} title="verified replays across every version of this skill">✓ {plural(verified, "verified replay")} · all versions</span> : null;
+  <span className={`badge${big ? " big" : ""}${verified ? "" : " none"}`} title="verified replays across every version of this skill, not counting the run that published it">{verified ? `✓ ${plural(verified, "verified replay")} · all versions` : "no replays yet"}</span>;
 
 export function SkillList({ skills }: { skills: any[] }) {
   if (!skills.length) return <p className="muted">No verified skills yet.</p>;
   return <ul className="posts">{skills.map((s: any) => <li key={s.cid}>
-    <Link to={`/skills/${s.slug}`}>{s.name}</Link> <ReplaysBadge verified={s.verified_runs} />
+    <Link to={`/skills/${s.slug}`}>{s.name}</Link> <SiteBadge kind={s.site_kind} /> <ReplaysBadge verified={s.verified_replays ?? 0} />{s.public_replay && <span className="badge try">try it: public replay</span>}
     <div className="meta">v{s.version} · {s.slug} · {ago(s.created_at)}</div><p className="snippet">{s.summary}</p></li>)}</ul>;
 }
 
-/** One-line live metrics for the home page (same numbers as /skills/metrics). */
+/** One-line live metrics (same numbers as /skills/metrics). Replays never count a skill's publishing run. */
 export function MetricsStrip() {
   const r = useData<any>("/v1/skills/metrics");
   if (!r.data) return null;
   const m = r.data;
   return <div className="stats metrics strip">
-    <div><b>{m.skills}</b><span>skills</span></div>
-    <div><b>{m.runs.verified}</b><span>verified replays</span></div>
+    <div><b>{m.skills}</b><span>skills ({m.skills_by_site?.real ?? 0} real site, {m.skills_by_site?.mock ?? 0} demo)</span></div>
+    <div><b>{m.replays?.total ?? 0}</b><span>replays</span></div>
+    <div><b>{m.replays?.real_site ?? 0}</b><span>on real sites</span></div>
+    <div><b>{m.replays?.mock_site ?? 0}</b><span>on demo (mock) sites</span></div>
     <div><b>{m.heals}</b><span>self-heals</span></div>
-    <div><b>0</b><span>human clicks per run</span></div>
-    <div><b>{m.human.approvals}</b><span>human approvals</span></div>
-    <div><b>{m.human.clicks_saved}</b><span>clicks &amp; fields done by agents</span></div>
     <div><b>${m.muse.usd.toFixed(2)}</b><span>Muse spend, all time</span></div>
   </div>;
 }
@@ -121,9 +129,10 @@ export function SkillsPage({ q }: { q: string }) {
   const [query, setQuery] = useState(q);
   return <div className="grid">
     <section>
-      <h1>Skills <span className="muted small">show it once, every agent can do it</span></h1>
+      <h1>Skills <span className="muted small">show it once, any MCP agent can reuse it</span></h1>
       <p className="small"><Link to="/skills/metrics">metrics</Link> · <Link to="/skills/reuse">agent reuse</Link></p>
-      <p className="muted">Recorded once by a person, written by Muse Spark, verified on replay. <Link to="/docs">How it works →</Link></p>
+      <p className="muted">Recorded once by a person, written by Muse Spark, verified on replay. Skills marked <SiteBadge kind="mock" /> run on our own demo pages, not real-world sites. <Link to="/docs">How it works →</Link></p>
+      <MetricsStrip />
       <div className="search"><input value={query} placeholder="Search skills…" onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") go(`/skills${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ""}`); }} /></div>
       {r.loading ? <p className="muted">Loading…</p> : r.error ? <p className="err">{r.error}</p> : <SkillList skills={r.data.skills} />}
       <p className="muted small">Agents find skills with <code>GET {API}/v1/skills?q=…</code> and read one with <code>/v1/skills/&lt;cid&gt;</code>.</p>
@@ -334,7 +343,8 @@ export function JobPage({ id }: { id: string }) {
   return <article>
     <div className="crumbs"><Link to="/skills">skills</Link> / run</div>
     <h1>Skill run <span className={`draft-tag st-${job.status}`}>{job.status.replace("_", " ")}</span></h1>
-    <div className="meta">requested by {job.via === "agent" ? <>{job.agent ? <Link to={`/a/${job.agent}`}>an agent</Link> : "an agent"} (signed, paid in credits)</> : "the operator"} through MCP <code>run_skill</code> · <Link to={`/s/${job.skill_cid}`}>skill</Link> · started {ago(job.created_at)}</div>
+    <div className="meta"><span className="badge replay">Replay</span> {job.via === "public" ? <span className="badge try">trigger: public</span> : null} requested by {job.via === "agent" ? <>{job.agent ? <Link to={`/a/${job.agent}`}>an agent</Link> : "an agent"} (signed, paid in credits) through MCP <code>run_skill</code></> : job.via === "public" ? <>the public trigger (no token; capped, allowlisted non-destructive skills only)</> : <>the operator through MCP <code>run_skill</code></>} · <Link to={`/s/${job.skill_cid}`}>skill</Link> · started {ago(job.created_at)}</div>
+    {job.run_record && <p><Link to={`/skills/runs/${job.run_record}`}>→ Signed run record and evidence</Link></p>}
     <p className="small mono">{Object.entries(job.params).map(([k, v]) => `${k}=${v}`).join(" · ")} · {job.start_url}</p>
     {job.status === "pending_approval" && job.approval && <div className="approval big">
       <b>⏸ A human must approve this step.</b> <span>{job.approval.reason}</span>
@@ -393,8 +403,9 @@ export function SkillPage({ cid }: { cid: string }) {
   const anyFaster = runs.some((x: any) => faster(x.record.body));
   return <article>
     <div className="crumbs"><Link to="/skills">skills</Link> / {b.slug}</div>
-    <h1>{b.skill.name} <ReplaysBadge big verified={badge.verified_runs_all_versions ?? 0} />{hf && <span className="badge big heal">🩹 self-healed</span>}</h1>
-    <p className="small replay-counts"><b>Replays</b> · this version (v{version}): {badge.verified_runs_this_version} verified of {badge.runs_this_version ?? badge.replayed}{heal_run && !runs.some((x: any) => x.record.cid === heal_run.record.cid) && <> (+ the v{prev_skill?.version} run that healed it)</>} · all versions{badge.versions > 1 ? ` (v1–v${latest_version})` : ""}: {badge.verified_runs_all_versions} verified of {badge.runs_all_versions ?? badge.verified_runs_all_versions}</p>
+    <h1>{b.skill.name} <SiteBadge kind={r.data.site_kind} /> <ReplaysBadge big verified={r.data.reuse?.verified_replays ?? 0} />{hf && <span className="badge big heal">🩹 self-healed</span>}</h1>
+    {r.data.site_kind === "mock" && <p className="small demo-note">This skill runs on an Agentboard demo page (a mock site we host to show the mechanism). It is not a real-world tool.</p>}
+    <p className="small replay-counts"><b>Replays</b> (all versions, not counting the run that published the skill): {r.data.reuse?.replays ?? 0}, {r.data.reuse?.verified_replays ?? 0} verified, {r.data.reuse?.new_input_replays ?? 0} with inputs never seen in the recording · <b>signed runs</b> · this version (v{version}): {badge.verified_runs_this_version} verified of {badge.runs_this_version ?? badge.replayed}{heal_run && !runs.some((x: any) => x.record.cid === heal_run.record.cid) && <> (+ the v{prev_skill?.version} run that healed it)</>} · all versions{badge.versions > 1 ? ` (v1–v${latest_version})` : ""}: {badge.verified_runs_all_versions} verified of {badge.runs_all_versions ?? badge.verified_runs_all_versions}</p>
     {version !== latest_version && <div className="superseded">This is v{version}. <Link to={`/s/${latest_cid}`}>v{latest_version} is the current version →</Link></div>}
     <div className="meta">v{version} · published {ago(skill.record.created_at)} · log #{skill.seq} · signed by node <span className="mono">{short(node)}</span></div>
     <div className="calls">
@@ -416,18 +427,20 @@ export function SkillPage({ cid }: { cid: string }) {
         {lb && <p className="small">{lb.success ? "✓" : "✗"} {lb.verdict.evidence} <a href={art(lb.evidence.final_screenshot)} target="_blank" rel="noreferrer">final screenshot</a>{last === heal_run && " (the run that healed this version)"}</p>}</div>
     </div>
     <SkillView skill={b.skill} diff={diffIdx} />
+    {r.data.public_replay && <PublicReplayPanel slug={b.slug} params={b.skill.params} />}
     <h2>Use it from an agent</h2>
     <pre className="mono small code-block">{`claude mcp add agentboard -- npx -y github:jai-rathore/agentboard
 # then, in Claude Code or Cursor:
 find_skill({ query: "${b.skill.name.toLowerCase()}" })
 run_skill({ skill: "${b.slug}", params: ${JSON.stringify(Object.fromEntries(b.skill.params.map((p: any) => [p.name, p.example])))} })`}</pre>
     <p className="small muted">Runs from MCP pause at 🔒 steps with status <code>pending_approval</code> and a link to a page like this one, where a human approves. The agent never approves its own submit, buy, send or delete.</p>
-    <h2>Replays of this version, v{version} ({runs.length})</h2>
+    <h2>Replays</h2>
+    <p className="small muted">Every replay of {b.slug}, all versions. The run that published the skill (the verification of the recording) is listed separately and not counted.</p>
+    <ReuseTable skill={b.slug} limit={50} compact />
+    <h2>Signed runs of this version, v{version} ({runs.length})</h2>
     <table className="tbl cards"><thead><tr><th></th><th>params</th><th>turns</th><th>human input</th>{anyFaster && <th>vs human</th>}<th>cost</th><th>when</th></tr></thead><tbody>
-      {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td data-label="result">{rb.success ? "✓" : "✗"}{rb.drift?.healed && " 🩹"}</td><td className="small mono" data-label="params">{Object.values(rb.params).join(" · ").slice(0, 80)}{/[?&]v=2/.test(rb.start_url) && " · redesigned site"}</td><td data-label="turns">{rb.turns}</td><td className="small" data-label="human input">0 clicks · {plural(rb.actions.filter((a: any) => a.approval === "human").length, "approval")}</td>{anyFaster && <td className="small" data-label="vs human">{faster(rb) ? `⚡ ${fmtDur(rb.time.run_ms)} vs ${fmtDur(rb.time.recording_ms)}` : ""}</td>}<td data-label="cost">{usd(rb.usage.usd)}</td><td className="small" data-label="when">{ago(x.record.created_at)} · #{x.seq}{rb.evidence.gif && <> · <a href={art(rb.evidence.gif)} target="_blank" rel="noreferrer">GIF</a></>}</td></tr>; })}
+      {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td data-label="result">{rb.success ? "✓" : "✗"}{rb.drift?.healed && " 🩹"}</td><td className="small mono" data-label="params">{Object.values(rb.params).join(" · ").slice(0, 80)}{/[?&]v=2/.test(rb.start_url) && " · redesigned demo site"}</td><td data-label="turns">{rb.turns}</td><td className="small" data-label="human input">no clicks · {plural(rb.actions.filter((a: any) => a.approval === "human").length, "approval")}</td>{anyFaster && <td className="small" data-label="vs human">{faster(rb) ? `⚡ ${fmtDur(rb.time.run_ms)} vs ${fmtDur(rb.time.recording_ms)}` : ""}</td>}<td data-label="cost">{usd(rb.usage.usd)}</td><td className="small" data-label="when">{ago(x.record.created_at)} · #{x.seq} · <Link to={`/skills/runs/${x.record.cid}`}>run page</Link></td></tr>; })}
     </tbody></table>
-    <h2>Agent reuse</h2>
-    <ReuseTable skill={b.slug} limit={10} compact />
     <p className="small"><Link to={`/skills/reuse?skill=${encodeURIComponent(b.slug)}`}>→ all runs of {b.slug}, every version</Link></p>
     <h2>Version history</h2>
     <ul className="tree">{versions.map((v: any) => <li key={v.cid}>{v.cid === cid ? <b>v{v.version}</b> : <Link to={`/s/${v.cid}`}>v{v.version}</Link>} <span className="muted small">{ago(v.created_at)} · {v.cid.slice(0, 20)}…</span></li>)}</ul>
@@ -459,10 +472,19 @@ export function MetricsPage() {
       <div><b>{pct(m.runs.success_rate)}</b><span>verified ({m.runs.verified}/{m.runs.total})</span></div>
       <div><b>{m.runs.by_agents}</b><span>runs by {plural(m.runs.distinct_agents, "agent")}</span></div>
     </div>
+    <h2>Reuse (replays only)</h2>
+    <p className="small muted">{m.replays?.note}</p>
+    <div className="stats metrics">
+      <div><b>{m.replays?.total ?? 0}</b><span>replays ({m.replays?.verified ?? 0} verified)</span></div>
+      <div><b>{m.replays?.real_site ?? 0}</b><span>on real sites</span></div>
+      <div><b>{m.replays?.mock_site ?? 0}</b><span>on demo (mock) sites</span></div>
+      <div><b>{m.replays?.new_inputs ?? 0}</b><span>with inputs never seen in the recording</span></div>
+      <div><b>{m.replays?.by_trigger?.public ?? 0}</b><span>by the public trigger</span></div>
+      <div><b>{m.replays?.publishing_runs ?? 0}</b><span>publishing runs (not counted)</span></div>
+    </div>
     <h2>Human effort</h2>
     <div className="stats metrics">
-      <div><b>0</b><span>human clicks per run</span></div>
-      <div><b>{m.human.approvals}</b><span>human approvals</span></div>
+      <div><b>{m.human.approvals}</b><span>human approvals of risky steps (the only human input)</span></div>
       <div><b>{m.human.clicks_saved}</b><span>clicks &amp; typed fields done by agents</span></div>
       <div><b>{fmtDur(m.human.time_saved_ms)}</b><span>human time saved</span></div>
     </div>
@@ -489,17 +511,20 @@ export function ReuseTable({ skill, agent, limit, compact }: { skill?: string; a
   const { runs, summary } = r.data;
   const toggle = !agent && (summary.hidden_runs > 0 || showHidden) && <label className="small muted toggle"><input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> show hidden{!showHidden && ` (${plural(summary.hidden_runs, "run")} by hidden or retracted agents)`}</label>;
   if (!runs.length) return <>{toggle}<p className="muted small">No runs yet.</p></>;
-  const who = (x: any) => x.agent ? <><Link to={`/a/${x.agent.did}`}>{x.agent.name ?? short(x.agent.did)}</Link>{x.agent.status && x.agent.status !== "active" && <span className="muted"> ({x.agent.status})</span>}</> : <span className="muted">{x.via === "operator" ? "operator via MCP" : "operator (web)"}</span>;
+  const who = (x: any) => x.agent ? <><Link to={`/a/${x.agent.did}`}>{x.agent.name ?? short(x.agent.did)}</Link>{x.agent.status && x.agent.status !== "active" && <span className="muted"> ({x.agent.status})</span>}</> : <span className="muted">{x.via === "public" ? "public trigger" : x.via === "operator" ? "operator via MCP" : "operator (web)"}</span>;
   return <>
-    {!compact && <p className="small muted">{plural(summary.runs, "run")} · {plural(summary.agents, "distinct agent")} · {summary.verified} verified</p>}
+    {!compact && <p className="small muted">{plural(summary.replays ?? 0, "replay")} ({summary.replays_real_site ?? 0} on real sites, {summary.replays_mock_site ?? 0} on demo sites, {summary.replays_new_inputs ?? 0} with new inputs) · {plural(summary.publishing_runs ?? 0, "publishing run")} (not counted) · {plural(summary.agents, "distinct agent")}</p>}
+    {compact && <p className="small muted">{plural(summary.replays ?? 0, "replay")} · {summary.replays_new_inputs ?? 0} with inputs never seen in the recording</p>}
     {toggle}
-    <table className="tbl cards"><thead><tr><th></th>{!agent && <th>run by</th>}{!skill && <th>skill</th>}<th>human input</th><th>when</th></tr></thead><tbody>
-      {runs.map((x: any) => <tr key={x.run}>
-        <td title={x.evidence ?? ""} data-label="result">{x.outcome === "verified" ? "✓" : "✗"}{x.healed && " 🩹"}</td>
+    <table className="tbl cards"><thead><tr><th></th><th>kind</th>{!agent && <th>run by</th>}{!skill && <th>skill</th>}<th>site</th><th>inputs</th><th>when</th></tr></thead><tbody>
+      {runs.map((x: any) => <tr key={x.run} className={x.kind === "publish" ? "publish-run" : undefined}>
+        <td title={x.evidence ?? ""} data-label="result">{x.outcome === "verified" ? "✓" : "✗"}{(x.self_healed ?? x.healed) && " 🩹"}</td>
+        <td className="small" data-label="kind">{x.kind === "publish" ? <span className="muted">publishing run (not counted)</span> : <span className="badge replay">Replay</span>}</td>
         {!agent && <td className="small" data-label="run by">{who(x)}</td>}
         {!skill && <td className="small" data-label="skill"><Link to={`/s/${x.skill.cid}`}>{x.skill.name}</Link> <span className="muted">v{x.skill.version}</span></td>}
-        <td className="small" data-label="human input">0 clicks · {plural(x.approvals, "approval")}{x.recording_ms != null && x.run_ms != null && x.run_ms < x.recording_ms && <> · ⚡ {fmtDur(x.run_ms)} vs {fmtDur(x.recording_ms)}</>}</td>
-        <td className="small" data-label="when">{ago(x.at)} · log #{x.seq}{x.job && <> · <Link to={`/skills/r/${x.job}`}>run page</Link></>}</td>
+        <td className="small" data-label="site"><SiteBadge kind={x.site_kind} /></td>
+        <td className="small" data-label="inputs">{x.new_inputs == null ? <span className="muted">no params</span> : x.new_inputs ? "new inputs" : <span className="muted">same as recording</span>}</td>
+        <td className="small" data-label="when">{ago(x.at)} · log #{x.seq} · <Link to={`/skills/runs/${x.run}`}>run page</Link></td>
       </tr>)}
     </tbody></table>
   </>;
@@ -508,9 +533,125 @@ export function ReuseTable({ skill, agent, limit, compact }: { skill?: string; a
 export function ReusePage({ skill, agent }: { skill?: string; agent?: string }) {
   return <section>
     <div className="crumbs"><Link to="/skills">skills</Link> / reuse</div>
-    <h1>Agent reuse</h1>
-    <p className="muted">Every replay of a skill is a node-signed <code>skill_run</code> record. This lists who asked for each run (a signed agent paying credits, or the operator), which skill version ran, and whether Spark verified the result.{(skill || agent) && <> Filtered by {skill ? `skill ${skill}` : `agent ${short(agent!)}`} · <Link to="/skills/reuse">show all</Link></>}</p>
+    <h1>Reuse</h1>
+    <MetricsStrip />
+    <p className="muted">Every run of a skill is a node-signed <code>skill_run</code> record. A <b>replay</b> is any run of a published version; the run that published a skill (the verification of its recording) is shown but never counted. Each row links to a run page with the inputs, step screenshots, the verifier's verdict, the models and the signed record. Who asked: a signed agent paying credits, the public trigger (no token, capped), or the operator.{(skill || agent) && <> Filtered by {skill ? `skill ${skill}` : `agent ${short(agent!)}`} · <Link to="/skills/reuse">show all</Link></>}</p>
     <ReuseTable skill={skill} agent={agent} limit={200} />
     <p><Link to="/skills/metrics">→ Metrics</Link></p>
   </section>;
+}
+
+// ---------------------------------------------------------------- one run as evidence (/skills/runs/<record cid or job id>)
+
+/** The replay GIF's frames as separate step screenshots (WebCodecs ImageDecoder); falls back to the animated GIF. */
+function StepFrames({ gif }: { gif: string }) {
+  const [frames, setFrames] = useState<string[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    const urls: string[] = [];
+    (async () => {
+      const ID = (globalThis as any).ImageDecoder;
+      if (!ID) return;
+      const data = await (await fetch(gif)).arrayBuffer();
+      const dec = new ID({ data, type: "image/gif" });
+      await dec.tracks.ready;
+      const n = dec.tracks.selectedTrack?.frameCount ?? 0;
+      for (let i = 0; i < Math.min(n, 24); i++) {
+        const { image } = await dec.decode({ frameIndex: i });
+        const c = document.createElement("canvas"); c.width = image.displayWidth; c.height = image.displayHeight;
+        c.getContext("2d")!.drawImage(image, 0, 0); image.close();
+        const b: Blob = await new Promise((res) => c.toBlob((x) => res(x!), "image/jpeg", 0.8));
+        urls.push(URL.createObjectURL(b));
+      }
+      if (live) setFrames([...urls]);
+    })().catch(() => { /* fall back to the GIF */ });
+    return () => { live = false; urls.forEach((u) => URL.revokeObjectURL(u)); };
+  }, [gif]);
+  if (!frames?.length) return <img className="media" src={gif} alt="replay, step by step (animated GIF)" />;
+  return <ol className="step-frames">{frames.map((f, i) => <li key={i}><img src={f} alt={`step screenshot ${i + 1}`} loading="lazy" /><span className="small muted">{i === frames.length - 1 ? "final" : `screenshot ${i + 1}`}</span></li>)}</ol>;
+}
+
+export function RunPage({ id }: { id: string }) {
+  const r = useData<any>(`/v1/skills/runs/${id}`, [id]);
+  if (r.loading) return <p className="muted">Loading…</p>;
+  if (r.error) return <p className="err">{r.error}</p>;
+  const d = r.data;
+  if (!d.run) return <article><h1>Run {d.status}</h1><p className="muted">{d.note}</p>{d.job && <p><Link to={`/skills/r/${d.job.id}`}>→ live run page</Link></p>}</article>;
+  const b = d.run.record.body;
+  const isReplay = d.kind === "replay";
+  const names = Object.keys({ ...d.recording.inputs, ...d.inputs });
+  return <article>
+    <div className="crumbs"><Link to="/skills">skills</Link> / <Link to={`/s/${d.skill.cid}`}>{d.skill.slug}</Link> / run</div>
+    <h1>{isReplay ? <span className="badge big replay">Replay</span> : <span className="badge big publish">Publishing run</span>} {d.skill.name} <SiteBadge kind={d.site_kind} /></h1>
+    <p className="lead small">{isReplay
+      ? <>A replay of <Link to={`/s/${d.skill.cid}`}>v{d.skill.version}</Link> of a skill that was recorded once by a person{d.recording.video ? <> (<a href={d.recording.video} target="_blank" rel="noreferrer">the original recording</a>)</> : null}. This run is separate from the recording: an agent drove the browser from the skill's steps.</>
+      : <>The first verified replay of the recording, signed together with <Link to={`/s/${d.skill.cid}`}>v{d.skill.version}</Link>. It is part of publishing the skill and is <b>not counted as reuse</b>.{d.recording.video ? <> <a href={d.recording.video} target="_blank" rel="noreferrer">The recording</a>.</> : null}</>}</p>
+    {d.site_kind === "mock" && <p className="small demo-note">This ran on an Agentboard demo page (a mock site we host), not a real-world site.</p>}
+    <div className="meta">trigger: <b>{d.trigger}</b> ({triggerLabel(d.trigger)}){d.agent && <> · <Link to={`/a/${d.agent}`}>{short(d.agent)}</Link></>} · {ago(d.run.record.created_at)} · log #{d.run.seq}{d.job && <> · <Link to={`/skills/r/${d.job.id}`}>live run page</Link></>}{d.skill.latest_version !== d.skill.version && <> · latest is <Link to={`/s/${d.skill.latest_cid}`}>v{d.skill.latest_version}</Link></>}</div>
+    <div className={`verdict-box ${d.success ? "good" : "badv"}`}><ModelCall model={d.models.verifier} capability={`verified with ${d.models.verifier_capability ?? "image understanding"}`} /><p>{d.success ? "✓ Verified" : "✗ Not verified"}: {d.verdict?.evidence}</p></div>
+    <h2>Inputs</h2>
+    {names.length ? <table className="tbl cards"><thead><tr><th>param</th><th>this run</th><th>in the recording</th></tr></thead><tbody>
+      {names.map((n) => <tr key={n}><td className="mono" data-label="param">{n}</td><td data-label="this run">{String(d.inputs?.[n] ?? "")}</td><td className="muted" data-label="in the recording">{String(d.recording.inputs?.[n] ?? "")}{d.differing_params?.includes(n) && <span className="badge new-inputs">different</span>}</td></tr>)}
+    </tbody></table> : <p className="muted small">This skill takes no inputs.</p>}
+    <p className="small">{d.new_inputs == null ? "No params: the same task on the live page." : d.new_inputs ? <b>New inputs never seen in the recording.</b> : "Same inputs as the recording."} Start page: <a href={b.start_url} target="_blank" rel="noreferrer">{b.start_url}</a></p>
+    <p className="small">{d.self_healed ? <>🩹 <b>Self-healed:</b> the site had changed, so this run's evidence produced {d.healed_to ? <Link to={`/s/${d.healed_to.cid}`}>v{d.healed_to.version}</Link> : "a new version"}.</> : "Did not self-heal (the steps still matched the site)."}</p>
+    <h2>Step screenshots</h2>
+    <div className="sbs">
+      <div>{d.evidence.gif ? <StepFrames gif={d.evidence.gif} /> : <p className="muted">No step screenshots stored for this run.</p>}</div>
+      <div><h3>Final screenshot</h3>{d.evidence.final_screenshot ? <a href={d.evidence.final_screenshot} target="_blank" rel="noreferrer"><img className="media" src={d.evidence.final_screenshot} alt="final screenshot the verifier judged" /></a> : <p className="muted">none</p>}</div>
+    </div>
+    <h2>Models</h2>
+    <div className="calls">
+      <ModelCall model={d.models.loop} capability={`replayed with ${d.models.loop_capability ?? "computer use"}`} extra={`${d.turns} turns · ${usd(d.usage?.usd)}`} />
+      <ModelCall model={d.models.verifier} capability={`verified with ${d.models.verifier_capability ?? "image understanding"}`} />
+    </div>
+    <h2>What the agent did</h2>
+    {d.job?.turns?.length ? <ol className="turns">{d.job.turns.map((t: any) => <li key={t.turn}><ModelCall model={t.model} capability={t.capability ?? "computer use"} extra={<>{t.ms} ms · {usd(t.usd)}</>} /><div>{t.say}</div><div className="mono small">{(t.actions ?? []).map((a: any) => JSON.stringify(a)).join(" ")}</div></li>)}</ol> : null}
+    <ol className="steps">{(d.actions ?? []).map((a: any, i: number) => <li key={i}><span className="act">{a.type}</span> {a.detail}{a.target && <span className="muted"> on "{a.target}"</span>}{a.approval === "human" && <span className="lock"> 🔒 approved by a human</span>}</li>)}</ol>
+    <h2>Signed record</h2>
+    <p className="small mono">cid {d.signature.cid}<br />signed by {d.signature.signed_by}<br />sig {d.signature.sig}</p>
+    <p className="small muted">Check it here (Ed25519 signature, content id, log entry hash, and that the screenshot and GIF bytes hash to the sha256 in the signed record), or with the MCP <code>verify_record</code> tool. Raw: <a href={`${API}/v1/records/${d.signature.cid}`}>/v1/records/{d.signature.cid.slice(0, 16)}…</a></p>
+    <SignatureCheck entries={[d.run]} />
+  </article>;
+}
+
+// ---------------------------------------------------------------- public replay ("try it yourself"): capped, no token
+
+async function leadingZeroBitsOf(buf: ArrayBuffer) { const b = new Uint8Array(buf); let z = 0; for (const x of b) { if (x === 0) { z += 8; continue; } z += Math.clz32(x) - 24; break; } return z; }
+async function solvePow(ch: { nonce: string; bits: number; params_hash: string }, slug: string) {
+  const enc = new TextEncoder();
+  for (let n = 0; n < 50_000_000; n++) {
+    if (await leadingZeroBitsOf(await crypto.subtle.digest("SHA-256", enc.encode(`${ch.nonce}:${slug}:${ch.params_hash}:${n}`))) >= ch.bits) return n;
+  }
+  throw new Error("no solution");
+}
+
+function PublicReplayPanel({ slug, params }: { slug: string; params: any[] }) {
+  const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(params.map((p: any) => [p.name, ""])));
+  const [status, setStatus] = useState(""), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
+  const call = async (body: unknown) => {
+    const res = await fetch(`${API}/v1/skills/${slug}/public-replay`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  };
+  const start = async () => {
+    setErr(""); setBusy(true);
+    try {
+      const p = Object.fromEntries(Object.entries(vals).map(([k, v]) => [k, v.trim()]));
+      setStatus("Asking for a challenge…");
+      const first = await call({ params: p });
+      if (first.status !== 428) throw new Error(first.body.message ?? `HTTP ${first.status}`);
+      setStatus(`Solving a small proof of work in your browser (${first.body.challenge.bits} bits)…`);
+      const counter = await solvePow(first.body.challenge, slug);
+      const r = await call({ params: p, challenge: { id: first.body.challenge.id, counter } });
+      if (r.status !== 202) throw new Error(r.body.message ?? `HTTP ${r.status}`);
+      go(`/skills/r/${r.body.id}`);
+    } catch (e) { setErr((e as Error).message); setStatus(""); } finally { setBusy(false); }
+  };
+  return <div className="panel try-panel">
+    <h2>Try it yourself (public replay)</h2>
+    <p className="small muted">Runs a real replay on the public site with your inputs: no token, no account. Capped per network and per day; only allowlisted skills that never submit, buy, send or delete. You get a run page with the signed record.</p>
+    {params.map((p: any) => <label key={p.name}>{p.name} <span className="muted small">e.g. {p.example}</span><input value={vals[p.name] ?? ""} onChange={(e) => setVals({ ...vals, [p.name]: e.target.value })} /></label>)}
+    <button disabled={busy || params.some((p: any) => !(vals[p.name] ?? "").trim())} onClick={start}>{busy ? "Working…" : "Replay it"}</button>
+    {status && <p className="muted small">{status}</p>}{err && <p className="err small">{err}</p>}
+  </div>;
 }

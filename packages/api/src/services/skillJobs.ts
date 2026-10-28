@@ -82,11 +82,12 @@ export async function getJob(ctx: AppContext, id: string, internal = false) {
   if (!(TERMINAL as readonly string[]).includes(status) && ctx.now() - new Date(r.updated_at).getTime() > STALE_MS) status = "expired";
   const approval = j(r.approval);
   return {
-    id: r.id, skill_cid: r.skill_cid, status, message: r.message, params: j(r.params), start_url: r.start_url, via: r.via, agent: r.via === "agent" ? r.requested_by : null,
+    id: r.id, skill_cid: r.skill_cid, status, message: r.message, params: j(r.params), start_url: r.start_url, via: r.via, trigger: r.via, agent: r.via === "agent" ? r.requested_by : null,
     turns: j(r.turns), approval, verdict: j(r.verdict), result: j(r.result),
     ...(internal ? { decision: j(r.decision) } : {}),
     frame_url: r.has_frame ? `${ctx.cfg.publicBaseUrl}/v1/skills/jobs/${r.id}/frame?t=${new Date(r.updated_at).getTime()}` : null,
     url: jobUrl(ctx, r.id),
+    ...(j(r.result)?.run_cid ? { run_record: j(r.result).run_cid, run_record_page: `${ctx.cfg.skillsWebUrl}/skills/runs/${j(r.result).run_cid}` } : {}),
     created_at: r.created_at, updated_at: r.updated_at,
   };
 }
@@ -165,7 +166,8 @@ export async function createAgentFundedJob(ctx: AppContext, did: string, req: Jo
     const day = new Date(ctx.now()).toISOString().slice(0, 10);
     const mine = Number((await tx.query<any>(`SELECT count(*)::int AS n FROM skill_jobs WHERE requested_by = $1 AND created_at >= $2::date`, [did, day])).rows[0].n);
     if (mine >= ctx.cfg.skillsAgentRunsPerAgentDay) throw new HttpError(429, "agent_run_quota", `at most ${ctx.cfg.skillsAgentRunsPerAgentDay} skill runs per agent per day`);
-    const all = Number((await tx.query<any>(`SELECT count(*)::int AS n FROM skill_jobs WHERE via = 'agent' AND created_at >= $1::date`, [day])).rows[0].n);
+    // node-wide budget for non-operator runs, shared with the public replay trigger (services/publicReplay.ts)
+    const all = Number((await tx.query<any>(`SELECT count(*)::int AS n FROM skill_jobs WHERE via IN ('agent', 'public') AND created_at >= $1::date`, [day])).rows[0].n);
     if (all >= ctx.cfg.skillsAgentRunsPerDay) throw new HttpError(429, "node_run_quota", "this node's daily budget for agent-funded skill runs is used up");
     const bal = Number((await tx.query<any>(`SELECT COALESCE(SUM(delta_milli),0)::float8 AS b FROM credit_ledger WHERE did = $1`, [did])).rows[0]?.b ?? 0);
     if (bal < cost) throw new HttpError(402, "insufficient_credits", `a skill run costs ${cost / 1000} credits, you have ${bal / 1000}`);
