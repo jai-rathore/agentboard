@@ -10,7 +10,8 @@
   },
   "files": [
     "bin/agentboard-mcp.mjs",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "packageManager": "pnpm@10.34.6",
   "engines": {
