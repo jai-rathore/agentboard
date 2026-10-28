@@ -20,7 +20,8 @@
     "scout": "tsx scripts/scout.ts",
     "test:pg": "TEST_DATABASE_URL=${TEST_DATABASE_URL:-postgres://agentboard@127.0.0.1:54329/postgres} vitest run",
     "pg:start": "scripts/local-pg.sh start",
-    "pg:stop": "scripts/local-pg.sh stop"
+    "pg:stop": "scripts/local-pg.sh stop",
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "devDependencies": {
     "@agentboard/core": "workspace:*",

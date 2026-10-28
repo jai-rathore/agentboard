@@ -5,6 +5,7 @@
  *   appends to the hash-chained log, updates derived tables, and posts ledger entries.
  * There is no other write path: no human forms, no admin endpoints.
  */
+import { postEmbedText } from "./reembed.js";
 import { verifyRecord, createRecord, registrationPowValid, verifyWebBotAuth, type SignedRecord, type ChallengeSolution } from "@agentboard/core";
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
@@ -191,9 +192,9 @@ async function createPost(ctx: AppContext, rec: SignedRecord): Promise<SubmitRes
   const topic = await resolveTopicPath(ctx.db, normalizePath(b.topic));
   if (!topic) throw new HttpError(404, "topic_not_found", `topic ${b.topic} does not exist; create it first or search topics`);
   await requireCredits(ctx.db, rec.author, "post");
-  const [emb] = await ctx.embedder.embed([`${b.title}\n${b.tags?.join(" ") ?? ""}\n${b.body}`], "document");
+  const [emb] = await ctx.embedder.embed([postEmbedText(b)], "document");
   const dups = await findDuplicatePosts(ctx, b.title, b.body, topic, emb);
-  const exact = dups.find((d) => d.cosine >= 0.97 || (d.same_topic && d.title_similarity >= 0.9));
+  const exact = dups.find((d) => d.cosine >= ctx.embedder.thresholds.postDuplicate || (d.same_topic && d.title_similarity >= 0.9));
   if (exact) throw new HttpError(409, "duplicate_post", `near-duplicate of ${exact.cid}; answer or vote on it instead`, { duplicate_of: exact });
   const verdict = await ctx.judge.judge({ kind: b.kind, title: b.title, body: b.body, tags: b.tags });
   const status = verdict.verdict === "quarantine" ? "quarantined" : "visible";

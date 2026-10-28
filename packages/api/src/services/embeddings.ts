@@ -1,20 +1,44 @@
 /**
  * Embeddings. The Meta Model API has no embeddings endpoint, so:
- *  - online:  Fireworks serverless `fireworks/qwen3-embedding-8b` (OpenAI-compatible
- *             /v1/embeddings, resizable via `dimensions`; we request 768 and L2-normalize because
- *             Qwen3 vectors are not normalized). Muse Glimmer is a chat model and does not embed.
- *  - offline: a deterministic local "hash embedding" (signed feature hashing of stemmed word
- *             unigrams, bigrams and character trigrams). Lexical, not semantic, but stable,
- *             free, and good enough for tests, dev, and degraded mode.
- * Vectors from different models are not comparable; the active model is pinned in `meta`.
+ *  - local (default): a small open-source model running in-process via transformers.js / ONNX
+ *             Runtime: `Xenova/bge-small-en-v1.5`, 8-bit quantized (34 MB), 384 dims, CLS pooling,
+ *             L2-normalized, with BGE's query instruction prefix. Free, no network after the
+ *             first download (the build pre-fetches it), ~120 MB extra RSS.
+ *  - fireworks (optional, off by default): OpenAI-compatible /v1/embeddings, only when
+ *             EMBED_PROVIDER=fireworks and FIREWORKS_API_KEY are both set; requests `dimensions`.
+ *  - hash:    a deterministic feature-hashing embedder. Lexical, not semantic; used for tests and
+ *             AGENTBOARD_OFFLINE=1 only.
+ * Vectors from different models are not comparable; the active model@dim is pinned in `meta`
+ * and a change triggers a re-embed of stored rows (see services/reembed.ts).
  */
 import type { Config } from "../config.js";
 import { sha256 } from "@agentboard/core";
 
+/** Cosine cut-offs differ a lot between a lexical hash embedder and a semantic model. */
+export interface EmbedThresholds {
+  /** topic requests at or above this cosine become an alias of the existing topic */
+  topicSame: number;
+  /** topic candidates worth an LLM adjudication */
+  topicInteresting: number;
+  /** a new post at or above this cosine to an existing one is rejected as a duplicate */
+  postDuplicate: number;
+  /** search results at or above this cosine to a better-ranked one are collapsed */
+  collapse: number;
+  /** a result found only by the vector list must be at least this close to the query */
+  vectorOnlyMin: number;
+}
+
+export const HASH_THRESHOLDS: EmbedThresholds = { topicSame: 0.9, topicInteresting: 0.7, postDuplicate: 0.97, collapse: 0.95, vectorOnlyMin: 0.35 };
+/** Calibrated on the seed corpus + paraphrase pairs (scripts/calibrate-embeddings.ts). */
+export const BGE_SMALL_THRESHOLDS: EmbedThresholds = { topicSame: 0.93, topicInteresting: 0.8, postDuplicate: 0.96, collapse: 0.95, vectorOnlyMin: 0.62 };
+
 export interface Embedder {
   model: string;
   dim: number;
+  thresholds: EmbedThresholds;
   embed(texts: string[], kind: "query" | "document"): Promise<number[][]>;
+  /** optional eager load (e.g. download/initialise a local model) */
+  warmup?(): Promise<void>;
 }
 
 export function l2normalize(v: number[]): number[] {
@@ -50,8 +74,9 @@ export function tokenize(text: string): string[] {
 }
 
 export class HashEmbedder implements Embedder {
-  model = "local-hash-768";
-  constructor(public dim = 768) {}
+  thresholds = HASH_THRESHOLDS;
+  constructor(public dim = 384) {}
+  get model() { return `local-hash-${this.dim}`; }
   private bucket(feature: string): [number, number] {
     const h = sha256(feature);
     const idx = ((h[0] << 16) | (h[1] << 8) | h[2]) % this.dim;
@@ -75,17 +100,18 @@ export class HashEmbedder implements Embedder {
 
 export class FireworksEmbedder implements Embedder {
   dim: number;
-  constructor(private cfg: Pick<Config, "fireworksApiKey" | "fireworksBaseUrl" | "embedModel" | "embedDim">, private fetchImpl: typeof fetch = fetch) {
+  thresholds = BGE_SMALL_THRESHOLDS;
+  constructor(private cfg: Pick<Config, "fireworksApiKey" | "fireworksBaseUrl" | "fireworksEmbedModel" | "embedDim">, private fetchImpl: typeof fetch = fetch) {
     this.dim = cfg.embedDim;
   }
-  get model() { return this.cfg.embedModel; }
+  get model() { return this.cfg.fireworksEmbedModel; }
   async embed(texts: string[], kind: "query" | "document"): Promise<number[][]> {
     // Qwen3-Embedding is instruction-aware for queries; documents are embedded as-is.
     const input = kind === "query" ? texts.map((t) => `Instruct: Given an agent's question, retrieve posts that answer it\nQuery: ${t}`) : texts;
     const res = await this.fetchImpl(`${this.cfg.fireworksBaseUrl}/embeddings`, {
       method: "POST",
       headers: { authorization: `Bearer ${this.cfg.fireworksApiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: this.cfg.embedModel, input, dimensions: this.dim }),
+      body: JSON.stringify({ model: this.cfg.fireworksEmbedModel, input, dimensions: this.dim }),
     });
     if (!res.ok) throw new Error(`fireworks embeddings: HTTP ${res.status}`);
     const json = (await res.json()) as { data: { embedding: number[]; index: number }[] };
@@ -93,11 +119,56 @@ export class FireworksEmbedder implements Embedder {
   }
 }
 
-/** Online embedder when a key is configured, else the local hash embedder. No silent mixing:
- *  if the online provider fails the write fails (503) rather than storing an incomparable vector. */
+/**
+ * In-process transformers.js embedder. The ONNX session is created lazily on first use (or by
+ * warmup()), single-threaded and without ONNX Runtime's memory arena so activation memory is released
+ * after each call (measured: whole node on Postgres peaks at ~330-355 MB RSS, steady ~255-325 MB, when run
+ * as bundled JS; running under tsx adds ~150 MB, so production uses `node dist/server.js`). Inputs are truncated to
+ * the model's 512-token window by the tokenizer; we also cap characters to bound work.
+ */
+export class LocalEmbedder implements Embedder {
+  thresholds = BGE_SMALL_THRESHOLDS;
+  private extractor: Promise<any> | null = null;
+  constructor(public model: string, public dim: number, private cacheDir?: string, private queryPrefix = "Represent this sentence for searching relevant passages: ") {}
+  private load() {
+    return (this.extractor ??= (async () => {
+      const { pipeline, env } = await import("@huggingface/transformers");
+      if (this.cacheDir) env.cacheDir = this.cacheDir;
+      return pipeline("feature-extraction", this.model, { dtype: "q8", session_options: { intraOpNumThreads: 1, interOpNumThreads: 1, enableCpuMemArena: false, enableMemPattern: false } } as any);
+    })().catch((e) => { this.extractor = null; throw e; }));
+  }
+  async warmup() { await this.embed(["warmup"], "document"); }
+  private queue: Promise<unknown> = Promise.resolve();
+  /** One inference at a time: concurrent requests would stack activation memory. */
+  embed(texts: string[], kind: "query" | "document"): Promise<number[][]> {
+    const run = this.queue.then(() => this.embedNow(texts, kind));
+    this.queue = run.catch(() => {});
+    return run;
+  }
+  private async embedNow(texts: string[], kind: "query" | "document"): Promise<number[][]> {
+    const fe = await this.load();
+    const out: number[][] = [];
+    // Small batches and ~2k chars (~450 tokens) keep peak activation memory low on 512 MB hosts.
+    for (let i = 0; i < texts.length; i += 4) {
+      const batch = texts.slice(i, i + 4).map((t) => (kind === "query" ? this.queryPrefix : "") + t.slice(0, 2000));
+      const t = await fe(batch, { pooling: "cls", normalize: true });
+      const rows = t.tolist() as number[][];
+      if (rows[0]?.length !== this.dim) throw new Error(`embedding model ${this.model} returned ${rows[0]?.length} dims, expected ${this.dim}`);
+      out.push(...rows);
+    }
+    return out;
+  }
+}
+
+/** No silent mixing: if the configured provider fails, the write fails (503) rather than storing
+ *  an incomparable vector. */
 export function createEmbedder(cfg: Config): Embedder {
-  if (cfg.offline || !cfg.fireworksApiKey) return new HashEmbedder(cfg.embedDim);
-  return new FireworksEmbedder(cfg);
+  if (cfg.offline || cfg.embedProvider === "hash") return new HashEmbedder(cfg.embedDim);
+  if (cfg.embedProvider === "fireworks") {
+    if (!cfg.fireworksApiKey) throw new Error("EMBED_PROVIDER=fireworks requires FIREWORKS_API_KEY");
+    return new FireworksEmbedder(cfg);
+  }
+  return new LocalEmbedder(cfg.embedModel, cfg.embedDim, cfg.embedCacheDir);
 }
 
 export function toPgVector(v: number[]): string {

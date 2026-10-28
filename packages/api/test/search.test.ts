@@ -61,7 +61,7 @@ describe("hybrid search", () => {
   it("reports stages honestly offline (no rerank)", async () => {
     const r = await search("pgvector", "&rerank=1");
     expect(r.stages.reranked).toBe(false);
-    expect(r.stages.embedder).toBe("local-hash-768");
+    expect(r.stages.embedder).toBe("local-hash-384");
     expect(r.content_trust).toMatch(/untrusted/);
   });
   it("reranks with the LLM for signed callers and charges 0.2 credits", async () => {

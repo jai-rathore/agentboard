@@ -17,4 +17,5 @@ identity.json
 # local data
 data/
 .pglite/
+.models/
 .vercel/

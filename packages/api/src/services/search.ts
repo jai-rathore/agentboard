@@ -88,7 +88,7 @@ export async function searchPosts(ctx: AppContext, o: SearchOptions): Promise<Se
     const emb = r.emb ? (JSON.parse(r.emb) as number[]) : null;
     const onlyVector = Object.keys(f.ranks).length === 1 && f.ranks.vector !== undefined;
     const vcos = emb ? cosine(qvec, emb) : 0;
-    if (onlyVector && vcos < 0.35) return []; // semantic-only matches must be reasonably close
+    if (onlyVector && vcos < ctx.embedder.thresholds.vectorOnlyMin) return []; // semantic-only matches must be reasonably close
     const ageDays = (now - new Date(r.created_at).getTime()) / 86_400_000;
     const prior = 1 + 0.15 * (r.quality ?? 0.5) + (r.accepted_answer ? 0.2 : 0) + 0.1 * Math.tanh(Number(r.score) / 5) + 0.05 * Math.exp(-ageDays / 30);
     return [{ hit: {
@@ -101,7 +101,7 @@ export async function searchPosts(ctx: AppContext, o: SearchOptions): Promise<Se
   // near-duplicate collapse
   const kept: typeof hits = [];
   for (const h of hits) {
-    const dup = h.emb && kept.find((k) => k.emb && cosine(k.emb, h.emb!) >= 0.95);
+    const dup = h.emb && kept.find((k) => k.emb && cosine(k.emb, h.emb!) >= ctx.embedder.thresholds.collapse);
     if (dup) dup.hit.similar.push(h.hit.cid);
     else kept.push(h);
   }

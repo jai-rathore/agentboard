@@ -1,3 +1,4 @@
+import { resolve as resolvePath } from "node:path";
 /** Runtime configuration. Secrets come from environment variables only and are never logged. */
 export interface Config {
   databaseUrl?: string; // unset => embedded PGlite (dev/tests)
@@ -10,8 +11,12 @@ export interface Config {
   metaModel: string;
   fireworksApiKey?: string;
   fireworksBaseUrl: string;
+  /** local (default, in-process ONNX) | fireworks (opt-in) | hash (tests/offline) */
+  embedProvider: "local" | "fireworks" | "hash";
   embedModel: string;
   embedDim: number;
+  embedCacheDir?: string;
+  fireworksEmbedModel: string;
   glimmerBaseUrl?: string;
   glimmerApiKey?: string;
   glimmerModel: string;
@@ -44,8 +49,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     metaModel: env.META_MODEL || "muse-spark-1.3",
     fireworksApiKey: env.FIREWORKS_API_KEY || undefined,
     fireworksBaseUrl: env.FIREWORKS_BASE_URL || "https://api.fireworks.ai/inference/v1",
-    embedModel: env.EMBED_MODEL || "fireworks/qwen3-embedding-8b",
-    embedDim: 768,
+    embedProvider: (env.EMBED_PROVIDER || "local") as Config["embedProvider"],
+    embedModel: env.EMBED_MODEL || "Xenova/bge-small-en-v1.5",
+    embedDim: 384,
+    embedCacheDir: resolvePath(env.EMBED_CACHE_DIR || ".models"),
+    fireworksEmbedModel: env.FIREWORKS_EMBED_MODEL || "fireworks/qwen3-embedding-8b",
     glimmerBaseUrl: env.GLIMMER_BASE_URL || undefined,
     glimmerApiKey: env.GLIMMER_API_KEY || env.FIREWORKS_API_KEY || undefined,
     glimmerModel: env.GLIMMER_MODEL || "accounts/fireworks/models/muse-glimmer-30b",
@@ -65,6 +73,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   };
   // Contributor-program model variants are never used by this node.
   for (const m of [cfg.metaModel, cfg.glimmerModel]) if (/contributor/i.test(m)) throw new Error(`refusing model "${m}": -contributor variants are not allowed`);
+  if (!["local", "fireworks", "hash"].includes(cfg.embedProvider)) throw new Error(`EMBED_PROVIDER must be local, fireworks or hash`);
   if (!(cfg.llmMaxOutputTokens > 0)) throw new Error("LLM_MAX_OUTPUT_TOKENS must be positive");
   return cfg;
 }
@@ -74,7 +83,7 @@ export function publicConfigSummary(c: Config) {
   return {
     database: c.databaseUrl ? "postgres" : "pglite",
     llm: { daily_call_cap: c.llmDailyCallCap, max_output_tokens: c.llmMaxOutputTokens, meta: Boolean(c.metaApiKey) && !c.offline && c.llmDailyCallCap > 0, glimmer: Boolean(c.glimmerBaseUrl) && !c.offline && c.llmDailyCallCap > 0 },
-    embeddings: Boolean(c.fireworksApiKey) && !c.offline ? c.embedModel : "local-hash-768 (offline fallback)",
+    embeddings: c.offline || c.embedProvider === "hash" ? `local-hash-${c.embedDim} (offline fallback)` : c.embedProvider === "fireworks" ? c.fireworksEmbedModel : `${c.embedModel} (in-process)`,
     challenge: { ttl_ms: c.challengeTtlMs, difficulty_bits: c.challengeDifficulty },
     register_pow_bits: c.registerPowBits,
     checkpoint_every: c.checkpointEvery,

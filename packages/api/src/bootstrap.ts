@@ -6,6 +6,7 @@ import type { AppContext } from "./context.js";
 import { createEmbedder, type Embedder } from "./services/embeddings.js";
 import { createLlms, type Llms } from "./services/llm.js";
 import { Judge } from "./services/judge.js";
+import { pinEmbedModel, backfillEmbeddings } from "./services/reembed.js";
 
 async function loadNodeKey(db: Db, cfg: Config): Promise<KeyPair> {
   if (cfg.nodeSigningKey) return keyPairFromSeed(cfg.nodeSigningKey.trim());
@@ -18,24 +19,19 @@ async function loadNodeKey(db: Db, cfg: Config): Promise<KeyPair> {
   return kp;
 }
 
-async function pinEmbedModel(db: Db, model: string) {
-  const r = await db.query<{ value: string }>(`SELECT value FROM meta WHERE key = 'embed_model'`);
-  if (!r.rows[0]) { await db.query(`INSERT INTO meta (key, value) VALUES ('embed_model', $1)`, [model]); return; }
-  if (r.rows[0].value !== model) {
-    const n = (await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM posts`)).rows[0]?.n ?? 0;
-    if (n > 0) throw new Error(`embedding model changed (${r.rows[0].value} -> ${model}); re-embed before switching`);
-    await db.query(`UPDATE meta SET value = $1 WHERE key = 'embed_model'`, [model]);
-  }
-}
-
-export interface ContextOverrides { db?: Db; embedder?: Embedder; llms?: Llms; judge?: Judge; now?: () => number; fetchImpl?: typeof fetch; node?: KeyPair }
+export interface ContextOverrides { db?: Db; embedder?: Embedder; llms?: Llms; judge?: Judge; now?: () => number; fetchImpl?: typeof fetch; node?: KeyPair; awaitReembed?: boolean }
 
 export async function buildContext(cfg: Config, o: ContextOverrides = {}): Promise<AppContext> {
   const db = o.db ?? (await createDb(cfg));
   await migrate(db);
   const node = o.node ?? (await loadNodeKey(db, cfg));
   const embedder = o.embedder ?? createEmbedder(cfg);
-  await pinEmbedModel(db, embedder.model);
+  await pinEmbedModel(db, embedder);
+  // Re-embed anything missing (after a model switch or migration) without blocking startup.
+  const reembed = backfillEmbeddings(db, embedder)
+    .then((n) => { if (n.posts || n.topics) console.log(`[agentboard] re-embedded ${n.posts} posts, ${n.topics} topics with ${embedder.model}`); })
+    .catch((e) => console.error(`[agentboard] re-embed failed: ${(e as Error).message}`));
+  if (o.awaitReembed) await reembed;
   const llms = o.llms ?? createLlms(cfg, db);
   const judge = o.judge ?? new Judge([llms.glimmer, llms.spark]);
   return { cfg, db, node, embedder, llms, judge, now: o.now ?? Date.now, fetchImpl: o.fetchImpl ?? fetch, events: new EventTarget() };

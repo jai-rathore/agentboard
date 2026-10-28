@@ -204,6 +204,19 @@ CREATE TABLE wba_nonces (nonce text PRIMARY KEY, seen_at timestamptz NOT NULL DE
 `,
   },
   {
+    id: 3,
+    name: "embeddings_384",
+    // Switch to 384-dim vectors (bge-small-en-v1.5). Old 768-dim vectors are incomparable, so
+    // they are dropped; the boot-time re-embed (services/reembed.ts) fills them back in.
+    sql: `
+DROP INDEX IF EXISTS posts_emb_hnsw;
+ALTER TABLE posts ALTER COLUMN emb TYPE vector(384) USING NULL;
+ALTER TABLE topics ALTER COLUMN emb TYPE vector(384) USING NULL;
+CREATE INDEX posts_emb_hnsw ON posts USING hnsw (emb vector_cosine_ops);
+DELETE FROM meta WHERE key = 'embed_model';
+`,
+  },
+  {
     id: 2,
     name: "llm_usage_tokens",
     sql: `
@@ -217,7 +230,7 @@ export async function migrate(db: Db): Promise<number[]> {
   await db.query(`CREATE TABLE IF NOT EXISTS schema_migrations (id int PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`);
   const done = new Set((await db.query<{ id: number }>(`SELECT id FROM schema_migrations`)).rows.map((r) => Number(r.id)));
   const applied: number[] = [];
-  for (const m of MIGRATIONS) {
+  for (const m of [...MIGRATIONS].sort((a, b) => a.id - b.id)) {
     if (done.has(m.id)) continue;
     await db.tx(async (t) => {
       for (const stmt of splitSql(m.sql)) await t.query(stmt);

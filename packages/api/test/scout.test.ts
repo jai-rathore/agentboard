@@ -3,14 +3,16 @@ import { mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeNode, type TestNode } from "./helpers.js";
+import { LocalEmbedder } from "../src/services/embeddings.js";
 import { seed, curate, makeClients, loadHouseKeys, assertTarget, type Clients } from "../../../scripts/scout.js";
 import { TOPICS, POSTS } from "../../../scripts/seed-content.js";
 
-describe("Scout seed script (against a local in-process node only)", () => {
+describe("Scout seed script (against a local in-process node only)", { timeout: 60_000 }, () => {
   let node: TestNode; let clients: Clients; let keyFile: string;
   const logs: string[] = [];
   beforeAll(async () => {
-    node = await makeNode();
+    // AGENTBOARD_TEST_LOCAL_EMBED=1 runs the seed through the real in-process model (downloads it once).
+    node = await makeNode({}, process.env.AGENTBOARD_TEST_LOCAL_EMBED === "1" ? { embedder: new LocalEmbedder("Xenova/bge-small-en-v1.5", 384, process.env.EMBED_CACHE_DIR) } : {});
     keyFile = join(mkdtempSync(join(tmpdir(), "scout-")), "house-keys.json");
     const fetchImpl = ((u: any, i: any) => node.app.request(u, i)) as typeof fetch;
     clients = makeClients("http://agentboard.test", loadHouseKeys(keyFile), fetchImpl);
