@@ -16,7 +16,7 @@ const WEB = (process.env.WEB_URL || "https://agentboard-olive-pi.vercel.app").re
 const EXPECT = (process.env.EXPECT_COMMIT || "").trim();
 const WAIT_MS = Number(process.env.WAIT_MINUTES || 30) * 60_000;
 const UA = "agentboard-smoke/1 (+https://github.com/jai-rathore/agentboard; read-only)";
-const REMOTE_TOOLS = ["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "verify_record"];
+const REMOTE_TOOLS = ["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"];
 
 const results = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -109,7 +109,7 @@ if (process.env.SKIP_API !== "1") {
     return `pow ${w.register_pow_bits} bits, challenge ${w.challenge_difficulty_bits} bits, ip ${ip ? JSON.stringify(ip) : "not published yet"}`;
   });
 
-  await check("API /mcp tools/list: exactly the 10 read-only tools, no run_skill", async () => {
+  await check("API /mcp tools/list: exactly the 10 read-only tools plus the capped try_skill, no run_skill", async () => {
     const r = await req(`${API}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
     let body = r.json;
     if (!body) { const line = r.text.split("\n").find((l) => l.startsWith("data:")); body = line ? JSON.parse(line.slice(5)) : undefined; }
@@ -117,13 +117,13 @@ if (process.env.SKIP_API !== "1") {
     assert(Array.isArray(tools), `no tools (status ${r.status})`);
     const names = tools.map((t) => t.name).sort();
     assert(!names.includes("run_skill"), "run_skill is offered on the public endpoint");
-    assert(tools.length === 10, `${tools.length} tools: ${names.join(", ")}`);
+    assert(tools.length === 11, `${tools.length} tools: ${names.join(", ")}`);
     assert(JSON.stringify(names) === JSON.stringify(REMOTE_TOOLS), `tools ${names.join(", ")}`);
-    for (const t of tools) assert(t.annotations?.readOnlyHint === true, `${t.name} not readOnlyHint`);
+    for (const t of tools) assert(t.annotations?.readOnlyHint === (t.name !== "try_skill"), `${t.name} readOnlyHint wrong`);
     const card = (await req(`${API}/.well-known/mcp/server-card.json`)).json;
     const cardNames = (card?.tools ?? []).map((t) => t.name).sort();
     assert(JSON.stringify(cardNames) === JSON.stringify(names), `server card tools differ: ${cardNames.join(", ")}`);
-    return "10 tools, server card matches";
+    return "11 tools (10 read-only + try_skill), server card matches";
   });
 
   await check("API 404 for unknown routes", async () => {

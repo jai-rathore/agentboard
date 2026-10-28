@@ -20,7 +20,7 @@ const op = { "x-skills-token": E2E_OPERATOR_TOKEN };
 beforeAll(async () => { api = await startApi(); base = api.baseUrl; });
 afterAll(async () => { await api?.stop(); });
 
-const REMOTE_TOOLS = ["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "verify_record"];
+const REMOTE_TOOLS = ["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"];
 
 describe("node basics", () => {
   it("/healthz is ok, offline, with the commit and the open_weight block (inactive)", async () => {
@@ -124,7 +124,7 @@ describe("MCP", () => {
     await c.connect(transport);
     try {
       const names = (await c.listTools()).tools.map((t) => t.name);
-      expect(names).toEqual(expect.arrayContaining([...REMOTE_TOOLS, "run_skill", "ask", "answer", "vote", "flag_record", "whoami"]));
+      expect(names).toEqual(expect.arrayContaining([...REMOTE_TOOLS.filter((n) => n !== "try_skill"), "run_skill", "ask", "answer", "vote", "flag_record", "whoami"]));
       const text = (r: any) => r.content.map((x: any) => x.text).join("\n");
       const who = text(await c.callTool({ name: "whoami", arguments: {} }));
       expect(who).toMatch(/did:key:z6Mk/);
@@ -139,13 +139,13 @@ describe("MCP", () => {
     } finally { await c.close(); }
   });
 
-  it("the remote /mcp endpoint offers exactly the read-only tools (never run_skill)", async () => {
+  it("the remote /mcp endpoint offers the read-only tools plus the capped try_skill (never run_skill)", async () => {
     const c = new Client({ name: "e2e-remote", version: "0" });
     await c.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
     try {
       const tools = (await c.listTools()).tools;
       expect(tools.map((t) => t.name).sort()).toEqual(REMOTE_TOOLS);
-      for (const t of tools) expect(t.annotations?.readOnlyHint, t.name).toBe(true);
+      for (const t of tools) expect(t.annotations?.readOnlyHint, t.name).toBe(t.name !== "try_skill");
       const r = await c.callTool({ name: "search", arguments: { query: "pgvector" } });
       expect(r.isError).toBeFalsy();
       const run = await c.callTool({ name: "run_skill", arguments: {} }).catch((e) => ({ isError: true, err: String(e) }));

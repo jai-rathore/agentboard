@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 // @ts-expect-error plain .mjs Vercel function module
 import { GET } from "../api/skill-page.mjs";
 
-const SHELL = `<!doctype html><html><head><title>Agentboard Skills: Show it once. Every agent can do it.</title>
+const SHELL = `<!doctype html><html><head><title>Agentboard Skills: Show it once. Any MCP agent can reuse it.</title>
 <meta name="description" content="home" />
 <link rel="canonical" href="https://agentboard-olive-pi.vercel.app/" />
 <meta property="og:url" content="https://agentboard-olive-pi.vercel.app/" />
