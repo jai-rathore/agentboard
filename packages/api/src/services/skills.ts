@@ -34,7 +34,7 @@ export const SKILL_SCHEMA = {
     steps: { type: "array", items: { type: "object", additionalProperties: false, required: ["intent", "target", "action", "value"], properties: {
       intent: { type: "string" }, target: { type: "string", description: "visual description of the element" },
       action: { type: "string", enum: [...ACTIONS] }, value: { type: "string", description: "literal text, a {{param}} placeholder, or empty" } } } },
-    success_check: { type: "string", description: "what must be visible on screen when the task succeeded" },
+    success_check: { type: "string", description: "what must be visible on screen when the task succeeded; param values only as {{param}}, no input-dependent text copied from the recording" },
     risk_flags: { type: "array", items: { type: "string", enum: [...RISK_FLAGS] } },
   },
 } as const;
@@ -112,7 +112,7 @@ export const RECORD_PROMPT = `This is a recording of a person doing a task in a 
 Turn it into a reusable skill that another agent can replay with different values:
 - params: every user-specific value typed or chosen (emails, names, text, options), as snake_case names with the recorded value as the example.
 - steps: one per user action, in order. "target" describes the element visually (label, placeholder, color, position) so it can be found on a fresh screenshot. Use {{param}} placeholders in "value".
-- success_check: what is visibly on screen once the task has succeeded (be specific, mention the param values that should appear).
+- success_check: what is visibly on screen once the task has succeeded (be specific, mention the param values that should appear). It is checked on replays with DIFFERENT param values, so write every param value as its {{param}} placeholder, and never copy text that depends on the inputs (a discount label, a price, a total, a computed status, a search result title) from the recording; describe it generically instead (e.g. 'a discount line for {{coupon_code}} and a reduced total', not 'Code BEANS10 applied: 10% off').
 - risk_flags: submits_form, sends_message, purchase, deletes_data, login_required, personal_data (or none).`;
 
 export interface RecordInput { video?: string; frames?: string[]; hint?: string; start_url?: string; parent_slug?: string }
@@ -214,7 +214,7 @@ export function staleSteps(skill: Skill, actions: { target?: string }[]): number
 
 export const HEAL_PROMPT = `A recorded browser skill was just replayed and the result was verified, but some of its steps no longer match the website (it was redesigned: labels, button text or positions changed).
 Rewrite the skill so each step describes the site as it is NOW, using the replay's evidence: the elements the agent actually used (their visible names), the agent's own notes about changed steps, and the final screenshot.
-Return the full new "steps" list and the "success_check". Rules: use exactly the same {{param}} placeholders (params cannot change); change the success check only if the visible confirmation changed; update targets (label text, button text, position, color), intents and order as needed. Be concise.
+Return the full new "steps" list and the "success_check". Rules: use exactly the same {{param}} placeholders (params cannot change); change the success check only if the visible confirmation changed (keep {{param}} placeholders and never copy input-dependent text such as prices, totals or labels into it); update targets (label text, button text, position, color), intents and order as needed. Be concise.
 List every change in "changes" (1-based step number in the NEW list, the field, before, after, and a short reason). If nothing needs to change, return the steps unchanged and an empty "changes" list.`;
 
 const HEAL_SCHEMA = {
