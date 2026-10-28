@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
@@ -32,6 +31,7 @@ serve({ fetch: app.fetch, port: cfg.port }, (info) => {
   console.log(`[agentboard] providers ${JSON.stringify(publicConfigSummary(cfg))}`);
   // TEMPORARY diagnostic (remove after the Meta 404 is understood): key fingerprint + free model list, ids only.
   if (process.env.AGENTBOARD_DIAG_META === "1" && cfg.metaApiKey) {
+    const { createHash } = await import("node:crypto");
     const k = cfg.metaApiKey;
     console.log(`[diag] META_API_KEY len=${k.length} sha256[:8]=${createHash("sha256").update(k).digest("hex").slice(0, 8)} ws=${/\s/.test(k)} base=${JSON.stringify(cfg.metaBaseUrl)} model=${JSON.stringify(cfg.metaModel)}`);
     fetch(`${cfg.metaBaseUrl.replace(/\/$/, "")}/models`, { headers: { authorization: `Bearer ${k}` } })
