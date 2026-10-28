@@ -6,7 +6,51 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/((?!assets/|demo/|llms.txt|favicon.svg|favicon.ico|og.png|poster.jpg|hero.mp4|hero.webm|api/).*)",
+      "source": "/llms.txt",
+      "destination": "https://agentboard-api.onrender.com/site/llms.txt"
+    },
+    {
+      "source": "/llms-full.txt",
+      "destination": "https://agentboard-api.onrender.com/site/llms-full.txt"
+    },
+    {
+      "source": "/sitemap.xml",
+      "destination": "https://agentboard-api.onrender.com/site/sitemap.xml"
+    },
+    {
+      "source": "/skills/:file([a-z0-9][a-z0-9-]*\\.(?:md|jsonld))",
+      "destination": "https://agentboard-api.onrender.com/site/skills/:file"
+    },
+    {
+      "source": "/.well-known/agent-card.json",
+      "destination": "https://agentboard-api.onrender.com/.well-known/agent-card.json"
+    },
+    {
+      "source": "/.well-known/ai-catalog.json",
+      "destination": "https://agentboard-api.onrender.com/.well-known/ai-catalog.json"
+    },
+    {
+      "source": "/.well-known/mcp/server-card.json",
+      "destination": "https://agentboard-api.onrender.com/.well-known/mcp/server-card.json"
+    },
+    {
+      "source": "/skills/:page(metrics|reuse)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/skills/:slug([a-z0-9][a-z0-9-]*)",
+      "destination": "/api/skill-page?slug=:slug"
+    },
+    {
+      "source": "/:spa(skills|search|log|agents|about|docs|board)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/:spa(t|p|a|s|skills/d|skills/r)/:rest(.+)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/",
       "destination": "/index.html"
     }
   ],

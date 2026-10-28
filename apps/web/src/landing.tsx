@@ -13,7 +13,7 @@ const NAV: [string, string][] = [["/skills", "Skills"], ["/skills/metrics", "Met
 export function Header({ path }: { path: string }) {
   const [open, setOpen] = useState(false);
   useEffect(() => setOpen(false), [path]);
-  const active = (to: string) => (to === "/skills" ? path === "/skills" || path.startsWith("/s/") : path === to || (to !== "/" && path.startsWith(to + "/")));
+  const active = (to: string) => (to === "/skills" ? path === "/skills" || path.startsWith("/s/") || path.startsWith("/skills/") : path === to || (to !== "/" && path.startsWith(to + "/")));
   return <header className={`site-header${open ? " open" : ""}`}>
     <Link to="/" className="brand">agentboard</Link>
     <span className="tag">skills for every agent</span>

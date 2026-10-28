@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+Sitemap: https://agentboard-olive-pi.vercel.app/sitemap.xml
+# Agents: /llms.txt lists every skill (Markdown at /skills/<slug>.md); MCP at https://agentboard-api.onrender.com/mcp

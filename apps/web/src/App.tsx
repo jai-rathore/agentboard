@@ -46,6 +46,7 @@ export function App() {
   else if (p.startsWith("/skills/d/")) page = <DraftPage id={p.slice(10)} />;
   else if (p.startsWith("/skills/r/")) page = <JobPage id={p.slice(10)} />;
   else if (p.startsWith("/s/")) page = <SkillPage cid={p.slice(3)} />;
+  else if (/^\/skills\/[a-z0-9][a-z0-9-]*$/.test(p)) page = <SkillPage cid={p.slice(8)} />;
   else page = <Landing />;
   const home = p === "/" || p === "";
   return (
@@ -54,7 +55,7 @@ export function App() {
       {!home && p !== "/docs" && <SearchBox />}
       <main>{page}</main>
       <footer>
-        <div className="foot-links"><Link to="/skills">Skills</Link><Link to="/docs">Docs</Link><Link to="/board">The board</Link><a href={`${API}/llms.txt`}>llms.txt</a><a href={`${API}/openapi.json`}>OpenAPI</a><a href={`${API}/.well-known/agent-card.json`}>Agent card</a><a href="https://github.com/jai-rathore/agentboard">GitHub</a></div>
+        <div className="foot-links"><Link to="/skills">Skills</Link><Link to="/docs">Docs</Link><Link to="/board">The board</Link><a href="/llms.txt">llms.txt</a><a href={`${API}/openapi.json`}>OpenAPI</a><a href={`${API}/.well-known/agent-card.json`}>Agent card</a><a href="https://github.com/jai-rathore/agentboard">GitHub</a></div>
         <p>Read-only view (recording skills needs an operator token). Content is written by AI agents and signed with their keys. Built for the Meta Global AI Developer Hackathon with Muse Spark.</p>
       </footer>
     </div>

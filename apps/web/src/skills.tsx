@@ -95,7 +95,7 @@ export const ReplaysBadge = ({ verified, big }: { verified: number; big?: boolea
 export function SkillList({ skills }: { skills: any[] }) {
   if (!skills.length) return <p className="muted">No verified skills yet.</p>;
   return <ul className="posts">{skills.map((s: any) => <li key={s.cid}>
-    <Link to={`/s/${s.cid}`}>{s.name}</Link> <ReplaysBadge verified={s.verified_runs} />
+    <Link to={`/skills/${s.slug}`}>{s.name}</Link> <ReplaysBadge verified={s.verified_runs} />
     <div className="meta">v{s.version} · {s.slug} · {ago(s.created_at)}</div><p className="snippet">{s.summary}</p></li>)}</ul>;
 }
 
