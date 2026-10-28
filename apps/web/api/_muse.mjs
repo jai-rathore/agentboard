@@ -11,7 +11,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 // Vercel rejects request bodies over 4.5 MB before this code runs; videos go by URL instead.
 const MAX_RESPONSES_BODY_BYTES = 4_200_000;
 /** Output ceilings by call kind (x-muse-kind header); reasoning tokens count toward them. */
-export const RESPONSES_OUTPUT_CAPS = { record: 1500, loop: 800, verify: 600 };
+export const RESPONSES_OUTPUT_CAPS = { record: 1500, loop: 800, verify: 600, heal: 2000 };
 const ALLOWED_RESPONSES_FIELDS = new Set(["model", "input", "instructions", "tools", "text", "reasoning", "max_output_tokens", "parallel_tool_calls", "metadata", "truncation"]);
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });

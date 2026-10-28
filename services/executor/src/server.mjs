@@ -2,18 +2,22 @@
 // One replay at a time: headless Chromium (lean flags, 960x600 JPEG) driven by Muse Spark's built-in
 // computer tool, called through agentboard-api's guarded /internal/muse/responses (daily cap, USD ceiling,
 // output caps). Frames, actions and approval requests stream to the web UI over a WebSocket; committing
-// actions (submit, buy, send, delete) wait for a human. Spark verifies the final screenshot, and the run
+// actions (submit, buy, send, delete) always wait for a human. Runs started through the API (MCP run_skill)
+// arrive as jobs on POST /jobs: progress goes back to the API, and approvals wait for a human on the
+// job page (operator token), never for the agent that asked. Spark verifies the final screenshot, and the run
 // (final screenshot, GIF, action log) is posted back to the API, which signs it into the log.
 import http from "node:http";
+import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
 import { chromium } from "playwright-core";
-import { approvalFor, taskText, describeAction, playwrightKey, fill, LOOP_INSTRUCTIONS, VERIFY_SCHEMA } from "./policy.mjs";
+import { approvalFor, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL } from "./policy.mjs";
 import { makeGif } from "./gif.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
 const API = (process.env.AGENTBOARD_API || "https://agentboard-api.onrender.com").replace(/\/$/, "");
 const SECRET = process.env.SKILLS_INTERNAL_SECRET || "";
 const MAX_TURNS = Math.min(Number(process.env.MAX_TURNS || 15), 15);
+const APPROVAL_WAIT_MS = 10 * 60_000;
 const W = 960, H = 600;
 const CHROMIUM_ARGS = ["--disable-dev-shm-usage", "--no-zygote", "--single-process", "--disable-gpu", "--disable-extensions", "--disable-background-networking", "--mute-audio", "--js-flags=--max-old-space-size=128", "--renderer-process-limit=1"];
 const SELECT_TOOL = { type: "function", name: "select_option", description: "Choose an option in the native dropdown (<select>) that was just clicked or is focused. Use the visible option text.", parameters: { type: "object", properties: { option: { type: "string" } }, required: ["option"], additionalProperties: false } };
@@ -27,7 +31,21 @@ async function api(path, body, headers = {}) {
   return j;
 }
 
+const sameSecret = (h) => typeof h === "string" && SECRET.length > 0 && h.length === SECRET.length && crypto.timingSafeEqual(Buffer.from(h), Buffer.from(SECRET));
 const server = http.createServer((req, res) => {
+  if (req.method === "POST" && req.url === "/jobs") {
+    if (!sameSecret(req.headers["x-skills-secret"])) { res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" })); return; }
+    let raw = ""; req.on("data", (c) => { raw += c; if (raw.length > 10_000) req.destroy(); });
+    req.on("end", () => {
+      let b; try { b = JSON.parse(raw); } catch { b = null; }
+      if (!b?.job_id) { res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "job_id required" })); return; }
+      if (stats.busy) { res.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ error: "busy", message: "another replay is running" })); return; }
+      stats.busy = true;
+      res.writeHead(202, { "content-type": "application/json" }).end(JSON.stringify({ accepted: b.job_id }));
+      runJob(String(b.job_id)).finally(() => { stats.busy = false; });
+    });
+    return;
+  }
   if (req.url === "/healthz" || req.url === "/") {
     res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
     res.end(JSON.stringify({ ok: true, service: "agentboard-executor", api: API, configured: Boolean(SECRET), max_turns: MAX_TURNS, viewport: `${W}x${H}`, rss_mb: Math.round(process.memoryUsage().rss / 1048576), ...stats }));
@@ -68,6 +86,41 @@ wss.on("connection", (ws) => {
   });
 });
 
+/** A run requested through the API (MCP run_skill). Progress and approvals go through the job record. */
+async function runJob(id) {
+  let chain = Promise.resolve();
+  const post = (ev) => { chain = chain.then(() => api(`/internal/skills/jobs/${id}/events`, ev).catch((e) => console.error(`[job ${id}] event`, e.message))); return chain; };
+  let lastFrameAt = 0;
+  const send = (m) => {
+    if (m.type === "frame") { if (Date.now() - lastFrameAt > 1200 || m.label === "final") { lastFrameAt = Date.now(); post({ frame_b64: m.jpeg }); } }
+    else if (m.type === "status") post({ message: m.message });
+    else if (m.type === "turn") post({ turn: { turn: m.turn, say: m.say, actions: m.actions, fn: m.fn, ms: m.ms, usd: m.usage?.usd ?? 0, model: m.model, capability: m.capability } });
+    else if (m.type === "verdict") post({ verdict: { success: m.success, evidence: m.evidence, model: m.model, capability: m.capability } });
+    else if (m.type === "healing") post({ message: m.message });
+  };
+  const ask = async (req) => {
+    const aid = crypto.randomUUID();
+    await post({ status: "pending_approval", approval: { id: aid, turn: req.turn, reason: req.reason, flags: req.flags, action: req.action, element: req.element }, frame_b64: req.screenshot });
+    const until = Date.now() + APPROVAL_WAIT_MS;
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const j = await api(`/internal/skills/jobs/${id}`).catch(() => null);
+      if (j?.decision?.id === aid) { await post({ status: "running", approval: null, message: j.decision.approve ? "Approved by a human, continuing" : "Declined by a human" }); return Boolean(j.decision.approve); }
+      if (j?.status === "cancelled") break;
+    }
+    throw Object.assign(new Error(`No human approved "${req.reason}" within ${APPROVAL_WAIT_MS / 60000} minutes`), { code: "expired" });
+  };
+  try {
+    const job = await api(`/internal/skills/jobs/${id}`);
+    await post({ status: "running", message: "Executor picked up the run" });
+    const result = await replay({ skill_cid: job.skill_cid, start_url: job.start_url, params: job.params, job_id: id }, send, ask, () => false);
+    await post({ status: "completed", result });
+  } catch (e) {
+    await post({ status: e.code === "declined" ? "declined" : e.code === "expired" ? "expired" : "failed", message: `${e.code || "error"}: ${e.message}`.slice(0, 500) });
+  }
+  await chain;
+}
+
 async function loadTarget(m) {
   if (m.draft_id) { const d = await api(`/v1/skills/drafts/${encodeURIComponent(m.draft_id)}`); return { skill: d.skill, start_url: m.start_url || d.source.start_url || d.skill.start_url_hint, target: { draft_id: d.id } }; }
   if (m.skill_cid) { const s = await api(`/v1/skills/${encodeURIComponent(m.skill_cid)}`); const b = s.skill.record.body; return { skill: b.skill, start_url: m.start_url || b.source.start_url, target: { skill_cid: m.skill_cid } }; }
@@ -81,12 +134,20 @@ async function replay(m, send, ask, isAborted) {
   const params = Object.fromEntries(skill.params.map((p) => [p.name, String(m.params?.[p.name] ?? p.example)]));
   const usage = { calls: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, usd: 0 };
   const addUsage = (u) => { usage.calls++; for (const k of ["input_tokens", "cached_tokens", "output_tokens", "usd"]) usage[k] += u[k] || 0; send({ type: "usage", usage }); };
-  const actions = [], history = [], gifFrames = [];
+  const actions = [], history = [], gifFrames = [], stepChanges = [];
+  let humanMs = 0;
+  const origin = new URL(start_url).origin;
   stats.runs++;
   send({ type: "status", message: `Launching Chromium for "${skill.name}"`, params, start_url });
   const browser = await chromium.launch({ args: CHROMIUM_ARGS });
   try {
     const page = await (await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 })).newPage();
+    // Stay on the skill's site: top-level navigations to another origin are blocked.
+    await page.route("**/*", (route) => {
+      const r = route.request();
+      if (r.isNavigationRequest() && r.frame() === page.mainFrame() && new URL(r.url()).origin !== origin) { actions.push({ turn: -1, type: "blocked", detail: `navigation to ${new URL(r.url()).origin} blocked (off-site)`, approval: "none", checks: [] }); return route.abort("blockedbyclient"); }
+      return route.continue();
+    });
     await page.goto(start_url, { waitUntil: "load", timeout: 45_000 });
     actions.push({ turn: 0, type: "navigate", detail: start_url.slice(0, 300), approval: "auto", checks: [] });
     let lastSelect = null, finalMessage = "", turn = 0;
@@ -104,14 +165,24 @@ async function replay(m, send, ask, isAborted) {
         { type: "input_text", text: `${taskText(skill, params)}\n\nDone so far:\n${history.slice(-12).join("\n") || "(nothing yet)"}${note}\n\nCurrent screenshot (turn ${turn} of ${MAX_TURNS}):` },
         { type: "input_image", image_url: `data:image/jpeg;base64,${jpg.toString("base64")}` },
       ] }];
-      const r = await api("/internal/muse/responses", { instructions: LOOP_INSTRUCTIONS, tools: [{ type: "computer" }, SELECT_TOOL], reasoning: { effort: "minimal" }, max_output_tokens: 800, input }, { "x-muse-kind": "loop" });
+      const r = await api("/internal/muse/responses", { instructions: LOOP_INSTRUCTIONS, tools: [{ type: "computer" }, SELECT_TOOL, STEP_TOOL], reasoning: { effort: "minimal" }, max_output_tokens: 800, input }, { "x-muse-kind": "loop" });
       addUsage(r.usage);
       const out = r.response.output ?? [];
       const say = out.filter((o) => o.type === "message").flatMap((o) => o.content ?? []).map((c) => c.text ?? "").join(" ").trim();
       const call = out.find((o) => o.type === "computer_call");
-      const fn = out.find((o) => o.type === "function_call" && o.name === "select_option");
-      send({ type: "turn", turn, model: r.model, capability: "computer use (built-in computer tool) + image understanding", say, actions: call?.actions ?? [], fn: fn ? { name: fn.name, arguments: fn.arguments } : null, ms: r.ms, usage: r.usage });
-      if (!call && !fn) { finalMessage = say; history.push(`turn ${turn}: finished: ${say.slice(0, 200)}`); break; }
+      const fns = out.filter((o) => o.type === "function_call");
+      const fn = fns.find((o) => o.name === "select_option");
+      for (const f of fns.filter((o) => o.name === "report_step_change")) {
+        let a = {}; try { a = JSON.parse(f.arguments || "{}"); } catch {}
+        const step = Number(a.step), observed = String(a.observed ?? "").slice(0, 300);
+        if (step >= 1 && step <= skill.steps.length && observed && !stepChanges.some((c) => c.step === step)) {
+          stepChanges.push({ step, observed, turn });
+          history.push(`turn ${turn}: noted that step ${step} changed: ${observed.slice(0, 120)}`);
+          send({ type: "status", message: `Spark noticed step ${step} changed: ${observed.slice(0, 120)}` });
+        }
+      }
+      send({ type: "turn", turn, model: r.model, capability: "computer use (built-in computer tool) + image understanding", say, actions: call?.actions ?? [], fn: fns.length ? { name: fns.map((f) => f.name).join("+"), arguments: fns.map((f) => f.arguments).join(" ") } : null, ms: r.ms, usage: r.usage });
+      if (!call && !fns.length) { finalMessage = say; history.push(`turn ${turn}: finished: ${say.slice(0, 200)}`); break; }
       if (say) history.push(`turn ${turn}: ${say.slice(0, 160)}`);
       lastSelect = null;
       if (fn) {
@@ -124,21 +195,25 @@ async function replay(m, send, ask, isAborted) {
           el.value = match.value; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
           return match.text;
         }, opt);
-        actions.push({ turn, type: "select_option", detail: done ? `selected "${done}"` : `no option "${opt.slice(0, 60)}"`, approval: "auto", checks: [] });
+        const selName = await page.evaluate(() => { const el = document.activeElement?.tagName === "SELECT" ? document.activeElement : window.__abLastSelect; if (!el) return ""; const l = el.labels?.[0] ?? el.closest("label"); return (l?.innerText ?? el.getAttribute("aria-label") ?? "").split("\n")[0].trim().slice(0, 80); }).catch(() => "");
+        actions.push({ turn, type: "select_option", detail: done ? `selected "${done}"` : `no option "${opt.slice(0, 60)}"`, approval: "auto", checks: [], target: selName || undefined });
         history.push(`turn ${turn}: select_option "${opt}" -> ${done ? "ok" : "not found"}`);
       }
       const checks = (call?.pending_safety_checks ?? []).map((c) => c.code);
       for (const a of call?.actions ?? []) {
         const el = await inspect(page, a);
-        const p = approvalFor(a, el, skill.risk_flags, checks);
-        let approval = p.approval === "human" ? "human" : "auto";
+        const p = approvalFor(a, el, skill, checks);
+        const detail = `${describeAction(a)}${el ? ` on ${el.tag} "${(nameOf(el) || el.value || "").slice(0, 40)}"` : ""}`.slice(0, 300);
+        const target = nameOf(el) || undefined;
         if (p.approval === "human") {
           send({ type: "status", message: `Waiting for approval: ${p.reason}` });
-          const ok = await ask({ turn, action: a, element: el, reason: p.reason, screenshot: (await page.screenshot({ type: "jpeg", quality: 70 })).toString("base64") });
-          actions.push({ turn, type: a.type, detail: `${describeAction(a)}${el ? ` on ${el.tag} "${(el.text || el.value || "").slice(0, 40)}"` : ""}`.slice(0, 300), approval: ok ? "human" : "none", checks: checks.slice(0, 5) });
-          if (!ok) throw Object.assign(new Error(`Declined by the operator: ${p.reason}`), { code: "declined" });
-        } else actions.push({ turn, type: a.type, detail: `${describeAction(a)}${el ? ` on ${el.tag} "${(el.text || el.value || "").slice(0, 40)}"` : ""}`.slice(0, 300), approval, checks: checks.slice(0, 5) });
-        history.push(`turn ${turn}: ${describeAction(a)}${el ? ` on ${el.tag} "${(el.text || el.value || el.placeholder || "").slice(0, 40)}"` : ""}`);
+          const asked = Date.now();
+          const ok = await ask({ turn, action: a, element: el, reason: p.reason, flags: p.flags, screenshot: (await page.screenshot({ type: "jpeg", quality: 70 })).toString("base64") });
+          humanMs += Math.min(Date.now() - asked, 30_000);
+          actions.push({ turn, type: a.type, detail, approval: ok ? "human" : "none", checks: checks.slice(0, 5), target, flags: p.flags });
+          if (!ok) throw Object.assign(new Error(`Declined by a human: ${p.reason}`), { code: "declined" });
+        } else actions.push({ turn, type: a.type, detail, approval: "auto", checks: checks.slice(0, 5), target });
+        history.push(`turn ${turn}: ${describeAction(a)}${el ? ` on ${el.tag} "${(nameOf(el) || el.value || "").slice(0, 40)}"` : ""}`);
         await execute(page, a);
         if (el?.tag === "select") lastSelect = el;
         await page.waitForTimeout(250);
@@ -161,11 +236,14 @@ async function replay(m, send, ask, isAborted) {
     send({ type: "verdict", ...verdictFull, final_message: finalMessage });
     const gif = makeGif(gifFrames);
     const run = {
-      ...target, start_url, params, success: verdictFull.success, verdict: verdictFull, turns: Math.min(turn, MAX_TURNS), actions: actions.slice(0, 200), usage, model: v.model,
+      ...target, ...(m.job_id ? { job_id: m.job_id } : {}), start_url, params, success: verdictFull.success, step_changes: stepChanges, human_ms: humanMs, verdict: verdictFull, turns: Math.min(turn, MAX_TURNS), actions: actions.slice(0, 200), usage, model: v.model,
       final_jpeg_b64: finalJpg.toString("base64"), gif_b64: gif.toString("base64"),
       executor: { name: "agentboard-executor", chromium: `headless-shell ${browser.version()}`, viewport: `${W}x${H}` }, duration_ms: Date.now() - t0,
     };
+    if (verdictFull.success && target.skill_cid) send({ type: "status", message: "Verified. Checking whether the skill's steps still match the site…" });
     const published = await api("/internal/skills/runs", run);
+    if (published.healed) send({ type: "healing", message: `Self-healed: published v${published.healed.version} with ${published.healed.changes.length} step change(s)`, healed: published.healed });
+    else if (verdictFull.success && target.skill_cid) send({ type: "healing", message: published.drift?.stale_steps?.length || published.drift?.reported?.length ? "Verified, but the site drifted and the skill could not be healed automatically" : "Verified: the skill's steps still match the site" });
     verdictFull.success ? stats.succeeded++ : stats.failed++;
     stats.last = { at: new Date().toISOString(), success: verdictFull.success, turns: run.turns, usd: Math.round(usage.usd * 1e6) / 1e6 };
     return { ...published, verdict: verdictFull, turns: run.turns, usage, duration_ms: run.duration_ms };
@@ -180,7 +258,7 @@ async function replay(m, send, ask, isAborted) {
 /** What is under the pointer (or focused, for keys): used by the approval policy and the select_option helper. */
 async function inspect(page, a) {
   return page.evaluate(({ a }) => {
-    let el = (a.type === "click" || a.type === "double_click") ? document.elementFromPoint(a.x, a.y) : (a.type === "keypress" ? document.activeElement : null);
+    let el = (a.type === "click" || a.type === "double_click") ? document.elementFromPoint(a.x, a.y) : (a.type === "keypress" || a.type === "type" ? document.activeElement : null);
     if (!el || el === document.body) return null;
     const btn = el.closest("button, a, [role=button], input, select, textarea, label");
     if (btn?.tagName === "LABEL") el = btn.querySelector("input, select, textarea") ?? btn; else if (btn) el = btn;
@@ -188,6 +266,7 @@ async function inspect(page, a) {
     return {
       tag: el.tagName.toLowerCase(), type: el.getAttribute("type") ?? "", role: el.getAttribute("role") ?? "",
       text: (el.innerText ?? "").trim().slice(0, 80), value: (el.tagName === "SELECT" ? el.options[el.selectedIndex]?.text : el.value ?? "")?.toString().slice(0, 80) ?? "",
+      label: ((el.labels?.[0] ?? el.closest("label"))?.innerText ?? "").split("\n")[0].trim().slice(0, 80),
       aria: el.getAttribute("aria-label") ?? "", placeholder: el.getAttribute("placeholder") ?? "", inForm: Boolean(el.closest("form")),
       options: el.tagName === "SELECT" ? [...el.options].map((o) => o.text).slice(0, 30) : undefined,
     };

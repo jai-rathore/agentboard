@@ -2,7 +2,7 @@
 // Record (video/screenshots -> Muse Spark -> strict-JSON skill), replay live in the executor (Muse Spark's
 // computer tool driving headless Chromium), and read published, node-signed skills with their evidence.
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { verifyRecord, entryHash, type SignedRecord } from "@agentboard/core";
+import { verifyRecord, entryHash, gatedSteps, effectiveRiskFlags, FLAG_LABELS, GATED_FLAGS, type SignedRecord } from "@agentboard/core";
 import { API, EXECUTOR_WS, operatorFetch } from "./api";
 import { Link, useData, short, ago, MODEL_NAMES } from "./App";
 
@@ -23,20 +23,57 @@ export function ModelCall({ model, capability, extra }: { model?: string; capabi
 }
 const usd = (x?: number) => (typeof x === "number" ? `$${x.toFixed(4)}` : "");
 
+const GATED = GATED_FLAGS as readonly string[];
 function RiskFlags({ flags }: { flags: string[] }) {
-  return <span className="risk">{flags.filter((f) => f !== "none").map((f) => <span key={f} className={`flag ${["submits_form", "sends_message", "purchase", "deletes_data"].includes(f) ? "gated" : ""}`}>{f.replace("_", " ")}</span>)}{!flags.some((f) => f !== "none") && <span className="flag">no risk flags</span>}</span>;
+  const real = flags.filter((f) => f !== "none");
+  return <span className="risk">{real.map((f) => <span key={f} className={`flag ${GATED.includes(f) ? "gated" : ""}`} title={FLAG_LABELS[f]}>{GATED.includes(f) ? "⚠ " : ""}{f.replace("_", " ")}</span>)}{!real.length && <span className="flag">no risk flags</span>}</span>;
 }
 
-export function SkillView({ skill }: { skill: any }) {
+/** What will pause for a human, stated plainly. Flags come from the recorder AND from the steps' own words. */
+export function Safety({ skill }: { skill: any }) {
+  const gated = gatedSteps(skill);
+  const flags = effectiveRiskFlags(skill);
+  const inferred = flags.filter((f) => f !== "none" && !(skill.risk_flags ?? []).includes(f));
+  return <div className={`safety ${gated.length ? "gated" : ""}`}>
+    <div><b>Safety</b> <RiskFlags flags={flags} />{inferred.length > 0 && <span className="muted small"> ({inferred.map((f) => f.replace("_", " ")).join(", ")} inferred from the steps)</span>}</div>
+    {gated.length ? <ul>{gated.map((g) => <li key={g.index}>🔒 Step {g.index + 1}, <b>{skill.steps[g.index].intent}</b>: {g.flags.map((f) => FLAG_LABELS[f]).join(", ")}. <b>Always waits for a human to approve</b>, in the web replay and through MCP <code>run_skill</code>.</li>)}</ul>
+      : <p className="small muted">No step submits, buys, sends or deletes. The executor still stops for a human if a click lands on any such button.</p>}
+  </div>;
+}
+
+export function SkillView({ skill, diff }: { skill: any; diff?: any[] }) {
+  const gated = new Set(gatedSteps(skill).map((g) => g.index));
   return <div className="skill-view">
     <p className="summary">{skill.summary}</p>
-    <div className="meta">Risk: <RiskFlags flags={skill.risk_flags} /> <span className="muted small">(submit / buy / send / delete clicks wait for a human)</span></div>
+    <Safety skill={skill} />
     <h2>Parameters</h2>
     <table className="tbl"><tbody>{skill.params.map((p: any) => <tr key={p.name}><td className="mono">{`{{${p.name}}}`}</td><td>{p.description}</td><td className="muted">e.g. {p.example}</td></tr>)}</tbody></table>
     <h2>Steps</h2>
-    <ol className="steps">{skill.steps.map((s: any, i: number) => <li key={i}><b>{s.intent}</b> <span className="act">{s.action}</span> <span className="muted">{s.target}</span>{s.value && <code>{s.value}</code>}</li>)}</ol>
+    <ol className="steps">{skill.steps.map((s: any, i: number) => <li key={i} className={diff?.[i] ? "changed" : ""}>{gated.has(i) && <span className="lock" title="waits for human approval">🔒</span>}<b>{s.intent}</b> <span className="act">{s.action}</span> <span className="muted">{s.target}</span>{s.value && <code>{s.value}</code>}{diff?.[i] && <span className="healed-tag">healed</span>}</li>)}</ol>
     <h2>Success check</h2><p>{skill.success_check}</p>
   </div>;
+}
+
+export const fmtDur = (ms?: number | null) => (ms == null ? "n/a" : ms < 60000 ? `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s` : `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")} min`);
+
+function TimeSaved({ t }: { t: any }) {
+  if (!t) return null;
+  if (t.recording_ms == null) return <span className="small muted">Recorded from screenshots, so there is no clock to compare against.</span>;
+  return <span className="time"><b>⏱ Saves ~{fmtDur(t.saved_ms)} of human time</b> <span className="muted small">(recording {fmtDur(t.recording_ms)} − {t.human_approvals} approval{t.human_approvals === 1 ? "" : "s"} × ~5 s; the agent took {fmtDur(t.run_ms)} unattended)</span></span>;
+}
+
+/** Field-by-field diff between two versions' steps, plus Spark's stated reasons. */
+function StepDiff({ before, after, changes }: { before: any; after: any; changes: any[] }) {
+  const n = Math.max(before.steps.length, after.steps.length);
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    const a = before.steps[i], b = after.steps[i];
+    const fields = ["intent", "target", "action", "value"].filter((f) => (a?.[f] ?? "") !== (b?.[f] ?? ""));
+    if (!fields.length) continue;
+    rows.push(<tr key={i}><td>step {i + 1}</td><td>{fields.map((f) => <div key={f}><span className="muted small">{f}</span> <del>{a?.[f] ?? "(none)"}</del> → <ins>{b?.[f] ?? "(removed)"}</ins></div>)}</td><td className="small muted">{changes.filter((c) => c.step === i + 1).map((c) => c.reason).join("; ")}</td></tr>);
+  }
+  if (before.success_check !== after.success_check) rows.push(<tr key="sc"><td>success check</td><td><del>{before.success_check}</del> → <ins>{after.success_check}</ins></td><td /></tr>);
+  return rows.length ? <table className="tbl diff"><tbody>{rows}</tbody></table> : <p className="muted small">No step changes.</p>;
 }
 
 // ---------------------------------------------------------------- list + record
@@ -188,6 +225,7 @@ function ReplayPanel({ target, skill, startUrl }: { target: { draft_id?: string;
       else if (m.type === "usage") setUsage(m.usage);
       else if (m.type === "approval_request") { setApproval(m); setStatus("Waiting for your approval…"); }
       else if (m.type === "verdict") setVerdict(m);
+      else if (m.type === "healing") setStatus(m.message);
       else if (m.type === "done") { setResult(m.result); setStatus(`Done: ${m.result.status.replace(/_/g, " ")}`); }
       else if (m.type === "error") setErr(`${m.error}: ${m.message}`);
     };
@@ -197,6 +235,7 @@ function ReplayPanel({ target, skill, startUrl }: { target: { draft_id?: string;
     {!frame && <div className="params">
       {skill.params.map((p: any) => <label key={p.name}>{p.name}<input value={params[p.name] ?? ""} onChange={(e) => setParams({ ...params, [p.name]: e.target.value })} /></label>)}
       <label>Start URL<input value={url} onChange={(e) => setUrl(e.target.value)} /></label>
+      {/\/demo\/helpdesk\//.test(url) && <div className="small muted">Demo layout: <a href="#" onClick={(e) => { e.preventDefault(); setUrl(url.replace(/\?.*$/, "")); }}>classic</a> · <a href="#" onClick={(e) => { e.preventDefault(); setUrl(url.replace(/\?.*$/, "") + "?v=2"); }}>redesigned (?v=2, shows self-healing)</a></div>}
       <label>Operator token<input type="password" value={token} onChange={(e) => setToken(e.target.value)} /></label>
       <button disabled={!token} onClick={start}>Replay &amp; verify</button>
     </div>}
@@ -213,8 +252,65 @@ function ReplayPanel({ target, skill, startUrl }: { target: { draft_id?: string;
       <div>{t.say}</div>
       <div className="mono small">{t.actions.map((a) => JSON.stringify(a)).join(" ")}{t.fn ? ` ${t.fn.name}(${t.fn.arguments})` : ""}</div></li>)}</ol>}
     {verdict && <div className={`verdict-box ${verdict.success ? "good" : "badv"}`}><ModelCall model={verdict.model} capability={`verified with ${verdict.capability}`} /><p>{verdict.success ? "✓ Success" : "✗ Not verified"}: {verdict.evidence}</p></div>}
-    {result?.skill_cid && <p><Link to={`/s/${result.skill_cid}`}>→ {result.status === "published" ? "Published skill" : "Skill page"}</Link> · log #{result.run_seq}</p>}
+    <RunResult result={result} />
   </div>;
+}
+
+function RunResult({ result }: { result: any }) {
+  if (!result?.skill_cid) return null;
+  return <div className="run-result">
+    <p><Link to={`/s/${result.skill_cid}`}>→ {result.status === "published" ? "Published skill" : "Skill page"}</Link> · run record log #{result.run_seq}</p>
+    {result.time && <p><TimeSaved t={result.time} /></p>}
+    {result.drift?.stale_steps?.length > 0 && !result.healed && <p className="small muted">Steps {result.drift.stale_steps.join(", ")} no longer matched the site{result.drift.error ? ` (healing failed: ${result.drift.error})` : " (only the latest version heals)"}.</p>}
+    {result.healed && <div className="healed-box">🩹 <b>Self-healed.</b> The site changed, so Spark rewrote {result.healed.changes.length} step field{result.healed.changes.length === 1 ? "" : "s"} and the node published <Link to={`/s/${result.healed.cid}`}>v{result.healed.version}</Link> (log #{result.healed.seq}), linked to this run.</div>}
+  </div>;
+}
+
+// ---------------------------------------------------------------- runs started through MCP (run_skill)
+
+export function JobPage({ id }: { id: string }) {
+  const [job, setJob] = useState<any>(null), [err, setErr] = useState("");
+  const [token, setToken] = useToken();
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let stop = false;
+    const tick = async () => {
+      try { const r = await fetch(`${API}/v1/skills/jobs/${id}`, { cache: "no-store" }); const j = await r.json(); if (!r.ok) throw new Error(j.message ?? `HTTP ${r.status}`); if (!stop) setJob(j); if (["completed", "failed", "declined", "expired", "cancelled"].includes(j.status)) return; }
+      catch (e) { if (!stop) setErr((e as Error).message); }
+      if (!stop) setTimeout(tick, 1500);
+    };
+    tick();
+    return () => { stop = true; };
+  }, [id]);
+  const decide = async (approve: boolean) => {
+    setBusy(true); setErr("");
+    try { await operatorFetch(`/v1/skills/jobs/${id}/decision`, { method: "POST", token, headers: { "content-type": "application/json" }, body: JSON.stringify({ approval_id: job.approval.id, approve }) }); }
+    catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  if (!job) return err ? <p className="err">{err}</p> : <p className="muted">Loading…</p>;
+  const res = job.result;
+  return <article>
+    <div className="crumbs"><Link to="/skills">skills</Link> / run</div>
+    <h1>Skill run <span className={`draft-tag st-${job.status}`}>{job.status.replace("_", " ")}</span></h1>
+    <div className="meta">requested by {job.via === "agent" ? "an agent (signed, paid in credits)" : "the operator"} through MCP <code>run_skill</code> · <Link to={`/s/${job.skill_cid}`}>skill</Link> · started {ago(job.created_at)}</div>
+    <p className="small mono">{Object.entries(job.params).map(([k, v]) => `${k}=${v}`).join(" · ")} · {job.start_url}</p>
+    {job.status === "pending_approval" && job.approval && <div className="approval big">
+      <b>⏸ A human must approve this step.</b> <span>{job.approval.reason}</span>
+      <p className="small muted">The agent that asked for this run cannot approve it. Only someone with the operator token can, here.</p>
+      <label>Operator token<input type="password" value={token} onChange={(e) => setToken(e.target.value)} /></label>
+      <div><button disabled={!token || busy} onClick={() => decide(true)}>Approve</button> <button className="secondary" disabled={!token || busy} onClick={() => decide(false)}>Decline</button></div>
+    </div>}
+    {job.message && <p className="muted small">{job.message}</p>}
+    {err && <p className="err small">{err}</p>}
+    <div className="sbs">
+      <div>{job.frame_url ? <img className="media live" src={job.frame_url} alt="executor browser" /> : <p className="muted">Waiting for the first frame…</p>}</div>
+      <div>
+        {job.verdict && <div className={`verdict-box ${job.verdict.success ? "good" : "badv"}`}><ModelCall model={job.verdict.model} capability={`verified with ${job.verdict.capability}`} /><p>{job.verdict.success ? "✓ Success" : "✗ Not verified"}: {job.verdict.evidence}</p></div>}
+        <RunResult result={res} />
+        {job.turns.length > 0 && <ol className="turns">{job.turns.map((t: any) => <li key={t.turn}><ModelCall model={t.model} capability={t.capability ?? "computer use"} extra={<>{t.ms} ms · {usd(t.usd)}</>} /><div>{t.say}</div><div className="mono small">{(t.actions ?? []).map((a: any) => JSON.stringify(a)).join(" ")}{t.fn ? ` ${t.fn.name}(${t.fn.arguments})` : ""}</div></li>)}</ol>}
+      </div>
+    </div>
+  </article>;
 }
 
 // ---------------------------------------------------------------- published skill
@@ -245,36 +341,52 @@ export function SkillPage({ cid }: { cid: string }) {
   const r = useData<any>(`/v1/skills/${cid}`, [cid]);
   if (r.loading) return <p className="muted">Loading…</p>;
   if (r.error) return <p className="err">{r.error}</p>;
-  const { skill, versions, runs, badge, version, latest_version, node } = r.data;
+  const { skill, versions, runs, badge, version, latest_version, latest_cid, node, prev_skill, heal_run, time } = r.data;
   const b = skill.record.body;
-  const last = runs.find((x: any) => x.record.body.success) ?? runs[0];
+  const hf = b.healed_from;
+  const last = runs.find((x: any) => x.record.body.success) ?? runs[0] ?? heal_run;
   const lb = last?.record.body;
+  const diffIdx = prev_skill && hf ? b.skill.steps.map((st: any, i: number) => JSON.stringify(st) !== JSON.stringify(prev_skill.skill.steps[i])) : undefined;
   return <article>
     <div className="crumbs"><Link to="/skills">skills</Link> / {b.slug}</div>
-    <h1>{b.skill.name} {badge.verified && <span className="badge big">✓ verified, replayed {badge.replayed}×</span>}</h1>
-    <div className="meta">v{version}{version !== latest_version && <> · <b>newer version v{latest_version} exists</b></>} · published {ago(skill.record.created_at)} · log #{skill.seq} · signed by node <span className="mono">{short(node)}</span></div>
+    <h1>{b.skill.name} {badge.verified && <span className="badge big">✓ verified, replayed {badge.replayed}×</span>}{hf && <span className="badge big heal">🩹 self-healed</span>}</h1>
+    {version !== latest_version && <div className="superseded">This is v{version}. <Link to={`/s/${latest_cid}`}>v{latest_version} is the current version →</Link></div>}
+    <div className="meta">v{version} · published {ago(skill.record.created_at)} · log #{skill.seq} · signed by node <span className="mono">{short(node)}</span></div>
     <div className="calls">
       <ModelCall model={b.recorder.model} capability={`recorded with ${b.recorder.capability}`} extra={usd(b.recorder.usage?.usd)} />
       {lb && <ModelCall model={lb.loop.model} capability={`replayed with ${lb.loop.capability}`} extra={`${lb.turns} turns · ${usd(lb.usage.usd)}`} />}
       {lb && <ModelCall model={lb.verdict.model} capability={`verified with ${lb.verdict.capability}`} />}
+      {hf && <ModelCall model={hf.model} capability={hf.capability} extra={usd(hf.usage?.usd)} />}
     </div>
+    {time && <p className="time-line">{time.recording_ms != null ? <>Shown once in <b>{fmtDur(time.recording_ms)}</b>. Each replay needs ~5 s of human time per approval. Saved so far: <b>{fmtDur(time.saved_total_ms)}</b> over {time.verified_runs} verified replay{time.verified_runs === 1 ? "" : "s"} of this version.</> : <span className="muted">Recorded from screenshots (no clock to compare against).</span>}</p>}
+    {hf && prev_skill && <div className="healed-box">
+      <b>🩹 Self-healed from <Link to={`/s/${hf.skill}`}>v{prev_skill.version}</Link></b> after {heal_run ? <>run log #{heal_run.seq}</> : "a verified run"} on {heal_run?.record.body.start_url}: steps {hf.stale_steps.join(", ")} no longer matched the site{hf.reported?.length ? `, and the agent reported: ${hf.reported.map((x: any) => `step ${x.step}: ${x.observed}`).join("; ")}` : ""}. Spark re-read the screen and rewrote them; the run's final screenshot verified the result.
+      <StepDiff before={prev_skill.skill} after={b.skill} changes={hf.changes} />
+      {hf.reasoning_summary && <div className="reasoning"><b>Muse's reasoning summary (healing)</b><p>{hf.reasoning_summary}</p></div>}
+    </div>}
     {b.recorder.reasoning_summary && <div className="reasoning"><b>Muse's reasoning summary (recording)</b><p>{b.recorder.reasoning_summary}</p></div>}
     <div className="sbs">
       <div><h2>Shown once (source)</h2><Source source={b.source} /></div>
       <div><h2>Replayed by an agent</h2>{lb?.evidence.gif ? <img className="media" src={art(lb.evidence.gif)} alt="replay GIF" /> : <p className="muted">No replay yet.</p>}
-        {lb && <p className="small">{lb.success ? "✓" : "✗"} {lb.verdict.evidence} <a href={art(lb.evidence.final_screenshot)} target="_blank" rel="noreferrer">final screenshot</a></p>}</div>
+        {lb && <p className="small">{lb.success ? "✓" : "✗"} {lb.verdict.evidence} <a href={art(lb.evidence.final_screenshot)} target="_blank" rel="noreferrer">final screenshot</a>{last === heal_run && " (the run that healed this version)"}</p>}</div>
     </div>
-    <SkillView skill={b.skill} />
+    <SkillView skill={b.skill} diff={diffIdx} />
+    <h2>Use it from an agent</h2>
+    <pre className="mono small code-block">{`claude mcp add agentboard -- npx -y github:jai-rathore/agentboard
+# then, in Claude Code or Cursor:
+find_skill({ query: "${b.skill.name.toLowerCase()}" })
+run_skill({ skill: "${b.slug}", params: ${JSON.stringify(Object.fromEntries(b.skill.params.map((p: any) => [p.name, p.example])))} })`}</pre>
+    <p className="small muted">Runs from MCP pause at 🔒 steps with status <code>pending_approval</code> and a link to a page like this one, where a human approves. The agent never approves its own submit, buy, send or delete.</p>
     <h2>Replays ({runs.length})</h2>
-    <table className="tbl"><thead><tr><th></th><th>params</th><th>turns</th><th>approvals</th><th>cost</th><th>when</th></tr></thead><tbody>
-      {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td>{rb.success ? "✓" : "✗"}</td><td className="small mono">{Object.values(rb.params).join(" · ").slice(0, 80)}</td><td>{rb.turns}</td><td className="small">{rb.actions.filter((a: any) => a.approval === "human").length} human</td><td>{usd(rb.usage.usd)}</td><td className="small">{ago(x.record.created_at)} · #{x.seq}{rb.evidence.gif && <> · <a href={art(rb.evidence.gif)} target="_blank" rel="noreferrer">GIF</a></>}</td></tr>; })}
+    <table className="tbl"><thead><tr><th></th><th>params</th><th>turns</th><th>approvals</th><th>human time saved</th><th>cost</th><th>when</th></tr></thead><tbody>
+      {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td>{rb.success ? "✓" : "✗"}{rb.drift?.healed && " 🩹"}</td><td className="small mono">{Object.values(rb.params).join(" · ").slice(0, 80)}{/[?&]v=2/.test(rb.start_url) && " · redesigned site"}</td><td>{rb.turns}</td><td className="small">{rb.actions.filter((a: any) => a.approval === "human").length} human</td><td className="small">{rb.success && rb.time ? fmtDur(rb.time.saved_ms) : ""}</td><td>{usd(rb.usage.usd)}</td><td className="small">{ago(x.record.created_at)} · #{x.seq}{rb.evidence.gif && <> · <a href={art(rb.evidence.gif)} target="_blank" rel="noreferrer">GIF</a></>}</td></tr>; })}
     </tbody></table>
     <h2>Version history</h2>
     <ul className="tree">{versions.map((v: any) => <li key={v.cid}>{v.cid === cid ? <b>v{v.version}</b> : <Link to={`/s/${v.cid}`}>v{v.version}</Link>} <span className="muted small">{ago(v.created_at)} · {v.cid.slice(0, 20)}…</span></li>)}</ul>
     <h2>Signatures</h2>
     <p className="muted small">The skill and every replay are records signed by the node's Ed25519 key, hash-chained into the public log. Evidence files are content-addressed: the signed record holds their sha256.</p>
-    <SignatureCheck entries={[skill, ...runs]} />
+    <SignatureCheck entries={[skill, ...(heal_run && !runs.some((x: any) => x.record.cid === heal_run.record.cid) ? [heal_run] : []), ...runs]} />
     <h2>Replay it</h2>
-    <ReplayPanel target={{ skill_cid: cid }} skill={b.skill} startUrl={b.source.start_url} />
+    <ReplayPanel target={{ skill_cid: cid }} skill={b.skill} startUrl={heal_run?.record.body.start_url ?? b.source.start_url} />
   </article>;
 }

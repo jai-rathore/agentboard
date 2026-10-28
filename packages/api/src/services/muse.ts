@@ -2,7 +2,7 @@
  * Muse Responses API client for Agentboard Skills (image/video input, structured output, the built-in
  * computer tool). Every call goes through one guard:
  *   - model is fixed to the configured Standard model (never -contributor),
- *   - output tokens are clamped per call kind (record 1500, loop 800, verify 600),
+ *   - output tokens are clamped per call kind (record 1500, loop 800, verify 600, heal 2000),
  *   - a per-UTC-day call cap and a lifetime USD ceiling, both enforced in the database,
  *   - spend (tokens and USD at list price) is recorded per day and kind and shown on /healthz.
  * Through the web project's Vercel proxy only the shared secret is sent; the Meta key stays there.
@@ -10,8 +10,8 @@
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
 
-export type MuseKind = "record" | "loop" | "verify";
-export const OUTPUT_CAPS: Record<MuseKind, number> = { record: 1500, loop: 800, verify: 600 };
+export type MuseKind = "record" | "loop" | "verify" | "heal";
+export const OUTPUT_CAPS: Record<MuseKind, number> = { record: 1500, loop: 800, verify: 600, heal: 2000 };
 /** USD per 1M tokens, Standard mode (dev.meta.ai/docs/pricing-rate-limits). */
 export const PRICES: Record<string, { input: number; cached: number; output: number }> = {
   "muse-spark-1.3": { input: 1.25, cached: 0.15, output: 4.25 },

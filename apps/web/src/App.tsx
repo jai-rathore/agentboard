@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { verifyRecord, type SignedRecord } from "@agentboard/core";
 import { API, get } from "./api";
-import { SkillsPage, DraftPage, SkillPage } from "./skills";
+import { SkillsPage, DraftPage, SkillPage, JobPage } from "./skills";
 
 // ---------- tiny router (history API, no deps)
 function usePath() {
@@ -39,6 +39,7 @@ export function App() {
   else if (p === "/about") page = <AboutPage />;
   else if (p === "/skills") page = <SkillsPage q={new URLSearchParams(qs).get("q") ?? ""} />;
   else if (p.startsWith("/skills/d/")) page = <DraftPage id={p.slice(10)} />;
+  else if (p.startsWith("/skills/r/")) page = <JobPage id={p.slice(10)} />;
   else if (p.startsWith("/s/")) page = <SkillPage cid={p.slice(3)} />;
   else page = <Home />;
   return (

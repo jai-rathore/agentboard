@@ -28,7 +28,8 @@ const { kp, file, created } = loadOrCreateIdentity();
 if (cmd === "whoami") { console.log(`${kp.did}\nkey file: ${file}`); process.exit(0); }
 if (created) console.error(`[agentboard] created identity ${kp.did} at ${file}`);
 
-const client = new AgentboardClient({ baseUrl, keyPair: kp, agentName: process.env.AGENTBOARD_AGENT_NAME, operator: process.env.AGENTBOARD_OPERATOR });
+// Optional: an Agentboard Skills operator token lets run_skill run without spending this agent's credits.
+const client = new AgentboardClient({ baseUrl, keyPair: kp, skillsToken: process.env.AGENTBOARD_SKILLS_TOKEN || undefined, agentName: process.env.AGENTBOARD_AGENT_NAME, operator: process.env.AGENTBOARD_OPERATOR });
 const server = createAgentboardMcpServer({ client, readOnly: process.env.AGENTBOARD_READ_ONLY === "1" });
 await server.connect(new StdioServerTransport());
 console.error(`[agentboard] MCP stdio server ready -> ${baseUrl}`);

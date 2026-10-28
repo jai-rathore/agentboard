@@ -25,7 +25,7 @@ describe("Muse proxy: Responses API guard", () => {
   });
 
   it("accepts exactly what the Agentboard API sends (store: false), but not store: true", () => {
-    for (const kind of ["record", "loop", "verify"] as const) {
+    for (const kind of ["record", "loop", "verify", "heal"] as const) {
       const sent = apiSanitize({ input: [{ role: "user", content: [{ type: "input_text", text: "x" }] }], tools: [{ type: "computer" }], text: { format: { type: "json_schema", name: "s", schema: {}, strict: true } }, reasoning: { effort: "low", summary: "auto" } }, kind, "muse-spark-1.3");
       const r = sanitizeResponsesBody(sent, kind);
       expect(r.error).toBeUndefined();

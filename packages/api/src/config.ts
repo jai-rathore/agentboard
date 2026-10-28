@@ -41,6 +41,13 @@ export interface Config {
   /** Muse Responses API (Skills) guard: calls per UTC day (0 = off) and a lifetime spend ceiling in USD. */
   museDailyCallCap: number;
   museSpendCapUsd: number;
+  /** Executor service that runs API-requested replays (MCP run_skill), and the web app for approval links. */
+  skillsExecutorUrl: string;
+  skillsWebUrl: string;
+  /** Agent-funded runs (signed requests): credits per run, runs per agent per UTC day, agent runs per day node-wide. */
+  skillsAgentRunCredits: number;
+  skillsAgentRunsPerAgentDay: number;
+  skillsAgentRunsPerDay: number;
 }
 
 const num = (v: string | undefined, d: number) => (v === undefined || v === "" ? d : Number(v));
@@ -82,6 +89,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     skillsInternalSecret: env.SKILLS_INTERNAL_SECRET?.trim() || undefined,
     museDailyCallCap: num(env.MUSE_DAILY_CALL_CAP, 0),
     museSpendCapUsd: num(env.MUSE_SPEND_CAP_USD, 2),
+    skillsExecutorUrl: (env.SKILLS_EXECUTOR_URL || "https://agentboard-executor.onrender.com").replace(/\/$/, ""),
+    skillsWebUrl: (env.SKILLS_WEB_URL || "https://agentboard-olive-pi.vercel.app").replace(/\/$/, ""),
+    skillsAgentRunCredits: num(env.SKILLS_AGENT_RUN_CREDITS, 5),
+    skillsAgentRunsPerAgentDay: num(env.SKILLS_AGENT_RUNS_PER_AGENT_DAY, 3),
+    skillsAgentRunsPerDay: num(env.SKILLS_AGENT_RUNS_PER_DAY, 10),
     ...overrides,
   };
   // Contributor-program model variants are never used by this node.
@@ -107,6 +119,6 @@ export function publicConfigSummary(c: Config) {
     challenge: { ttl_ms: c.challengeTtlMs, difficulty_bits: c.challengeDifficulty },
     register_pow_bits: c.registerPowBits,
     checkpoint_every: c.checkpointEvery,
-    skills: { enabled: Boolean(c.skillsOperatorToken) && c.museDailyCallCap > 0 && !c.offline, executor: Boolean(c.skillsInternalSecret), muse_daily_call_cap: c.museDailyCallCap, muse_spend_cap_usd: c.museSpendCapUsd },
+    skills: { enabled: Boolean(c.skillsOperatorToken) && c.museDailyCallCap > 0 && !c.offline, executor: Boolean(c.skillsInternalSecret), muse_daily_call_cap: c.museDailyCallCap, muse_spend_cap_usd: c.museSpendCapUsd, agent_runs: { credits: c.skillsAgentRunCredits, per_agent_day: c.skillsAgentRunsPerAgentDay, per_day: c.skillsAgentRunsPerDay } },
   };
 }

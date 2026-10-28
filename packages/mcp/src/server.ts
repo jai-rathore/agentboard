@@ -72,30 +72,73 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite 
     title: "Verify a record", description: "Fetch a record by cid and verify its content hash and Ed25519 signature locally.", inputSchema: { cid: z.string() }, annotations: ro,
   }, wrap(async ({ cid }) => plain("Local verification result:", await client.verify(cid))));
 
-  server.registerTool("search_skills", {
-    title: "Search browser skills",
-    description: "Find browser skills recorded once from a human demonstration and replayed by an agent. Each has typed params, steps (intent/target/action), a success check and risk flags, plus how many verified replays it has.",
-    inputSchema: { query: z.string().optional().describe("what you want to do in a web app, e.g. 'create a helpdesk ticket'") },
+  const fmtMs = (ms?: number | null) => (ms == null ? null : `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}`);
+
+  server.registerTool("find_skill", {
+    title: "Find a browser skill",
+    description: "Find a browser skill that a person recorded once and an agent replayed and verified (e.g. 'file a helpdesk ticket'). Returns what you need to call run_skill: params with examples, the site it runs on, risk flags, which steps need a human's approval, and verified replay counts.",
+    inputSchema: { query: z.string().min(1).describe("the task you want done in a web app"), limit: z.number().int().min(1).max(10).optional() },
     annotations: ro,
-  }, wrap(async ({ query }) => {
-    const r = await client.skills(query);
-    const skills = (r.skills ?? []).map((s: any) => ({ cid: s.cid, slug: s.slug, version: s.version, name: s.name, summary: s.summary, verified_runs: s.verified_runs, runs: s.runs }));
-    return untrusted(skills.length ? `${skills.length} skill(s). Use get_skill with a cid for params, steps and evidence.` : "No skills match.", { skills });
+  }, wrap(async ({ query, limit }) => {
+    const r = await client.findSkills(query, limit ?? 5);
+    const skills = (r.skills ?? []).map((s: any) => ({ ...s, recording: fmtMs(s.recording_ms) }));
+    return untrusted(skills.length ? `${skills.length} skill(s). Run one with run_skill({skill: <slug or cid>, params}). Steps listed in approval_required_steps pause until a human approves them on the run page.` : "No skills match. A person can record one at the Agentboard skills page.", { skills });
   }));
 
   server.registerTool("get_skill", {
     title: "Read a browser skill",
-    description: "The signed skill record (params, steps, success check, risk flags), its version history and verified replays. Steps that submit, buy, send or delete need a human's approval when you replay them.",
-    inputSchema: { cid: z.string().describe("skill cid from search_skills") },
+    description: "The signed skill record (params, steps, success check, risk flags), its version history (including self-healed versions and their step changes) and verified replays.",
+    inputSchema: { cid: z.string().describe("skill cid from find_skill") },
     annotations: ro,
   }, wrap(async ({ cid }) => {
     const r = await client.skill(cid);
     const b = r.skill.record.body;
-    return untrusted(`Skill ${b.slug} v${b.version} (${r.badge.verified ? `verified, replayed ${r.badge.replayed}x` : "unverified"}); signed by ${r.skill.record.author}, log seq ${r.skill.seq}.`, {
+    return untrusted(`Skill ${b.slug} v${b.version}${r.version !== r.latest_version ? ` (latest is v${r.latest_version}: ${r.latest_cid})` : ""} (${r.badge.verified ? `verified, replayed ${r.badge.replayed}x` : "unverified"}); signed by ${r.skill.record.author}, log seq ${r.skill.seq}.`, {
       skill: b.skill, start_url: b.source?.start_url, version: b.version, prev: b.prev, versions: r.versions,
+      safety: r.safety, time: r.time,
+      healed_from: b.healed_from ? { skill: b.healed_from.skill, run: b.healed_from.run, changes: b.healed_from.changes } : undefined,
       runs: r.runs.slice(0, 5).map((x: any) => ({ cid: x.record.cid, success: x.record.body.success, params: x.record.body.params, turns: x.record.body.turns, verdict: x.record.body.verdict?.evidence })),
     });
   }));
+
+  const jobView = (j: any) => {
+    const res = j.result ?? {};
+    const t = res.time ?? null;
+    const base = { run_id: j.id, status: j.status, run_page: j.url, skill: j.skill_cid, params: j.params, message: j.message };
+    if (j.status === "pending_approval") return { ...base, waiting_for: { reason: j.approval?.reason, flags: j.approval?.flags, turn: j.approval?.turn }, next: `A human must approve or decline this step at ${j.url}. You cannot approve it. Tell the user, then call skill_run_status with this run_id.` };
+    if (j.status === "completed") return { ...base, success: res.verdict?.success ?? j.verdict?.success, verdict: res.verdict?.evidence ?? j.verdict?.evidence, turns: res.turns, run_record: res.run_cid, cost_usd: res.usage?.usd,
+      time: t ? { recording: fmtMs(t.recording_ms), replay: fmtMs(t.run_ms), human_approvals: t.human_approvals, human_time_saved: fmtMs(t.saved_ms) } : undefined,
+      healed: res.healed ? { new_version: res.healed.version, skill: res.healed.cid, changes: res.healed.changes } : undefined };
+    if (["failed", "declined", "expired", "cancelled"].includes(j.status)) return base;
+    return { ...base, turns_so_far: j.turns?.length ?? 0, next: `Still running. Watch it live at ${j.url} or call skill_run_status again.` };
+  };
+  const waitFor = async (id: string, seconds: number) => {
+    const until = Date.now() + seconds * 1000;
+    let j = await client.skillJob(id);
+    while (["queued", "running"].includes(j.status) && Date.now() < until) { await new Promise((r) => setTimeout(r, 3000)); j = await client.skillJob(id); }
+    return j;
+  };
+  const summary = (j: any) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${(j.result?.verdict?.success ?? j.verdict?.success) ? "verified success" : "not verified"}.${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;
+
+  server.registerTool("skill_run_status", {
+    title: "Check a skill run",
+    description: "Status of a run started with run_skill: running, pending_approval (a human must approve on the run page), completed (verdict, time saved, healed version), failed, declined or expired.",
+    inputSchema: { run_id: z.string(), wait_seconds: z.number().int().min(0).max(110).optional().describe("wait up to this long for the run to finish or pause (default 30)") },
+    annotations: ro,
+  }, wrap(async ({ run_id, wait_seconds }) => { const j = await waitFor(run_id, wait_seconds ?? 30); return untrusted(summary(j), jobView(j)); }));
+
+  if (client.canRunSkills && (!readOnly || client.hasSkillsToken)) {
+    server.registerTool("run_skill", {
+      title: "Run a browser skill",
+      description: "Replay a published skill with new params in Agentboard's executor (headless Chromium driven by Muse Spark's computer tool, verified by Spark on the final screenshot). Steps that submit, buy, send or delete NEVER run on their own: the run pauses with status pending_approval and a link where a human approves. Signed with your agent key (costs credits) unless an operator token is configured.",
+      inputSchema: { skill: z.string().describe("slug or cid from find_skill (the latest version runs)"), params: z.record(z.string(), z.string()).describe("every param the skill lists"), start_url: z.string().optional().describe("optional; must stay on the site the skill was recorded on"), wait_seconds: z.number().int().min(0).max(110).optional().describe("wait up to this long for the run to finish or pause (default 60)") },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    }, wrap(async (a) => {
+      const started = await client.runSkill({ skill: a.skill, params: a.params, ...(a.start_url ? { start_url: a.start_url } : {}) });
+      const j = await waitFor(started.id, a.wait_seconds ?? 60);
+      return untrusted(summary(j), jobView(j));
+    }));
+  }
 
   if (readOnly) return server;
 

@@ -243,6 +243,17 @@ CREATE INDEX skill_runs_skill ON skill_runs (skill_cid);
 `,
   },
   {
+    id: 6,
+    name: "skills_jobs",
+    // P1: recording length (time saved), runs requested through the API / MCP (run_skill) with their
+    // live state and human approvals, and agent run quotas.
+    sql: `
+ALTER TABLE artifacts ADD COLUMN duration_ms int;
+CREATE TABLE skill_jobs (id text PRIMARY KEY, skill_cid text NOT NULL, params jsonb NOT NULL, start_url text NOT NULL, requested_by text NOT NULL, via text NOT NULL, status text NOT NULL DEFAULT 'queued', message text, turns jsonb NOT NULL DEFAULT '[]', approval jsonb, decision jsonb, verdict jsonb, result jsonb, frame bytea, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX skill_jobs_by ON skill_jobs (requested_by, created_at);
+`,
+  },
+  {
     id: 2,
     name: "llm_usage_tokens",
     sql: `

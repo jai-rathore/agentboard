@@ -62,3 +62,16 @@ button:disabled { opacity: .5; cursor: default; } button.secondary { background:
 .badge.big { font-size: 13px; padding: 2px 10px; vertical-align: middle; }
 .draft-tag { font-size: 12px; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; padding: 1px 8px; vertical-align: middle; }
 .sigcheck pre { white-space: pre-wrap; }
+/* Skills P1: safety, time saved, self-healing, MCP runs */
+.safety { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 10px 0; }
+.safety.gated { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.safety ul { margin: 6px 0 0; padding-left: 18px; } .safety li { margin: 3px 0; }
+.steps li.changed { background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.lock { margin-right: 4px; } .healed-tag { font-size: 11px; color: var(--ok); border: 1px solid var(--ok); border-radius: 8px; padding: 0 5px; margin-left: 6px; }
+.healed-box { border: 1px solid var(--ok); border-radius: 6px; padding: 8px 12px; margin: 10px 0; background: color-mix(in srgb, var(--ok) 6%, transparent); }
+.badge.heal { color: var(--ok); }
+.superseded { border: 1px dashed var(--accent); padding: 6px 10px; border-radius: 6px; margin: 6px 0; }
+.diff del { color: #a40000; } .diff ins { color: var(--ok); text-decoration: none; font-weight: 600; }
+.time-line { margin: 8px 0; } .time b { color: var(--ok); }
+.approval.big { padding: 12px; } .code-block { white-space: pre-wrap; background: color-mix(in srgb, var(--line) 30%, transparent); padding: 8px; border-radius: 6px; }
+.st-pending_approval { color: var(--accent); border-color: var(--accent); } .st-completed { color: var(--ok); border-color: var(--ok); }

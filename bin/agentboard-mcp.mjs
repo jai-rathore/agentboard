@@ -29668,6 +29668,9 @@ var base58 = /* @__PURE__ */ freeze(() => genBase58("123456789ABCDEFGHJKLMNPQRST
 function sha2562(data) {
   return sha256(typeof data === "string" ? utf8ToBytes(data) : data);
 }
+function sha256Hex(data) {
+  return bytesToHex(sha2562(data));
+}
 var b58 = base58;
 function b32lower(bytes) {
   return base32nopad.encode(bytes).toLowerCase();
@@ -31218,7 +31221,7 @@ function exportSeedHex(kp2) {
 
 // ../core/src/record.ts
 var AGENT_RECORD_TYPES = ["register", "topic", "post", "answer", "vote", "accept", "flag", "verify", "retract"];
-var SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation"];
+var SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation", "skill", "skill_run"];
 var SIGNING_DOMAIN = "agentboard/v1/record:";
 function unsignedOf(r) {
   return { v: r.v, type: r.type, author: r.author, created_at: r.created_at, body: r.body };
@@ -31324,12 +31327,19 @@ var AgentboardClient = class {
   get canWrite() {
     return Boolean(this.o.keyPair);
   }
+  /** Whether this client can start skill runs (operator token, or a local key that signs and pays credits). */
+  get hasSkillsToken() {
+    return Boolean(this.o.skillsToken);
+  }
+  get canRunSkills() {
+    return Boolean(this.o.skillsToken || this.o.keyPair);
+  }
   async http(method, path, body, headers = {}) {
     const f = this.o.fetchImpl ?? fetch;
     const res = await f(`${this.baseUrl}${path}`, {
       method,
       headers: { "content-type": "application/json", "user-agent": this.o.userAgent ?? "agentboard-mcp/0.1", ...headers },
-      body: body === void 0 ? void 0 : JSON.stringify(body)
+      body: body === void 0 ? void 0 : typeof body === "string" ? body : JSON.stringify(body)
     });
     const text = await res.text();
     let json2;
@@ -31378,10 +31388,37 @@ var AgentboardClient = class {
   record(cid) {
     return this.http("GET", `/v1/records/${encodeURIComponent(cid)}`);
   }
+  skills(q) {
+    return this.http("GET", `/v1/skills${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+  }
+  findSkills(q, limit = 5) {
+    return this.http("GET", `/v1/skills/find?q=${encodeURIComponent(q)}&limit=${limit}`);
+  }
+  skillJob(id) {
+    return this.http("GET", `/v1/skills/jobs/${encodeURIComponent(id)}`);
+  }
+  skill(cid) {
+    return this.http("GET", `/v1/skills/${encodeURIComponent(cid)}`);
+  }
   async verify(cid) {
     const r = await this.record(cid);
     const local = verifyRecord(r.record);
     return { cid, signature_valid: local.ok, error: local.ok ? void 0 : local.error, author: r.record.author, type: r.record.type, log: r.log };
+  }
+  /**
+   * Start a replay of a published skill. With the operator token it is free; otherwise the request is
+   * signed with the agent's key (covering the body's sha256) and costs credits. Approval-gated steps
+   * (submit/buy/send/delete) wait for a human on the run page either way.
+   */
+  async runSkill(b) {
+    const raw = JSON.stringify(b);
+    if (this.o.skillsToken) return this.http("POST", "/v1/skills/run", raw, { "x-skills-token": this.o.skillsToken });
+    const kp2 = this.requireKey();
+    await this.ensureRegistered();
+    const path = `/v1/skills/run?h=${sha256Hex(raw)}`;
+    const ts = Date.now();
+    const sig = b64url(signBytes(utf8ToBytes(`agentboard/v1/request:${ts}:POST:${path}`), kp2.secretKey));
+    return this.http("POST", path, raw, { authorization: `Agentboard did="${kp2.did}",ts="${ts}",sig="${sig}"` });
   }
   // ---------- writes
   requireKey() {
@@ -39574,6 +39611,86 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
     inputSchema: { cid: external_exports.string() },
     annotations: ro
   }, wrap(async ({ cid }) => plain("Local verification result:", await client2.verify(cid))));
+  const fmtMs = (ms) => ms == null ? null : `${Math.floor(ms / 6e4)}:${String(Math.round(ms % 6e4 / 1e3)).padStart(2, "0")}`;
+  server2.registerTool("find_skill", {
+    title: "Find a browser skill",
+    description: "Find a browser skill that a person recorded once and an agent replayed and verified (e.g. 'file a helpdesk ticket'). Returns what you need to call run_skill: params with examples, the site it runs on, risk flags, which steps need a human's approval, and verified replay counts.",
+    inputSchema: { query: external_exports.string().min(1).describe("the task you want done in a web app"), limit: external_exports.number().int().min(1).max(10).optional() },
+    annotations: ro
+  }, wrap(async ({ query, limit }) => {
+    const r = await client2.findSkills(query, limit ?? 5);
+    const skills = (r.skills ?? []).map((s) => ({ ...s, recording: fmtMs(s.recording_ms) }));
+    return untrusted(skills.length ? `${skills.length} skill(s). Run one with run_skill({skill: <slug or cid>, params}). Steps listed in approval_required_steps pause until a human approves them on the run page.` : "No skills match. A person can record one at the Agentboard skills page.", { skills });
+  }));
+  server2.registerTool("get_skill", {
+    title: "Read a browser skill",
+    description: "The signed skill record (params, steps, success check, risk flags), its version history (including self-healed versions and their step changes) and verified replays.",
+    inputSchema: { cid: external_exports.string().describe("skill cid from find_skill") },
+    annotations: ro
+  }, wrap(async ({ cid }) => {
+    const r = await client2.skill(cid);
+    const b = r.skill.record.body;
+    return untrusted(`Skill ${b.slug} v${b.version}${r.version !== r.latest_version ? ` (latest is v${r.latest_version}: ${r.latest_cid})` : ""} (${r.badge.verified ? `verified, replayed ${r.badge.replayed}x` : "unverified"}); signed by ${r.skill.record.author}, log seq ${r.skill.seq}.`, {
+      skill: b.skill,
+      start_url: b.source?.start_url,
+      version: b.version,
+      prev: b.prev,
+      versions: r.versions,
+      safety: r.safety,
+      time: r.time,
+      healed_from: b.healed_from ? { skill: b.healed_from.skill, run: b.healed_from.run, changes: b.healed_from.changes } : void 0,
+      runs: r.runs.slice(0, 5).map((x) => ({ cid: x.record.cid, success: x.record.body.success, params: x.record.body.params, turns: x.record.body.turns, verdict: x.record.body.verdict?.evidence }))
+    });
+  }));
+  const jobView = (j) => {
+    const res = j.result ?? {};
+    const t = res.time ?? null;
+    const base = { run_id: j.id, status: j.status, run_page: j.url, skill: j.skill_cid, params: j.params, message: j.message };
+    if (j.status === "pending_approval") return { ...base, waiting_for: { reason: j.approval?.reason, flags: j.approval?.flags, turn: j.approval?.turn }, next: `A human must approve or decline this step at ${j.url}. You cannot approve it. Tell the user, then call skill_run_status with this run_id.` };
+    if (j.status === "completed") return {
+      ...base,
+      success: res.verdict?.success ?? j.verdict?.success,
+      verdict: res.verdict?.evidence ?? j.verdict?.evidence,
+      turns: res.turns,
+      run_record: res.run_cid,
+      cost_usd: res.usage?.usd,
+      time: t ? { recording: fmtMs(t.recording_ms), replay: fmtMs(t.run_ms), human_approvals: t.human_approvals, human_time_saved: fmtMs(t.saved_ms) } : void 0,
+      healed: res.healed ? { new_version: res.healed.version, skill: res.healed.cid, changes: res.healed.changes } : void 0
+    };
+    if (["failed", "declined", "expired", "cancelled"].includes(j.status)) return base;
+    return { ...base, turns_so_far: j.turns?.length ?? 0, next: `Still running. Watch it live at ${j.url} or call skill_run_status again.` };
+  };
+  const waitFor = async (id, seconds) => {
+    const until = Date.now() + seconds * 1e3;
+    let j = await client2.skillJob(id);
+    while (["queued", "running"].includes(j.status) && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 3e3));
+      j = await client2.skillJob(id);
+    }
+    return j;
+  };
+  const summary = (j) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${j.result?.verdict?.success ?? j.verdict?.success ? "verified success" : "not verified"}.${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;
+  server2.registerTool("skill_run_status", {
+    title: "Check a skill run",
+    description: "Status of a run started with run_skill: running, pending_approval (a human must approve on the run page), completed (verdict, time saved, healed version), failed, declined or expired.",
+    inputSchema: { run_id: external_exports.string(), wait_seconds: external_exports.number().int().min(0).max(110).optional().describe("wait up to this long for the run to finish or pause (default 30)") },
+    annotations: ro
+  }, wrap(async ({ run_id, wait_seconds }) => {
+    const j = await waitFor(run_id, wait_seconds ?? 30);
+    return untrusted(summary(j), jobView(j));
+  }));
+  if (client2.canRunSkills && (!readOnly || client2.hasSkillsToken)) {
+    server2.registerTool("run_skill", {
+      title: "Run a browser skill",
+      description: "Replay a published skill with new params in Agentboard's executor (headless Chromium driven by Muse Spark's computer tool, verified by Spark on the final screenshot). Steps that submit, buy, send or delete NEVER run on their own: the run pauses with status pending_approval and a link where a human approves. Signed with your agent key (costs credits) unless an operator token is configured.",
+      inputSchema: { skill: external_exports.string().describe("slug or cid from find_skill (the latest version runs)"), params: external_exports.record(external_exports.string(), external_exports.string()).describe("every param the skill lists"), start_url: external_exports.string().optional().describe("optional; must stay on the site the skill was recorded on"), wait_seconds: external_exports.number().int().min(0).max(110).optional().describe("wait up to this long for the run to finish or pause (default 60)") },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
+    }, wrap(async (a) => {
+      const started = await client2.runSkill({ skill: a.skill, params: a.params, ...a.start_url ? { start_url: a.start_url } : {} });
+      const j = await waitFor(started.id, a.wait_seconds ?? 60);
+      return untrusted(summary(j), jobView(j));
+    }));
+  }
   if (readOnly) return server2;
   server2.registerTool("whoami", {
     title: "My Agentboard identity",
@@ -39732,7 +39849,7 @@ key file: ${file2}`);
   process.exit(0);
 }
 if (created) console.error(`[agentboard] created identity ${kp.did} at ${file2}`);
-var client = new AgentboardClient({ baseUrl, keyPair: kp, agentName: process.env.AGENTBOARD_AGENT_NAME, operator: process.env.AGENTBOARD_OPERATOR });
+var client = new AgentboardClient({ baseUrl, keyPair: kp, skillsToken: process.env.AGENTBOARD_SKILLS_TOKEN || void 0, agentName: process.env.AGENTBOARD_AGENT_NAME, operator: process.env.AGENTBOARD_OPERATOR });
 var server = createAgentboardMcpServer({ client, readOnly: process.env.AGENTBOARD_READ_ONLY === "1" });
 await server.connect(new StdioServerTransport());
 console.error(`[agentboard] MCP stdio server ready -> ${baseUrl}`);

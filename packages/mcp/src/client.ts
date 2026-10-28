@@ -2,13 +2,13 @@
  * Typed HTTP client for an Agentboard node. Signs records locally; solves the machine challenge
  * locally; never transmits key material.
  */
-import { createRecord, solveChallenge, solveRegistrationPow, verifyRecord, type KeyPair, type Challenge, type SignedRecord, type RecordType, utf8ToBytes, signBytes, b64url } from "@agentboard/core";
+import { createRecord, solveChallenge, solveRegistrationPow, verifyRecord, type KeyPair, type Challenge, type SignedRecord, type RecordType, utf8ToBytes, signBytes, b64url, sha256Hex } from "@agentboard/core";
 
 export class AgentboardError extends Error {
   constructor(public status: number, public code: string, message: string, public body: any) { super(message); }
 }
 
-export interface ClientOptions { baseUrl: string; keyPair?: KeyPair; agentName?: string; agentDescription?: string; operator?: string; fetchImpl?: typeof fetch; userAgent?: string }
+export interface ClientOptions { baseUrl: string; keyPair?: KeyPair; /** Agentboard Skills operator token: runs skills without spending agent credits. */ skillsToken?: string; agentName?: string; agentDescription?: string; operator?: string; fetchImpl?: typeof fetch; userAgent?: string }
 
 export class AgentboardClient {
   private registered = false;
@@ -18,13 +18,16 @@ export class AgentboardClient {
 
   get did() { return this.o.keyPair?.did; }
   get canWrite() { return Boolean(this.o.keyPair); }
+  /** Whether this client can start skill runs (operator token, or a local key that signs and pays credits). */
+  get hasSkillsToken() { return Boolean(this.o.skillsToken); }
+  get canRunSkills() { return Boolean(this.o.skillsToken || this.o.keyPair); }
 
   private async http(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<any> {
     const f = this.o.fetchImpl ?? fetch;
     const res = await f(`${this.baseUrl}${path}`, {
       method,
       headers: { "content-type": "application/json", "user-agent": this.o.userAgent ?? "agentboard-mcp/0.1", ...headers },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
     });
     const text = await res.text();
     let json: any; try { json = JSON.parse(text); } catch { json = { message: text }; }
@@ -56,12 +59,30 @@ export class AgentboardClient {
   agent(did: string) { return this.http("GET", `/v1/agents/${encodeURIComponent(did)}`); }
   record(cid: string) { return this.http("GET", `/v1/records/${encodeURIComponent(cid)}`); }
   skills(q?: string) { return this.http("GET", `/v1/skills${q ? `?q=${encodeURIComponent(q)}` : ""}`); }
+  findSkills(q: string, limit = 5) { return this.http("GET", `/v1/skills/find?q=${encodeURIComponent(q)}&limit=${limit}`); }
+  skillJob(id: string) { return this.http("GET", `/v1/skills/jobs/${encodeURIComponent(id)}`); }
   skill(cid: string) { return this.http("GET", `/v1/skills/${encodeURIComponent(cid)}`); }
 
   async verify(cid: string) {
     const r = await this.record(cid);
     const local = verifyRecord(r.record);
     return { cid, signature_valid: local.ok, error: local.ok ? undefined : local.error, author: r.record.author, type: r.record.type, log: r.log };
+  }
+
+  /**
+   * Start a replay of a published skill. With the operator token it is free; otherwise the request is
+   * signed with the agent's key (covering the body's sha256) and costs credits. Approval-gated steps
+   * (submit/buy/send/delete) wait for a human on the run page either way.
+   */
+  async runSkill(b: { skill: string; params: Record<string, string>; start_url?: string }) {
+    const raw = JSON.stringify(b);
+    if (this.o.skillsToken) return this.http("POST", "/v1/skills/run", raw, { "x-skills-token": this.o.skillsToken });
+    const kp = this.requireKey();
+    await this.ensureRegistered();
+    const path = `/v1/skills/run?h=${sha256Hex(raw)}`;
+    const ts = Date.now();
+    const sig = b64url(signBytes(utf8ToBytes(`agentboard/v1/request:${ts}:POST:${path}`), kp.secretKey));
+    return this.http("POST", path, raw, { authorization: `Agentboard did="${kp.did}",ts="${ts}",sig="${sig}"` });
   }
 
   // ---------- writes

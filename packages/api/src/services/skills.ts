@@ -6,8 +6,11 @@
  *   publish  : after Spark verifies the final screenshot, the node signs a `skill` record (first
  *              success) and a `skill_run` record (every replay) into the hash-chained log, with
  *              content-addressed evidence (final screenshot, GIF) that anyone can fetch and hash.
+ *   heal     : when a verified replay shows that steps no longer match the site (Spark reported a changed
+ *              step, or the elements actually used no longer carry the recorded names), Spark rewrites the
+ *              steps from what it saw and the node publishes a signed next version linked to the run.
  */
-import { createRecord, sha256Hex, type SignedRecord } from "@agentboard/core";
+import { createRecord, sha256Hex, effectiveRiskFlags, gatedSteps, GATED_FLAGS, type SignedRecord } from "@agentboard/core";
 import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
@@ -53,7 +56,8 @@ export async function putArtifact(ctx: AppContext, bytes: Uint8Array, mime: stri
   if (!(ARTIFACT_MIME as readonly string[]).includes(mime)) throw new HttpError(415, "unsupported_media", `allowed: ${ARTIFACT_MIME.join(", ")}`);
   if (bytes.length === 0 || bytes.length > MAX_ARTIFACT_BYTES) throw new HttpError(413, "artifact_size", `artifacts must be 1 byte to ${MAX_ARTIFACT_BYTES / 1048576} MB`);
   const sha = sha256Hex(bytes);
-  await ctx.db.query(`INSERT INTO artifacts (sha256, mime, size, bytes) VALUES ($1,$2,$3,$4) ON CONFLICT (sha256) DO NOTHING`, [sha, mime, bytes.length, bytes]);
+  const duration = mime === "video/mp4" ? mp4DurationMs(bytes) : null;
+  await ctx.db.query(`INSERT INTO artifacts (sha256, mime, size, bytes, duration_ms) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (sha256) DO NOTHING`, [sha, mime, bytes.length, bytes, duration]);
   return { sha256: sha, size: bytes.length, mime };
 }
 
@@ -61,6 +65,37 @@ export async function getArtifact(ctx: AppContext, sha: string): Promise<{ mime:
   if (!/^[0-9a-f]{64}$/.test(sha)) return null;
   const r = (await ctx.db.query<any>(`SELECT mime, bytes FROM artifacts WHERE sha256 = $1`, [sha])).rows[0];
   return r ? { mime: r.mime, bytes: new Uint8Array(r.bytes) } : null;
+}
+
+/** Duration of an mp4 from its movie header (mvhd), or null. */
+export function mp4DurationMs(b: Uint8Array): number | null {
+  for (let i = 4; i + 32 < b.length; i++) {
+    if (b[i] !== 0x6d || b[i + 1] !== 0x76 || b[i + 2] !== 0x68 || b[i + 3] !== 0x64) continue; // "mvhd"
+    const dv = new DataView(b.buffer, b.byteOffset + i + 4);
+    const [ts, dur] = dv.getUint8(0) === 1 ? [dv.getUint32(20), Number(dv.getBigUint64(24))] : [dv.getUint32(12), dv.getUint32(16)];
+    return ts > 0 && dur > 0 && dur < 2 ** 52 ? Math.round((dur * 1000) / ts) : null;
+  }
+  return null;
+}
+
+/** How long the human took in the source recording (mp4 only; screenshots have no clock). */
+export async function recordingMs(ctx: AppContext, source: { video?: string | null }): Promise<number | null> {
+  if (!source?.video) return null;
+  const r = (await ctx.db.query<any>(`SELECT duration_ms FROM artifacts WHERE sha256 = $1`, [source.video])).rows[0];
+  if (!r) return null;
+  if (r.duration_ms != null) return Number(r.duration_ms);
+  const a = await getArtifact(ctx, source.video);
+  const d = a ? mp4DurationMs(a.bytes) : null;
+  if (d != null) await ctx.db.query(`UPDATE artifacts SET duration_ms = $2 WHERE sha256 = $1`, [source.video, d]);
+  return d;
+}
+
+/** Human time per run: one look and a click per approval. */
+export const APPROVAL_HUMAN_MS = 5000;
+export function timeSaved(recording: number | null, run: { duration_ms: number; actions: { approval: string }[] }) {
+  const approvals = run.actions.filter((a) => a.approval === "human").length;
+  const human = approvals * APPROVAL_HUMAN_MS;
+  return { recording_ms: recording, run_ms: run.duration_ms, human_approvals: approvals, human_ms: human, saved_ms: recording == null ? null : Math.max(0, recording - human) };
 }
 
 export const artifactUrl = (ctx: AppContext, sha: string) => `${ctx.cfg.publicBaseUrl}/v1/artifacts/${sha}`;
@@ -123,7 +158,6 @@ export async function recordSkill(ctx: AppContext, input: RecordInput) {
 export async function getDraft(ctx: AppContext, id: string) {
   const d = (await ctx.db.query<any>(`SELECT * FROM skill_drafts WHERE id = $1`, [id])).rows[0];
   if (!d) throw new HttpError(404, "draft_not_found", "no such skill draft");
-  const j = (v: any) => (typeof v === "string" ? JSON.parse(v) : v);
   return { id: d.id, created_at: d.created_at, status: d.status, source: j(d.source), skill: j(d.skill) as Skill, reasoning_summary: d.reasoning_summary, model: d.model, capability: d.capability, usage: j(d.usage), parent_slug: d.parent_slug, published_cid: d.published_cid, runs: j(d.runs) };
 }
 
@@ -132,12 +166,15 @@ export async function getDraft(ctx: AppContext, id: string) {
 export const RunZ = z.object({
   draft_id: z.string().uuid().optional(),
   skill_cid: z.string().max(120).optional(),
+  job_id: z.string().uuid().optional(),
+  step_changes: z.array(z.object({ step: z.number().int().min(1).max(40), observed: z.string().max(300), turn: z.number().int() })).max(40).default([]),
+  human_ms: z.number().int().min(0).optional(),
   start_url: z.string().url().max(500),
   params: z.record(z.string(), z.string().max(500)),
   success: z.boolean(),
   verdict: z.object({ success: z.boolean(), evidence: z.string().max(1500), model: z.string(), capability: z.string() }),
   turns: z.number().int().min(0).max(30),
-  actions: z.array(z.object({ turn: z.number().int(), type: z.string().max(20), detail: z.string().max(300), approval: z.enum(["auto", "human", "none"]), checks: z.array(z.string().max(80)).max(5) })).max(200),
+  actions: z.array(z.object({ turn: z.number().int(), type: z.string().max(20), detail: z.string().max(300), approval: z.enum(["auto", "human", "none"]), checks: z.array(z.string().max(80)).max(5), target: z.string().max(120).optional(), flags: z.array(z.string().max(40)).max(4).optional() })).max(200),
   usage: z.object({ calls: z.number().int(), input_tokens: z.number(), cached_tokens: z.number(), output_tokens: z.number(), usd: z.number() }),
   model: z.string().max(60),
   final_jpeg_b64: z.string().max(3_000_000),
@@ -149,35 +186,92 @@ export type RunInput = z.infer<typeof RunZ>;
 
 const sysRecord = (ctx: AppContext, type: "skill" | "skill_run", body: Record<string, unknown>) => createRecord(ctx.node, type, body, new Date(ctx.now()));
 const round6 = (x: number) => Math.round(x * 1e6) / 1e6;
+const j = (v: any) => (typeof v === "string" ? JSON.parse(v) : v);
+
+// ---------------------------------------------------------------- self-healing
+
+/**
+ * Steps whose recorded target no longer matches anything the replay actually used: the accessible names
+ * of the elements clicked or typed into (labels, button text) must appear in the step's description.
+ */
+export function staleSteps(skill: Skill, actions: { target?: string }[]): number[] {
+  const names = [...new Set(actions.map((a) => (a.target ?? "").toLowerCase().trim()).filter((n) => n.length >= 3))];
+  if (!names.length) return [];
+  const out: number[] = [];
+  skill.steps.forEach((s, i) => {
+    if (!["click", "type", "select"].includes(s.action)) return;
+    const text = `${s.intent} ${s.target}`.toLowerCase();
+    if (!names.some((n) => text.includes(n))) out.push(i + 1);
+  });
+  return out;
+}
+
+export const HEAL_PROMPT = `A recorded browser skill was just replayed and the result was verified, but some of its steps no longer match the website (it was redesigned: labels, button text or positions changed).
+Rewrite the skill so each step describes the site as it is NOW, using the replay's evidence: the elements the agent actually used (their visible names), the agent's own notes about changed steps, and the final screenshot.
+Return the full new "steps" list and the "success_check". Rules: use exactly the same {{param}} placeholders (params cannot change); change the success check only if the visible confirmation changed; update targets (label text, button text, position, color), intents and order as needed. Be concise.
+List every change in "changes" (1-based step number in the NEW list, the field, before, after, and a short reason). If nothing needs to change, return the steps unchanged and an empty "changes" list.`;
+
+const HEAL_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["steps", "success_check", "changes"],
+  properties: {
+    steps: SKILL_SCHEMA.properties.steps,
+    success_check: SKILL_SCHEMA.properties.success_check,
+    changes: { type: "array", items: { type: "object", additionalProperties: false, required: ["step", "field", "before", "after", "reason"], properties: { step: { type: "integer" }, field: { type: "string" }, before: { type: "string" }, after: { type: "string" }, reason: { type: "string" } } } },
+  },
+} as const;
+const ChangeZ = z.object({ step: z.number().int(), field: z.string().max(40), before: z.string().max(400), after: z.string().max(400), reason: z.string().max(400) });
+
+export async function healSkill(ctx: AppContext, skill: Skill, run: RunInput, stale: number[]) {
+  const observed = run.actions.filter((a) => a.turn >= 0).map((a) => `turn ${a.turn}: ${a.type} ${a.detail}${a.target ? ` [element: "${a.target}"]` : ""}`).join("\n").slice(0, 6000);
+  const notes = run.step_changes.map((c) => `step ${c.step}: ${c.observed}`).join("\n") || "(none)";
+  const r = await museResponses(ctx, "heal", {
+    input: [{ role: "user", content: [
+      { type: "input_text", text: `${HEAL_PROMPT}\n\nCurrent skill JSON:\n${JSON.stringify(skill)}\n\nSteps whose targets did not match the elements used: ${stale.join(", ") || "(none detected)"}\nAgent's notes about changed steps:\n${notes}\n\nWhat the agent actually did (in order):\n${observed}\n\nFinal screenshot of the successful replay:` },
+      { type: "input_image", image_url: `data:image/jpeg;base64,${run.final_jpeg_b64}` },
+    ] }],
+    // minimal effort: "low" spent the whole output budget on reasoning in testing
+    reasoning: { effort: "minimal", summary: "auto" },
+    text: { format: { type: "json_schema", name: "healed_skill", strict: true, schema: HEAL_SCHEMA } },
+  });
+  if (r.response.status === "incomplete") throw new HttpError(502, "muse_incomplete", `Muse stopped early while healing (${r.response.incomplete_details?.reason ?? "unknown"})`);
+  let out: { skill: Skill; changes: z.infer<typeof ChangeZ>[] };
+  try {
+    const raw = JSON.parse(outputText(r.response));
+    // Params, name, summary and risk flags are kept from the verified skill: healing only rewrites steps.
+    out = { skill: SkillZ.parse({ ...skill, steps: raw.steps, success_check: raw.success_check }), changes: z.array(ChangeZ).max(60).parse(raw.changes) };
+  } catch (e) { throw new HttpError(502, "muse_bad_heal", `Muse returned an unusable healed skill (${r.usage.output_tokens} output tokens, ${r.usage.reasoning_tokens} reasoning): ${(e as Error).message.slice(0, 200)}`); }
+  const placeholders = (x: Skill) => [...new Set(x.steps.flatMap((st) => [...st.value.matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi)].map((m) => m[1])))].sort().join(",");
+  if (placeholders(out.skill) !== placeholders(skill)) throw new HttpError(502, "heal_changed_params", "the healed steps use different {{params}}; not published");
+  const same = JSON.stringify(out.skill.steps) === JSON.stringify(skill.steps) && out.skill.success_check === skill.success_check;
+  return { ...out, unchanged: same || !out.changes.length, model: r.model, capability: "self-healing: image understanding + structured output", reasoning_summary: reasoningSummary(r.response) || null, usage: { ...r.usage, usd: round6(r.usage.usd), ms: r.ms } };
+}
+
+// ---------------------------------------------------------------- runs -> signed records
 
 /**
  * Store a finished replay. A successful replay of an unpublished draft publishes the skill (signed
  * `skill` record, next version of its slug) followed by the signed `skill_run`. Replays of a published
- * skill add a `skill_run` (success or failure: the log is honest). Failed draft replays stay on the draft.
+ * skill add a `skill_run` (success or failure: the log is honest); a verified replay that shows drift
+ * heals the skill into a signed next version. Failed draft replays stay on the draft.
  */
 export async function submitRun(ctx: AppContext, run: RunInput) {
   if (!run.draft_id === !run.skill_cid) throw new HttpError(400, "target", "send exactly one of draft_id or skill_cid");
   if (run.success !== run.verdict.success) throw new HttpError(400, "verdict", "success must match the Muse verdict");
   const final = await putArtifact(ctx, Buffer.from(run.final_jpeg_b64, "base64"), "image/jpeg");
   const gif = run.gif_b64 ? await putArtifact(ctx, Buffer.from(run.gif_b64, "base64"), "image/gif") : null;
-  const runSummary = {
-    params: run.params, start_url: run.start_url, success: run.success, turns: run.turns, duration_ms: run.duration_ms,
-    verdict: { success: run.verdict.success, evidence: run.verdict.evidence, model: run.verdict.model, capability: run.verdict.capability },
-    loop: { model: run.model, capability: "computer use (built-in computer tool) + image understanding" },
-    actions: run.actions,
-    evidence: { final_screenshot: final.sha256, gif: gif?.sha256 ?? null },
-    usage: { ...run.usage, usd: round6(run.usage.usd) },
-    executor: run.executor,
-  };
 
   let skillCid = run.skill_cid;
   let published: SignedRecord | null = null;
+  let source: { video?: string | null } = {};
+  let current: { body: any; latest: boolean } | null = null;
   if (run.draft_id) {
     const d = await getDraft(ctx, run.draft_id);
+    source = d.source;
     if (d.published_cid) skillCid = d.published_cid;
     else if (!run.success) {
-      await ctx.db.query(`UPDATE skill_drafts SET runs = runs || $2::jsonb WHERE id = $1`, [d.id, JSON.stringify([{ ...runSummary, at: new Date(ctx.now()).toISOString() }])]);
-      return { status: "draft_run_failed", draft_id: d.id, evidence: runSummary.evidence };
+      const t = timeSaved(await recordingMs(ctx, source), run);
+      await ctx.db.query(`UPDATE skill_drafts SET runs = runs || $2::jsonb WHERE id = $1`, [d.id, JSON.stringify([{ params: run.params, success: false, verdict: run.verdict, turns: run.turns, time: t, evidence: { final_screenshot: final.sha256, gif: gif?.sha256 ?? null }, usage: run.usage, at: new Date(ctx.now()).toISOString() }])]);
+      return { status: "draft_run_failed", draft_id: d.id, evidence: { final_screenshot: final.sha256, gif: gif?.sha256 ?? null }, time: t };
     } else {
       const slug = d.parent_slug ? slugify(d.parent_slug) : slugify(d.skill.name);
       const prev = (await ctx.db.query<any>(`SELECT cid, version FROM skills WHERE slug = $1 ORDER BY version DESC LIMIT 1`, [slug])).rows[0];
@@ -192,10 +286,49 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
     }
   }
   if (!skillCid && !published) throw new HttpError(400, "target", "nothing to attach the run to");
-  if (skillCid && !published && !(await ctx.db.query(`SELECT 1 FROM skills WHERE cid = $1`, [skillCid])).rows[0]) throw new HttpError(404, "skill_not_found", "no such skill");
+  if (skillCid && !published) {
+    const row = (await ctx.db.query<any>(`SELECT s.slug, s.version, r.body_text FROM skills s JOIN records r ON r.cid = s.cid WHERE s.cid = $1`, [skillCid])).rows[0];
+    if (!row) throw new HttpError(404, "skill_not_found", "no such skill");
+    const latest = (await ctx.db.query<any>(`SELECT max(version)::int AS v FROM skills WHERE slug = $1`, [row.slug])).rows[0].v;
+    current = { body: JSON.parse(row.body_text), latest: latest === row.version };
+    source = current.body.source;
+  }
+  const time = timeSaved(await recordingMs(ctx, source), run);
+
+  // ---- drift: verified replays of a published skill whose steps no longer match the site
+  const stale = current && run.success ? [...new Set([...staleSteps(current.body.skill, run.actions), ...run.step_changes.map((c) => c.step)])].sort((a, b) => a - b) : [];
+  let heal: Awaited<ReturnType<typeof healSkill>> | null = null;
+  let healError: string | null = null;
+  if (stale.length && current?.latest) {
+    try { heal = await healSkill(ctx, current.body.skill, run, stale); } catch (e) { healError = (e as Error).message.slice(0, 300); console.warn(`[skills] heal failed: ${healError}`); }
+  }
+
+  const runSummary = {
+    params: run.params, start_url: run.start_url, success: run.success, turns: run.turns, duration_ms: run.duration_ms,
+    verdict: { success: run.verdict.success, evidence: run.verdict.evidence, model: run.verdict.model, capability: run.verdict.capability },
+    loop: { model: run.model, capability: "computer use (built-in computer tool) + image understanding" },
+    actions: run.actions,
+    evidence: { final_screenshot: final.sha256, gif: gif?.sha256 ?? null },
+    usage: { ...run.usage, usd: round6(run.usage.usd + (heal?.usage.usd ?? 0)) },
+    time,
+    ...(current ? { drift: { stale_steps: stale, reported: run.step_changes, healed: Boolean(heal && !heal.unchanged), ...(healError ? { error: healError } : {}) } } : {}),
+    executor: run.executor,
+  };
   const runRec = sysRecord(ctx, "skill_run", { skill: published?.cid ?? skillCid!, ...runSummary });
+  let healed: SignedRecord | null = null;
+  if (heal && !heal.unchanged && current) {
+    const b = current.body;
+    healed = sysRecord(ctx, "skill", {
+      slug: b.slug, version: b.version + 1, prev: skillCid,
+      skill: heal.skill,
+      source: b.source,
+      recorder: b.recorder,
+      healed_from: { skill: skillCid, run: runRec.cid, stale_steps: stale, reported: run.step_changes, changes: heal.changes, model: heal.model, capability: heal.capability, reasoning_summary: heal.reasoning_summary, usage: heal.usage },
+      draft: b.draft ?? null,
+    });
+  }
   const out = await ctx.db.tx(async (tx) => {
-    let skillSeq: number | undefined;
+    let skillSeq: number | undefined, healedSeq: number | undefined;
     if (published) {
       const b = published.body as any;
       skillSeq = (await appendToLog(tx, ctx, published)).seq;
@@ -204,25 +337,63 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
     }
     const a = await appendToLog(tx, ctx, runRec);
     await tx.query(`INSERT INTO skill_runs (cid, skill_cid, success, created_at) VALUES ($1,$2,$3,$4)`, [runRec.cid, published?.cid ?? skillCid, run.success, runRec.created_at]);
-    return { skillSeq, runSeq: a.seq };
+    if (healed) {
+      const b = healed.body as any;
+      healedSeq = (await appendToLog(tx, ctx, healed)).seq;
+      await tx.query(`INSERT INTO skills (cid, slug, version, prev_cid, name, summary, created_at, draft_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [healed.cid, b.slug, b.version, b.prev, b.skill.name, b.skill.summary, healed.created_at, b.draft]);
+    }
+    return { skillSeq, runSeq: a.seq, healedSeq };
   });
-  for (const r of [published, runRec]) if (r) ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: r.cid, type: r.type } }));
-  return { status: published ? "published" : "run_recorded", skill_cid: published?.cid ?? skillCid, skill_seq: out.skillSeq, run_cid: runRec.cid, run_seq: out.runSeq, evidence: runSummary.evidence };
+  for (const r of [published, runRec, healed]) if (r) ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: r.cid, type: r.type } }));
+  return {
+    status: published ? "published" : healed ? "healed" : "run_recorded", skill_cid: published?.cid ?? skillCid, skill_seq: out.skillSeq, run_cid: runRec.cid, run_seq: out.runSeq,
+    evidence: runSummary.evidence, time,
+    ...(current ? { drift: runSummary.drift } : {}),
+    ...(healed ? { healed: { cid: healed.cid, seq: out.healedSeq, version: (healed.body as any).version, changes: heal!.changes } } : {}),
+  };
 }
 
 // ---------------------------------------------------------------- reads
 
-export async function listSkills(ctx: AppContext, q?: string) {
-  const like = q?.trim() ? `%${q.trim().toLowerCase()}%` : null;
-  const rows = (await ctx.db.query<any>(`
+const latestSkillsSql = `
     SELECT s.cid, s.slug, s.version, s.name, s.summary, s.created_at,
       (SELECT count(*)::int FROM skill_runs r JOIN skills v ON v.cid = r.skill_cid WHERE v.slug = s.slug AND r.success) AS verified_runs,
       (SELECT count(*)::int FROM skill_runs r JOIN skills v ON v.cid = r.skill_cid WHERE v.slug = s.slug) AS runs
     FROM skills s
-    WHERE s.version = (SELECT max(version) FROM skills x WHERE x.slug = s.slug)
+    WHERE s.version = (SELECT max(version) FROM skills x WHERE x.slug = s.slug)`;
+
+export async function listSkills(ctx: AppContext, q?: string) {
+  const like = q?.trim() ? `%${q.trim().toLowerCase()}%` : null;
+  return (await ctx.db.query<any>(`${latestSkillsSql}
       AND ($1::text IS NULL OR lower(s.name || ' ' || s.summary || ' ' || s.slug) LIKE $1)
     ORDER BY s.created_at DESC LIMIT 100`, [like])).rows;
-  return rows;
+}
+
+const STOP = new Set(["a", "an", "the", "to", "for", "of", "on", "in", "and", "or", "my", "with", "how", "do", "i"]);
+/** Agent-facing search (MCP find_skill): word-overlap ranking over latest versions, with what a caller needs to run one. */
+export async function findSkills(ctx: AppContext, q: string, limit = 5) {
+  const words = q.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !STOP.has(w));
+  const rows = (await ctx.db.query<any>(`${latestSkillsSql} ORDER BY s.created_at DESC LIMIT 200`)).rows;
+  const scored = [];
+  for (const r of rows) {
+    const body = JSON.parse((await ctx.db.query<any>(`SELECT body_text FROM records WHERE cid = $1`, [r.cid])).rows[0].body_text);
+    const hay = `${r.name} ${r.summary} ${r.slug} ${body.skill.steps.map((s: any) => s.intent).join(" ")} ${body.source?.start_url ?? ""}`.toLowerCase();
+    const score = words.length ? words.filter((w) => hay.includes(w)).length / words.length : 1;
+    if (score > 0) scored.push({ r, body, score });
+  }
+  scored.sort((a, b) => b.score - a.score || b.r.verified_runs - a.r.verified_runs);
+  const out = [];
+  for (const { r, body, score } of scored.slice(0, Math.min(10, limit))) {
+    const rec = await recordingMs(ctx, body.source);
+    out.push({
+      cid: r.cid, slug: r.slug, version: r.version, name: r.name, summary: r.summary, match: Math.round(score * 100) / 100,
+      params: body.skill.params, start_url: body.source?.start_url ?? null, success_check: body.skill.success_check,
+      risk_flags: effectiveRiskFlags(body.skill), approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, intent: body.skill.steps[g.index].intent, flags: g.flags })),
+      verified_runs: r.verified_runs, runs: r.runs, recording_ms: rec, healed: Boolean(body.healed_from),
+      url: `${ctx.cfg.skillsWebUrl}/s/${r.cid}`,
+    });
+  }
+  return out;
 }
 
 export async function getSkill(ctx: AppContext, cid: string) {
@@ -235,11 +406,23 @@ export async function getSkill(ctx: AppContext, cid: string) {
   const runs = [];
   for (const c of runCids) runs.push(toRecord(await rec(c)));
   const allVerified = Number((await ctx.db.query<any>(`SELECT count(*)::int AS n FROM skill_runs r JOIN skills v ON v.cid = r.skill_cid WHERE v.slug = $1 AND r.success`, [s.slug])).rows[0]?.n ?? 0);
+  const skill = toRecord(await rec(cid));
+  const body = skill.record.body;
+  const prev = s.prev_cid ? (await rec(s.prev_cid)) : null;
+  // A healed version is first verified by the run that healed it.
+  const healRun = body.healed_from?.run ? await rec(body.healed_from.run) : null;
+  const recording = await recordingMs(ctx, body.source);
+  const verifiedRuns = runs.filter((r: any) => r.record.body.success);
+  const savedTotal = recording == null ? null : verifiedRuns.reduce((t: number, r: any) => t + (r.record.body.time?.saved_ms ?? Math.max(0, recording - APPROVAL_HUMAN_MS * r.record.body.actions.filter((a: any) => a.approval === "human").length)), 0);
   return {
-    skill: toRecord(await rec(cid)),
-    slug: s.slug, version: s.version, latest_version: versions[0]?.version ?? s.version,
+    skill,
+    slug: s.slug, version: s.version, latest_version: versions[0]?.version ?? s.version, latest_cid: versions[0]?.cid ?? cid,
     versions, runs,
-    badge: { verified: runs.some((r: any) => r.record.body.success), replayed: runs.length, verified_runs_this_version: runs.filter((r: any) => r.record.body.success).length, verified_runs_all_versions: allVerified },
+    prev_skill: prev ? { cid: prev.cid, version: JSON.parse(prev.body_text).version, skill: JSON.parse(prev.body_text).skill } : null,
+    heal_run: healRun ? toRecord(healRun) : null,
+    safety: { risk_flags: effectiveRiskFlags(body.skill), declared_flags: body.skill.risk_flags, approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, flags: g.flags })), gated_flags: GATED_FLAGS },
+    time: { recording_ms: recording, approval_human_ms: APPROVAL_HUMAN_MS, verified_runs: verifiedRuns.length, saved_total_ms: savedTotal },
+    badge: { verified: verifiedRuns.length > 0 || Boolean(healRun && JSON.parse(healRun.body_text).success), replayed: runs.length, verified_runs_this_version: verifiedRuns.length, verified_runs_all_versions: allVerified, healed: Boolean(body.healed_from) },
     node: ctx.node.did,
   };
 }

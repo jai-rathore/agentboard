@@ -3,7 +3,10 @@ import { timingSafeEqual } from "node:crypto";
 import type { AppContext } from "./context.js";
 import { HttpError } from "./context.js";
 import { museResponses, museSpend, type MuseKind } from "./services/muse.js";
-import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, getSkill, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
+import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
+import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, chargeAgentRun, refundAgentRun } from "./services/skillJobs.js";
+import { verifyRequestAuth } from "./requestAuth.js";
+import { sha256Hex } from "@agentboard/core";
 
 const same = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 
@@ -49,6 +52,47 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     return c.json(draft, 201);
   });
   app.get("/v1/skills/drafts/:id", async (c) => c.json(await getDraft(ctx, c.req.param("id"))));
+  app.get("/v1/skills/find", async (c) => c.json({ skills: await findSkills(ctx, c.req.query("q") ?? "", Number(c.req.query("limit") ?? 5)) }));
+
+  // ---- run a published skill through the executor (MCP run_skill). Auth: the operator token, or a signed
+  // agent request (Authorization: Agentboard ..., over "POST /v1/skills/run?h=<sha256 of the body>") that
+  // pays credits within daily quotas. Steps that submit/buy/send/delete always wait for a human on the
+  // run page; the requester cannot approve them.
+  app.post("/v1/skills/run", async (c) => {
+    const raw = await c.req.text();
+    if (raw.length > 20_000) throw new HttpError(413, "too_large", "request too large");
+    let by: { requested_by: string; via: "operator" | "agent" };
+    let charged = 0;
+    const tok = c.req.header("x-skills-token");
+    if (tok) { operator(tok); by = { requested_by: "operator", via: "operator" }; }
+    else {
+      const u = new URL(c.req.url);
+      const did = verifyRequestAuth(c.req.header("authorization"), "POST", u.pathname + u.search, ctx.now());
+      if (!did) throw new HttpError(401, "unauthorized", "send the operator token (x-skills-token) or a signed agent request");
+      if (u.searchParams.get("h") !== sha256Hex(new TextEncoder().encode(raw))) throw new HttpError(401, "body_hash", "h must be the sha256 of the request body");
+      by = { requested_by: did, via: "agent" };
+    }
+    if (!ctx.cfg.skillsInternalSecret) throw new HttpError(503, "executor_disabled", "no executor configured");
+    let b: any; try { b = JSON.parse(raw); } catch { throw new HttpError(400, "invalid_json", "expected {skill, params}"); }
+    if (typeof b?.skill !== "string") throw new HttpError(400, "skill", "skill (cid or slug) is required");
+    if (by.via === "agent") charged = await chargeAgentRun(ctx, by.requested_by);
+    try {
+      const job = await createJob(ctx, { skill: b.skill, params: b.params, start_url: typeof b.start_url === "string" ? b.start_url : undefined }, by);
+      await dispatchJob(ctx, job.id);
+      return c.json(await getJob(ctx, job.id), 202);
+    } catch (e) {
+      if (charged) await refundAgentRun(ctx, by.requested_by, charged);
+      throw e;
+    }
+  });
+  app.get("/v1/skills/jobs/:id", async (c) => c.json(await getJob(ctx, c.req.param("id"))));
+  app.get("/v1/skills/jobs/:id/frame", async (c) => c.body(await getJobFrame(ctx, c.req.param("id")) as unknown as ArrayBuffer, 200, { "content-type": "image/jpeg", "cache-control": "no-store", "x-content-type-options": "nosniff" }));
+  app.post("/v1/skills/jobs/:id/decision", async (c) => {
+    operator(c.req.header("x-skills-token"));
+    const b = await c.req.json().catch(() => ({}));
+    if (typeof b?.approval_id !== "string" || typeof b?.approve !== "boolean") throw new HttpError(400, "decision", "expected {approval_id, approve}");
+    return c.json(await decideJob(ctx, c.req.param("id"), b.approval_id, b.approve));
+  });
   app.get("/v1/skills", async (c) => c.json({ skills: await listSkills(ctx, c.req.query("q")) }));
   app.get("/v1/skills/:cid", async (c) => c.json(await getSkill(ctx, c.req.param("cid"))));
   app.get("/v1/muse/spend", async (c) => c.json(await museSpend(ctx)));
@@ -68,6 +112,16 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     const parsed = RunZ.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) throw new HttpError(400, "invalid_run", parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
     return c.json(await submitRun(ctx, parsed.data), 201);
+  });
+  app.get("/internal/skills/jobs/:id", async (c) => {
+    internal(c.req.header("x-skills-secret"));
+    return c.json(await getJob(ctx, c.req.param("id"), true));
+  });
+  app.post("/internal/skills/jobs/:id/events", async (c) => {
+    internal(c.req.header("x-skills-secret"));
+    const parsed = JobEventZ.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new HttpError(400, "invalid_event", parsed.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+    return c.json(await jobEvent(ctx, c.req.param("id"), parsed.data));
   });
   app.post("/internal/skills/authorize", async (c) => {
     // The executor checks an operator token without holding it itself.
