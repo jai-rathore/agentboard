@@ -43,7 +43,9 @@ function requester(row: RunRow, body: any) {
  */
 export function classifyRun(ctx: AppContext, row: { seq: number; skill_seq: number; skill_text: string }, body: any) {
   const sk = JSON.parse(row.skill_text);
-  const publish = Boolean(sk.draft) && Number(row.seq) === Number(row.skill_seq) + 1;
+  // The run right after a recorded skill is its publishing run (part of the recording). A self-healed version is
+  // published after the run that healed it, so the run that follows it is an ordinary replay.
+  const publish = Boolean(sk.draft) && !sk.healed_from && Number(row.seq) === Number(row.skill_seq) + 1;
   const recParams: { name: string; example: string }[] = sk.skill?.params ?? [];
   const norm = (x: unknown) => String(x ?? "").trim().toLowerCase();
   const differing = recParams.filter((p) => norm(body.params?.[p.name]) !== norm(p.example)).map((p) => p.name);

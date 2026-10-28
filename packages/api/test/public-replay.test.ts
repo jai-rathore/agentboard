@@ -10,6 +10,7 @@ import { makeNode, type TestNode } from "./helpers.js";
 import { loadConfig } from "../src/config.js";
 import { mountRemoteMcp } from "../src/mcpRemote.js";
 import { solvePublicPow, MCP_CLIENT_IP_HEADER } from "../src/services/publicReplay.js";
+import { classifyRun } from "../src/services/skillMetrics.js";
 
 const TOKEN = "test-".repeat(6), SECRET = "fake-".repeat(6); // fake test values
 const op = { "x-skills-token": TOKEN }, ex = { "x-skills-secret": SECRET };
@@ -231,6 +232,18 @@ describe("public replay records as evidence", () => {
     const job2 = (await node.req("GET", `/v1/skills/jobs/${job.id}`)).body;
     expect(job2.trigger).toBe("public");
   });
+  it("a publishing run is the run right after a recorded version; after a self-healed version it is a replay", () => {
+    const ctx: any = { cfg: { skillsWebUrl: "https://agentboard.test", publicBaseUrl: "https://api.agentboard.test" } };
+    const skill = { draft: "d1", skill: { params: [{ name: "q", example: "cats" }] }, source: { start_url: "https://news.ycombinator.com/" } };
+    const healed = { ...skill, healed_from: { run: "bagrun" } };
+    const row = (sk: any, seq: number) => ({ seq, skill_seq: 10, skill_text: JSON.stringify(sk) });
+    expect(classifyRun(ctx, row(skill, 11), { params: { q: "cats" } })).toMatchObject({ kind: "publish", new_inputs: false, site_kind: "real" });
+    expect(classifyRun(ctx, row(skill, 12), { params: { q: "Dogs" } })).toMatchObject({ kind: "replay", new_inputs: true, differing_params: ["q"] });
+    expect(classifyRun(ctx, row(healed, 11), { params: { q: "cats" } }).kind).toBe("replay");
+    expect(classifyRun(ctx, row({ skill: skill.skill }, 11), {}).kind).toBe("replay"); // no draft: not a recording
+    expect(classifyRun(ctx, row(skill, 11), { start_url: "https://agentboard.test/demo/helpdesk/" }).site_kind).toBe("mock");
+  });
+
   it("labels demo (mock) sites and ranks real sites first", async () => {
     expect(siteKindOf("https://agentboard-olive-pi.vercel.app/demo/shop/")).toBe("mock");
     expect(siteKindOf("https://agentboard-olive-pi.vercel.app/demo/helpdesk/status.html")).toBe("mock");
