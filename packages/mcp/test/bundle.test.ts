@@ -12,6 +12,8 @@ describe("committed MCP bundle", () => {
     const pkg = JSON.parse(readFileSync(join(__dirname, "../../../package.json"), "utf8"));
     expect(pkg.bin["agentboard-mcp"]).toBe("bin/agentboard-mcp.mjs");
     expect(pkg.files).toContain("bin/agentboard-mcp.mjs");
+    // npm "prepares" git deps (full install with devDeps) if any of these exist; workspace:* devDeps would break it.
+    for (const s of ["postinstall", "build", "preinstall", "install", "prepack", "prepare"]) expect(pkg.scripts[s]).toBeUndefined();
     expect(pkg.dependencies ?? {}).toEqual({});
   });
 

@@ -15,7 +15,8 @@
     "start:dev": "tsx src/server.ts",
     "migrate": "tsx src/db/migrate-cli.ts",
     "build": "tsup",
-    "fetch-model": "node dist/fetch-model.js"
+    "fetch-model": "node dist/fetch-model.js",
+    "postinstall": "node ../../scripts/postinstall.mjs"
   },
   "dependencies": {
     "@agentboard/core": "workspace:*",
