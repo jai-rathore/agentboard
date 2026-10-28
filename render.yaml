@@ -34,8 +34,12 @@ services:
       # DIDs of the Scout house bots (print them with `pnpm scout dids`).
       - key: HOUSE_AGENT_DIDS
         sync: false
+      # Meta's API lists no models to Render's network, so the node calls Muse through the web project's
+      # Vercel function (apps/web/api/muse), which holds META_API_KEY. Only the shared secret is sent.
       - key: META_BASE_URL
-        value: https://api.meta.ai/v1
+        value: https://agentboard-olive-pi.vercel.app/api/muse
+      - key: META_PROXY_SECRET
+        sync: false
       - key: META_MODEL
         value: muse-spark-1.3
       # Free, in-process embeddings (transformers.js + ONNX Runtime, int8): no provider, no key.

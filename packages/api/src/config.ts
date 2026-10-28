@@ -7,6 +7,8 @@ export interface Config {
   port: number;
   nodeSigningKey?: string;
   metaApiKey?: string;
+  /** Shared secret for a Muse proxy at META_BASE_URL (e.g. the web project's Vercel function); replaces the bearer key. */
+  metaProxySecret?: string;
   metaBaseUrl: string;
   metaModel: string;
   fireworksApiKey?: string;
@@ -45,6 +47,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     port: num(env.PORT, 8787),
     nodeSigningKey: env.NODE_SIGNING_KEY || undefined,
     metaApiKey: env.META_API_KEY || undefined,
+    metaProxySecret: env.META_PROXY_SECRET?.trim() || undefined,
     metaBaseUrl: env.META_BASE_URL || "https://api.meta.ai/v1",
     metaModel: env.META_MODEL || "muse-spark-1.3",
     fireworksApiKey: env.FIREWORKS_API_KEY || undefined,
@@ -75,6 +78,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   for (const m of [cfg.metaModel, cfg.glimmerModel]) if (/contributor/i.test(m)) throw new Error(`refusing model "${m}": -contributor variants are not allowed`);
   if (!["local", "fireworks", "hash"].includes(cfg.embedProvider)) throw new Error(`EMBED_PROVIDER must be local, fireworks or hash`);
   if (!(cfg.llmMaxOutputTokens > 0)) throw new Error("LLM_MAX_OUTPUT_TOKENS must be positive");
+  if (cfg.metaProxySecret) {
+    if (cfg.metaProxySecret.length < 32) throw new Error("META_PROXY_SECRET must be at least 32 characters");
+    const u = new URL(cfg.metaBaseUrl);
+    if (u.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(u.hostname)) throw new Error("META_PROXY_SECRET requires an https META_BASE_URL");
+    if (u.hostname === "api.meta.ai") throw new Error("META_PROXY_SECRET is for a proxy; META_BASE_URL points at Meta directly");
+  }
   return cfg;
 }
 
@@ -82,7 +91,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 export function publicConfigSummary(c: Config) {
   return {
     database: c.databaseUrl ? "postgres" : "pglite",
-    llm: { daily_call_cap: c.llmDailyCallCap, max_output_tokens: c.llmMaxOutputTokens, meta: Boolean(c.metaApiKey) && !c.offline && c.llmDailyCallCap > 0, glimmer: Boolean(c.glimmerBaseUrl) && !c.offline && c.llmDailyCallCap > 0 },
+    llm: { daily_call_cap: c.llmDailyCallCap, max_output_tokens: c.llmMaxOutputTokens, meta: Boolean(c.metaApiKey || c.metaProxySecret) && !c.offline && c.llmDailyCallCap > 0, meta_via: c.metaProxySecret ? new URL(c.metaBaseUrl).host : null, glimmer: Boolean(c.glimmerBaseUrl) && !c.offline && c.llmDailyCallCap > 0 },
     embeddings: c.offline || c.embedProvider === "hash" ? `local-hash-${c.embedDim} (offline fallback)` : c.embedProvider === "fireworks" ? c.fireworksEmbedModel : `${c.embedModel} (in-process)`,
     challenge: { ttl_ms: c.challengeTtlMs, difficulty_bits: c.challengeDifficulty },
     register_pow_bits: c.registerPowBits,

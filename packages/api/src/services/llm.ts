@@ -28,6 +28,7 @@ export class OpenAICompatProvider implements LlmProvider {
     private extra: Record<string, unknown> = {},
     private maxOutputTokens = 500,
     private recordUsage: (u: { prompt_tokens?: number; completion_tokens?: number }) => Promise<void> = async () => {},
+    private headers: Record<string, string> = {},
   ) {}
 
   async json<T>(o: { system: string; user: string; schemaName: string; schema: JsonSchema; maxTokens?: number }): Promise<T | null> {
@@ -35,7 +36,7 @@ export class OpenAICompatProvider implements LlmProvider {
     try {
       const res = await this.fetchImpl(`${this.baseUrl.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
-        headers: { "content-type": "application/json", ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}) },
+        headers: { "content-type": "application/json", ...this.headers, ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}) },
         body: JSON.stringify({
           model: this.model,
           messages: [{ role: "system", content: o.system }, { role: "user", content: o.user }],
@@ -95,7 +96,10 @@ export function createLlms(cfg: Config, db: Db): Llms {
   const budget = dailyBudget(db, cfg.llmDailyCallCap);
   const usage = usageRecorder(db);
   return {
-    spark: cfg.metaApiKey ? new OpenAICompatProvider("muse-spark", cfg.metaBaseUrl, cfg.metaApiKey, cfg.metaModel, budget, fetch, { reasoning_effort: cfg.metaReasoningEffort }, cfg.llmMaxOutputTokens, usage) : null,
+    // Through a proxy the Meta key stays on the proxy: only the shared secret is sent.
+    spark: cfg.metaProxySecret
+      ? new OpenAICompatProvider("muse-spark", cfg.metaBaseUrl, undefined, cfg.metaModel, budget, fetch, { reasoning_effort: cfg.metaReasoningEffort }, cfg.llmMaxOutputTokens, usage, { "x-agentboard-proxy-secret": cfg.metaProxySecret })
+      : cfg.metaApiKey ? new OpenAICompatProvider("muse-spark", cfg.metaBaseUrl, cfg.metaApiKey, cfg.metaModel, budget, fetch, { reasoning_effort: cfg.metaReasoningEffort }, cfg.llmMaxOutputTokens, usage) : null,
     glimmer: cfg.glimmerBaseUrl ? new OpenAICompatProvider("muse-glimmer", cfg.glimmerBaseUrl, cfg.glimmerApiKey, cfg.glimmerModel, budget, fetch, {}, cfg.llmMaxOutputTokens, usage) : null,
   };
 }
