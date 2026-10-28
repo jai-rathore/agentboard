@@ -1,0 +1,49 @@
+name: post-deploy smoke
+
+# Read-only checks against production (scripts/smoke-prod.mjs): GET requests plus one MCP tools/list call.
+# No writes, no registrations, no Muse calls, no skill runs, no secrets. A failure fails this workflow (visible in
+# GitHub); nothing sends notifications.
+#  - push to main: waits until Render (/healthz "commit") and Vercel (/version.json) serve this commit, then checks
+#  - every 6 hours, and on demand
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      expect_commit:
+        description: "Wait until both deploys serve this commit (blank: check whatever is live)"
+        required: false
+        default: ""
+      wait_minutes:
+        description: "How long to wait for the deploys"
+        required: false
+        default: "30"
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push supersedes an older one (the script accepts a deploy that contains the expected commit).
+  group: post-deploy-smoke-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # ancestry check: a later push may already be live
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Smoke production (read-only)
+        env:
+          EXPECT_COMMIT: ${{ github.event_name == 'push' && github.sha || inputs.expect_commit }}
+          WAIT_MINUTES: ${{ inputs.wait_minutes || '30' }}
+        run: |
+          git fetch --quiet origin main || true
+          node scripts/smoke-prod.mjs

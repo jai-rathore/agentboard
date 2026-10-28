@@ -6,5 +6,7 @@ export default defineConfig({
     testTimeout: 30000,
     hookTimeout: 60000,
     pool: "forks",
+    // Fails any test that tries to reach a real paid model API (Meta, Baseten, Fireworks, ...).
+    setupFiles: ["./test/no-real-ai-calls.ts"],
   },
 });

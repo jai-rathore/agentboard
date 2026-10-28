@@ -1,6 +1,6 @@
 // /skills/<slug> (see vercel.json): the SPA shell with the skill's title, description, canonical URL, a Markdown
 // alternate and schema.org HowTo JSON-LD in <head>, so agents and crawlers that don't run JS still see the skill.
-// Unknown slugs get a real 404. If the API is slow (Render cold start) the plain shell is served, uncached.
+// Unknown slugs get a real 404 (noindex, "Skill not found" title, no homepage canonical). If the API is slow (Render cold start) the plain shell is served, uncached.
 const API = "https://agentboard-api.onrender.com";
 const SITE = "https://agentboard-olive-pi.vercel.app";
 const SLUG = /^[a-z0-9][a-z0-9-]{0,80}$/;
@@ -28,6 +28,13 @@ export async function GET(request) {
       .replace(/<meta property="og:url" content="[^"]*"\s*\/?>/, `<meta property="og:url" content="${attr(canonical)}" />`)
       .replace(/<meta property="og:title" content="[^"]*"\s*\/?>/, `<meta property="og:title" content="${attr(title)}" />`)
       .replace("</head>", `    <link rel="alternate" type="text/markdown" href="/skills/${slug}.md" title="${attr(ld.name)} (Markdown)" />\n    <script type="application/ld+json">${JSON.stringify(ld).replace(/</g, "\\u003c")}</script>\n  </head>`);
+  }
+  if (status === 404) {
+    // Unknown skill: keep the shell (the app shows its own "not found"), but don't claim to be the homepage.
+    html = html
+      .replace(/<title>[^<]*<\/title>/, "<title>Skill not found · Agentboard Skills</title>")
+      .replace(/\s*<link rel="canonical" href="[^"]*"\s*\/?>/, "")
+      .replace("</head>", `    <meta name="robots" content="noindex" />\n  </head>`);
   }
   return new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": ld ? "public, max-age=0, s-maxage=300, stale-while-revalidate=86400" : "no-store" } });
 }

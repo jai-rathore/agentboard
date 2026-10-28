@@ -1,0 +1,131 @@
+name: CI
+
+# Runs on every push and pull request to main. Needs no secrets, and never calls Meta, Baseten or any paid API:
+# test/no-real-ai-calls.ts (a vitest setup file) fails any test that tries, and the e2e API runs offline.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  CI: "true"
+
+jobs:
+  checks:
+    name: Typecheck, unit tests (PGlite), generated files, web build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck (all packages + web)
+        run: pnpm typecheck
+      # No linter is configured in this repo yet; typecheck (strict tsc) is the static check.
+      - name: Unit + integration tests (PGlite)
+        run: pnpm test
+      - name: Generated files are fresh (bin/agentboard-mcp.mjs, MCP server card)
+        run: scripts/check-generated.sh
+      - name: Web build
+        run: pnpm --filter @agentboard/web run build
+      - name: API bundle builds (what Render runs)
+        run: pnpm --filter @agentboard/api run build
+
+  postgres:
+    name: Unit tests + e2e on Postgres 17 + pgvector
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # Each test node creates and drops its own database on this server (packages/api/test/helpers.ts).
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Unit + integration tests (Postgres)
+        run: pnpm test
+      - name: e2e against an API process on Postgres
+        env:
+          E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/ab_e2e
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE ab_e2e"
+          pnpm test:e2e
+
+  e2e:
+    name: e2e (API on PGlite, MCP stdio + remote, A2A) and Playwright web smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: e2e (agent journey, governance, MCP, A2A, discovery)
+        run: pnpm test:e2e
+      - name: Install Chromium for Playwright
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Web smoke (built app against the local API; desktop + mobile)
+        run: pnpm test:web
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -sSfL -o /tmp/gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks version
+      - name: Scan the full git history
+        run: /tmp/gitleaks git --redact --no-banner --verbose .
+      - name: Scan the working tree
+        run: /tmp/gitleaks dir --redact --no-banner .

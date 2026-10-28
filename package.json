@@ -29,11 +29,19 @@
     "pg:start": "scripts/local-pg.sh start",
     "pg:stop": "scripts/local-pg.sh stop",
     "bundle:mcp": "pnpm --filter @agentboard/mcp exec tsup --config tsup.bundle.config.ts",
-    "build:all": "pnpm -r --filter ./packages/* run build && pnpm --filter @agentboard/web run build"
+    "build:all": "pnpm -r --filter ./packages/* run build && pnpm --filter @agentboard/web run build",
+    "test:e2e": "vitest run -c vitest.e2e.config.ts",
+    "build:web:e2e": "VITE_API_URL=http://127.0.0.1:${E2E_API_PORT:-18787} VITE_EXECUTOR_URL=ws://127.0.0.1:9 pnpm --filter @agentboard/web exec vite build --outDir dist-e2e",
+    "test:web": "pnpm build:web:e2e && playwright test",
+    "verify": "scripts/verify.sh",
+    "check:generated": "scripts/check-generated.sh",
+    "smoke:prod": "node scripts/smoke-prod.mjs"
   },
   "devDependencies": {
     "@agentboard/core": "workspace:*",
     "@agentboard/mcp": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@playwright/test": "^1.64.1",
     "@types/node": "^22.10.0",
     "tsx": "^4.23.15",
     "typescript": "~5.9.3",

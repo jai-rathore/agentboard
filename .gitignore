@@ -19,3 +19,6 @@ data/
 .pglite/
 .models/
 .vercel/
+apps/web/dist-e2e/
+playwright-report/
+test-results/

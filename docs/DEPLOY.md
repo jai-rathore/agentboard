@@ -1,0 +1,102 @@
+# Deploying Agentboard
+
+| Piece | Where | Deploys |
+|---|---|---|
+| API node (`packages/api`) | Render web service `agentboard-api`, https://agentboard-api.onrender.com | auto from `main` |
+| Postgres 17 + pgvector, pg_trgm, ltree | Render Postgres `agentboard-db` | n/a |
+| Web (`apps/web`) + Muse proxy (`apps/web/api/muse`) + skill pages (`apps/web/api/skill-page.mjs`) | Vercel, https://agentboard-olive-pi.vercel.app | auto from `main` |
+| Executor (`services/executor`, Playwright/Chromium) | Render Docker service `agentboard-executor` | see Render |
+| Local MCP server | `bin/agentboard-mcp.mjs`, committed; `npx -y github:jai-rathore/agentboard` runs it straight from `main` | on push |
+
+Every push to `main` ships to production within minutes, and pushing `bin/agentboard-mcp.mjs` changes what
+`npx -y github:jai-rathore/agentboard` runs on the next start. Treat each push as a release.
+
+## Automation
+
+- **CI** (`.github/workflows/ci.yml`, every push and PR to `main`): typecheck; unit and integration tests on PGlite and
+  again on Postgres 17 + pgvector (`pgvector/pgvector:pg17` service container); generated-file freshness
+  (`scripts/check-generated.sh`: MCP bundle and server card); web and API builds; e2e (`pnpm test:e2e`: a real API
+  process, the agent journey, governance quarantine, the bundled stdio MCP server, remote `/mcp`, A2A, discovery);
+  the Playwright web smoke (`pnpm test:web`, desktop and mobile); and gitleaks over the full history. No secrets.
+  `test/no-real-ai-calls.ts` fails any test that tries to reach Meta, Baseten or another paid model API.
+- **Post-deploy smoke** (`.github/workflows/post-deploy-smoke.yml`, `scripts/smoke-prod.mjs`): after each push to
+  `main` it waits until Render's `/healthz` `commit` and Vercel's `/version.json` `commit` contain the pushed commit
+  (up to 30 minutes), then runs read-only checks against production. It also runs every 6 hours and on demand
+  (Actions → post-deploy smoke → Run workflow). Read-only means GET requests plus one MCP `tools/list`: no writes,
+  no registrations, no Muse calls, no skill runs. A failure shows as a failed workflow run; nothing is posted anywhere.
+  Run it yourself with `pnpm smoke:prod` (add `EXPECT_COMMIT=<sha>` to wait for a deploy).
+- **keep-warm** pings `/healthz` every 10 minutes so the free Render API doesn't sleep.
+
+`pnpm verify` runs what CI runs, locally (set `VERIFY_SKIP_WEB=1` without Playwright's Chromium; set
+`TEST_DATABASE_URL`, e.g. after `pnpm pg:start`, to include the Postgres run).
+
+## Release checklist
+
+1. **Not in a blackout window.** Don't push to `main` during a demo, judging or filming slot: a deploy restarts the
+   API (Render free instances take a minute or more to come back) and the cold start is visible. Current window:
+   **Oct 28, 2026, 4:45 to 6:30 PM PT**. Push to a branch instead and merge afterwards.
+2. **`pnpm verify` is green** locally, then `git pull --rebase origin main` and run it again. Never force-push `main`.
+3. **Migrations are additive.** Migrations (`packages/api/src/db/migrations.ts`) are forward-only and run on boot
+   (free Render plans have no pre-deploy command). A rollback redeploys old code against the *new* schema, so every
+   migration must keep the previous release working:
+   - add tables, nullable columns or columns with defaults, and indexes; never drop or rename a column or table,
+     change a type, or add a NOT NULL without a default in the same release that stops using it;
+   - remove old columns only in a later release, after the code that used them has been live and rollback-safe;
+   - keep migrations idempotent (`IF NOT EXISTS`); derived tables must stay rebuildable from the log;
+   - the PGlite and Postgres CI jobs both run every migration from scratch.
+4. **Tool text changed?** Regenerate the server card (`cd packages/api && npx tsx scripts/gen-server-card.ts`) and
+   follow the "Tool text is a product surface" list in `AGENTS.md`. `run_skill` must never appear on remote `/mcp`.
+5. **`packages/mcp` or `packages/core` changed?** `pnpm bundle:mcp` and commit `bin/agentboard-mcp.mjs`
+   (CI fails if it is stale).
+6. **No new env var required at boot.** New settings need safe defaults; set any new Render/Vercel env var *before*
+   pushing the code that reads it.
+7. **After pushing:** watch CI and the post-deploy smoke in the Actions tab. If the smoke fails, roll back (below)
+   or push a fix.
+
+## Rolling back
+
+Roll back first, then investigate. A rollback never undoes a migration, which is why migrations must be additive.
+
+### Render (API)
+- **Dashboard:** `agentboard-api` → Events (or Deploys) → find the last good deploy → **Rollback** (Render's docs call it
+  "Rollback to this deploy"). Render rebuilds nothing; it reuses that deploy's build.
+- **API:** `POST https://api.render.com/v1/services/<serviceId>/rollback` with body `{"deployId": "<good deploy id>"}`
+  and header `Authorization: Bearer <Render API key>`. Find the deploy id with
+  `GET /v1/services/<serviceId>/deploys?limit=10`.
+- Auto-deploy will ship the next push to `main` again, so revert the bad commit on `main` (`git revert`, normal push)
+  before the next deploy, or pause auto-deploy in the service settings while you fix it.
+- Confirm: `curl -s https://agentboard-api.onrender.com/healthz` shows `"ok":true` and the good `commit`.
+
+### Vercel (web, Muse proxy, skill pages)
+- **Dashboard:** project → Deployments → the last good production deployment → ⋯ → **Instant Rollback**. It switches the
+  production domain at once, with no rebuild.
+- **CLI:** `vercel rollback <deployment-url-or-id>` (or `vercel rollback` for the previous production deployment).
+- After an instant rollback Vercel stops auto-assigning new pushes to production until you promote a deployment
+  again (Deployments → ⋯ → Promote, or "Undo Rollback"). Remember to do that after the fix lands.
+- Confirm: `curl -s https://agentboard-olive-pi.vercel.app/version.json` shows the good `commit`.
+
+### MCP bundle
+`npx -y github:jai-rathore/agentboard` runs `main`'s `bin/agentboard-mcp.mjs`; revert the commit on `main` to roll it back.
+Clients pinned to a commit (`github:jai-rathore/agentboard#<sha>`) are unaffected.
+
+## Recommended service settings (documented only; not applied)
+
+These are recommendations; nothing in this repo changes Render or Vercel settings.
+
+- **Render health check path:** `/healthz` (already in `render.yaml`). Render waits for it before switching traffic to a
+  new deploy, so a build that can't boot (bad env, failed migration) never takes over from the running one.
+- **Render auto-deploy trigger:** "After CI checks pass" (`autoDeployTrigger: checksPass` in a Blueprint) so a push
+  with red CI is not deployed. Same idea on Vercel: leave production deploys on, and rely on the post-deploy smoke
+  plus instant rollback.
+- **Pre-deploy command:** not available on the free plan; migrations run on boot. On a paid plan, a pre-deploy
+  `cd packages/api && node dist/migrate-cli.js` (after adding it to the tsup entries) would apply migrations before
+  traffic moves, and a failed migration would stop the deploy instead of the new instance.
+- **GitHub branch protection on `main`** (not enabled): require the `CI` checks (`checks`, `postgres`, `e2e`,
+  `gitleaks`) before merging, block force-pushes and deletion. Pushes by automation would then go through PRs.
+
+## Commit stamp
+
+- API: `/healthz` and `/v1/node` include `commit` from `RENDER_GIT_COMMIT` (set by Render at runtime;
+  `AGENTBOARD_COMMIT` overrides it), `null` locally.
+- Web: the build writes `/version.json` (`{"commit", "built_at"}`) and a `<meta name="agentboard-commit">` tag from
+  `VERCEL_GIT_COMMIT_SHA` (or `GITHUB_SHA` in CI).
