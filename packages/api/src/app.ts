@@ -99,7 +99,7 @@ export function createApp(ctx: AppContext) {
   });
 
   app.get("/v1/topics", async (c) => {
-    const rows = (await db.query<any>(`SELECT path::text AS path, title, summary, post_count, nlevel(path) AS depth FROM topics ORDER BY path`)).rows;
+    const rows = (await db.query<any>(`SELECT path::text AS path, title, summary, post_count, nlevel(path) AS depth FROM topics WHERE status = 'active' ORDER BY path`)).rows;
     return c.json(untrusted({ topics: rows.map((r) => ({ path: displayPath(r.path), title: r.title, summary: r.summary, post_count: Number(r.post_count), depth: Number(r.depth) })) }));
   });
 
@@ -113,17 +113,20 @@ export function createApp(ctx: AppContext) {
   app.get("/v1/topics/*", async (c) => {
     const raw = decodeURIComponent(c.req.path.replace(/^\/v1\/topics\//, ""));
     const path = normalizePath(raw);
-    let t = (await db.query<any>(`SELECT path::text AS path, title, summary, keywords, created_by, created_at, post_count, cid FROM topics WHERE path::text = $1`, [path])).rows[0];
+    let t = (await db.query<any>(`SELECT path::text AS path, title, summary, keywords, created_by, created_at, post_count, cid, status FROM topics WHERE path::text = $1`, [path])).rows[0];
+    if (t && t.status !== "active") throw new HttpError(404, "topic_hidden", "this topic was hidden by the node operator (a signed moderation record in the log)");
+    if (t) delete t.status;
     if (!t) {
       const a = (await db.query<any>(`SELECT path::text AS path FROM topic_aliases WHERE alias = $1`, [path])).rows[0];
       if (!a) throw new HttpError(404, "topic_not_found", "no such topic");
       return c.json({ redirect: displayPath(a.path) }, 200);
     }
-    const children = (await db.query<any>(`SELECT path::text AS path, title, post_count FROM topics WHERE path ~ $1::lquery ORDER BY path`, [`${path}.*{1}`])).rows;
+    const children = (await db.query<any>(`SELECT path::text AS path, title, post_count FROM topics WHERE path ~ $1::lquery AND status = 'active' ORDER BY path`, [`${path}.*{1}`])).rows;
     const posts = (await db.query<any>(`SELECT cid, kind, title, author, score, answer_count, accepted_answer IS NOT NULL AS answered, created_at FROM posts WHERE topic_path <@ $1::ltree AND status = 'visible' ORDER BY created_at DESC LIMIT 50`, [path])).rows;
     const aliases = (await db.query<any>(`SELECT alias, decision FROM topic_aliases WHERE path::text = $1`, [path])).rows;
     const experts = await topicKarma(ctx, path);
-    const top = [...experts.karma.entries()].filter(([, k]) => k > 0).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([did, karma]) => ({ did, karma }));
+    const active = new Set((await db.query<any>(`SELECT did FROM agents WHERE status = 'active'`)).rows.map((r) => r.did));
+    const top = [...experts.karma.entries()].filter(([did, k]) => k > 0 && active.has(did)).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([did, karma]) => ({ did, karma }));
     return c.json(untrusted({ topic: { ...t, path: displayPath(t.path) }, children: children.map((x) => ({ ...x, path: displayPath(x.path) })), aliases, posts, top_agents: top }));
   });
 
@@ -136,6 +139,7 @@ export function createApp(ctx: AppContext) {
     const cid = c.req.param("cid");
     const p = (await db.query<any>(`SELECT cid, topic_path::text AS topic, kind, title, body, tags, author, status, quality, score, answer_count, accepted_answer, created_at FROM posts WHERE cid = $1`, [cid])).rows[0];
     if (!p) throw new HttpError(404, "post_not_found", "no such post");
+    if (p.status === "hidden") throw new HttpError(404, "post_hidden", "this post was hidden by the node operator (a signed moderation record in the log)");
     const answers = (await db.query<any>(`SELECT cid, author, body, status, quality, score, accepted, created_at FROM answers WHERE post_cid = $1 ORDER BY accepted DESC, score DESC, created_at ASC`, [cid])).rows;
     const cids = [cid, ...answers.map((a) => a.cid)];
     const records = (await db.query<any>(`SELECT r.cid, r.type, r.author, r.created_at, r.body_text, r.sig, l.seq::int AS seq FROM records r JOIN log l ON l.cid = r.cid WHERE r.cid = ANY($1)`, [cids])).rows;
@@ -172,8 +176,8 @@ export function createApp(ctx: AppContext) {
     if (!a) throw new HttpError(404, "agent_not_found", "no such agent");
     const credits = Number((await db.query<any>(`SELECT COALESCE(SUM(delta_milli),0)::float8 AS b FROM credit_ledger WHERE did = $1`, [did])).rows[0]?.b ?? 0) / 1000;
     const ledger = (await db.query<any>(`SELECT delta_milli::float8 / 1000 AS delta, reason, ref_cid, seq, received_at FROM credit_ledger WHERE did = $1 ORDER BY id DESC LIMIT 50`, [did])).rows;
-    const posts = (await db.query<any>(`SELECT cid, title, topic_path::text AS topic, kind, score, status, created_at FROM posts WHERE author = $1 AND status <> 'retracted' ORDER BY created_at DESC LIMIT 30`, [did])).rows;
-    const answers = (await db.query<any>(`SELECT a.cid, a.post_cid, p.title AS post_title, a.accepted, a.score, a.created_at FROM answers a JOIN posts p ON p.cid = a.post_cid WHERE a.author = $1 AND a.status <> 'retracted' AND p.status <> 'retracted' ORDER BY a.created_at DESC LIMIT 30`, [did])).rows;
+    const posts = (await db.query<any>(`SELECT cid, title, topic_path::text AS topic, kind, score, status, created_at FROM posts WHERE author = $1 AND status NOT IN ('retracted', 'hidden') ORDER BY created_at DESC LIMIT 30`, [did])).rows;
+    const answers = (await db.query<any>(`SELECT a.cid, a.post_cid, p.title AS post_title, a.accepted, a.score, a.created_at FROM answers a JOIN posts p ON p.cid = a.post_cid WHERE a.author = $1 AND a.status NOT IN ('retracted', 'hidden') AND p.status NOT IN ('retracted', 'hidden') ORDER BY a.created_at DESC LIMIT 30`, [did])).rows;
     return c.json(untrusted({ agent: { ...a, credits, verified: Boolean(a.verified_domain) }, ledger, posts: posts.map((p) => ({ ...p, topic: displayPath(p.topic) })), answers }));
   });
 
@@ -208,7 +212,7 @@ export function createApp(ctx: AppContext) {
     return c.json({
       agents: await one(`SELECT count(*)::int AS n FROM agents WHERE status = 'active'`),
       verified_agents: await one(`SELECT count(*)::int AS n FROM agents WHERE verified_domain IS NOT NULL`),
-      topics: await one(`SELECT count(*)::int AS n FROM topics`),
+      topics: await one(`SELECT count(*)::int AS n FROM topics WHERE status = 'active'`),
       posts: await one(`SELECT count(*)::int AS n FROM posts WHERE status = 'visible'`),
       answers: await one(`SELECT count(*)::int AS n FROM answers WHERE status = 'visible'`),
       accepted: await one(`SELECT count(*)::int AS n FROM accepts`),

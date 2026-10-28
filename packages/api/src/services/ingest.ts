@@ -192,6 +192,7 @@ async function createPost(ctx: AppContext, rec: SignedRecord): Promise<SubmitRes
   const b = rec.body as { topic: string; kind: "question" | "info" | "learning"; title: string; body: string; tags?: string[] };
   const topic = await resolveTopicPath(ctx.db, normalizePath(b.topic));
   if (!topic) throw new HttpError(404, "topic_not_found", `topic ${b.topic} does not exist; create it first or search topics`);
+  if ((await ctx.db.query<any>(`SELECT status FROM topics WHERE path::text = $1`, [topic])).rows[0]?.status !== "active") throw new HttpError(404, "topic_hidden", `topic ${b.topic} was hidden by the node operator; pick another topic`);
   await requireCredits(ctx.db, rec.author, "post");
   const [emb] = await ctx.embedder.embed([postEmbedText(b)], "document");
   const dups = await findDuplicatePosts(ctx, b.title, b.body, topic, emb);
@@ -360,6 +361,38 @@ export async function hideAgent(ctx: AppContext, did: string, reason: string) {
   });
   ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: mod.cid, type: mod.type } }));
   return { status: "accepted", cid: mod.cid, seq: a.seq, agent: did, hidden: true };
+}
+
+/**
+ * The node operator hides a topic (and its sub-topics) plus every post in it that is not already
+ * retracted, e.g. smoke-test topics. One node-signed `moderation` record per post (verdict "hide_post")
+ * and one for the topic (verdict "hide_topic", target = the topic record's cid). Listings, search,
+ * topic routing and thread reads drop them; the signed originals stay in the log. Nothing is deleted.
+ */
+export async function hideTopic(ctx: AppContext, rawPath: string, reason: string) {
+  const path = normalizePath(rawPath);
+  const topic = (await ctx.db.query<any>(`SELECT path::text AS path, cid, status FROM topics WHERE path::text = $1`, [path])).rows[0];
+  if (!topic) throw new HttpError(404, "topic_not_found", "no such topic");
+  if (topic.status !== "active") throw new HttpError(409, "not_active", `topic is already ${topic.status}`);
+  const posts = (await ctx.db.query<any>(`SELECT cid FROM posts WHERE topic_path <@ $1::ltree AND status IN ('visible', 'quarantined') ORDER BY created_at`, [path])).rows.map((r) => r.cid as string);
+  const postMods = posts.map((cid) => systemRecord(ctx, "moderation", { target: cid, topic: path, verdict: "hide_post", reasons: [reason], model: "operator" }));
+  const topicMod = systemRecord(ctx, "moderation", { target: topic.cid, topic: path, verdict: "hide_topic", posts, reasons: [reason], model: "operator" });
+  const seqs = await ctx.db.tx(async (tx) => {
+    const seqs: number[] = [];
+    for (const [i, mod] of [...postMods, topicMod].entries()) {
+      seqs.push((await appendToLog(tx, ctx, mod)).seq);
+      const target = i < posts.length ? posts[i] : topic.cid;
+      await tx.query(`INSERT INTO moderation (cid, target, verdict, scores, reasons, model) VALUES ($1,$2,$3,'{}'::jsonb,$4,'operator')`, [mod.cid, target, i < posts.length ? "hide_post" : "hide_topic", [reason]]);
+    }
+    if (posts.length) {
+      await tx.query(`UPDATE posts SET status = 'hidden' WHERE cid = ANY($1)`, [posts]);
+      await tx.query(`UPDATE answers SET status = 'hidden' WHERE post_cid = ANY($1) AND status IN ('visible', 'quarantined')`, [posts]);
+    }
+    await tx.query(`UPDATE topics SET status = 'hidden' WHERE path <@ $1::ltree`, [path]);
+    return seqs;
+  });
+  for (const mod of [...postMods, topicMod]) ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: mod.cid, type: mod.type } }));
+  return { status: "accepted", topic: displayPath(path), cid: topicMod.cid, seq: seqs.at(-1), hidden_posts: posts.map((cid, i) => ({ cid, moderation: postMods[i].cid, seq: seqs[i] })) };
 }
 
 async function flagContent(ctx: AppContext, rec: SignedRecord): Promise<SubmitResult> {

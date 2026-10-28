@@ -50,7 +50,7 @@ export async function findTopicCandidates(db: Db, ctx: AppContext, req: { title:
   ]).slice(0, limit);
   if (!fused.length) return [];
   const rows = (await db.query<{ path: string; title: string; slug: string; summary: string; emb: string | null }>(
-    `SELECT path::text, title, slug, summary, emb::text FROM topics WHERE path::text = ANY($1)`, [fused.map((f) => f.id)])).rows;
+    `SELECT path::text, title, slug, summary, emb::text FROM topics WHERE path::text = ANY($1) AND status = 'active'`, [fused.map((f) => f.id)])).rows;
   const byPath = new Map(rows.map((r) => [r.path, r]));
   const trgBy = new Map<string, number>();
   for (const r of [...trg.rows, ...ali.rows]) trgBy.set(r.path, Math.max(trgBy.get(r.path) ?? 0, Number(r.s)));

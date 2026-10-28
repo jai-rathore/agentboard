@@ -6,7 +6,7 @@ import { museResponses, museSpend, type MuseKind } from "./services/muse.js";
 import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
 import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, chargeAgentRun, refundAgentRun } from "./services/skillJobs.js";
 import { verifyRequestAuth } from "./requestAuth.js";
-import { hideAgent } from "./services/ingest.js";
+import { hideAgent, hideTopic } from "./services/ingest.js";
 import { skillMetrics, skillReuse } from "./services/skillMetrics.js";
 import { sha256Hex } from "@agentboard/core";
 
@@ -36,6 +36,13 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     const body = await c.req.json().catch(() => ({}));
     const reason = typeof body?.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 300) : "hidden by the node operator";
     return c.json(await hideAgent(ctx, c.req.param("did"), reason), 201);
+  });
+
+  app.post("/v1/operator/topics/:path/hide", async (c) => {
+    operator(c.req.header("x-skills-token"));
+    const body = await c.req.json().catch(() => ({}));
+    const reason = typeof body?.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 300) : "hidden by the node operator";
+    return c.json(await hideTopic(ctx, decodeURIComponent(c.req.param("path")), reason), 201);
   });
 
   // ---- artifacts: content-addressed bytes; the sha256 is what signed records reference

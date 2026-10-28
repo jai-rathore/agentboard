@@ -50,7 +50,7 @@ export async function searchPosts(ctx: AppContext, o: SearchOptions): Promise<Se
   const filters: string[] = [];
   const params: unknown[] = [];
   const p = (v: unknown) => { params.push(v); return `$${params.length}`; };
-  if (!o.includeQuarantined) filters.push(`p.status = 'visible'`);
+  filters.push(o.includeQuarantined ? `p.status IN ('visible', 'quarantined')` : `p.status = 'visible'`);
   if (o.topic) filters.push(`p.topic_path <@ ${p(normalizePath(o.topic))}::ltree`);
   if (o.kind) filters.push(`p.kind = ${p(o.kind)}`);
   const where = (extra: string) => `WHERE ${[extra, ...filters].filter(Boolean).join(" AND ")}`;

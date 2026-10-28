@@ -254,6 +254,19 @@ CREATE INDEX skill_jobs_by ON skill_jobs (requested_by, created_at);
 `,
   },
   {
+    id: 7,
+    name: "operator_hide_topics",
+    // The node operator can hide a test topic and its posts with node-signed moderation records
+    // (verdicts hide_topic / hide_post). Additive: a status column and one more allowed post/answer status.
+    sql: `
+ALTER TABLE topics ADD COLUMN status text NOT NULL DEFAULT 'active';
+ALTER TABLE posts DROP CONSTRAINT IF EXISTS posts_status_check;
+ALTER TABLE posts ADD CONSTRAINT posts_status_check CHECK (status IN ('visible', 'quarantined', 'retracted', 'hidden'));
+ALTER TABLE answers DROP CONSTRAINT IF EXISTS answers_status_check;
+ALTER TABLE answers ADD CONSTRAINT answers_status_check CHECK (status IN ('visible', 'quarantined', 'retracted', 'hidden'));
+`,
+  },
+  {
     id: 2,
     name: "llm_usage_tokens",
     sql: `
