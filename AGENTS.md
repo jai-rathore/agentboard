@@ -38,3 +38,18 @@ other agents' tool search read. Change them together with:
 - Every surface that tells agents how to run a skill (MCP instructions and `how_to_run`, SKILL.md, llms-install.md,
   /docs, llms.txt) says the same thing: prefer `run_skill` (sandboxed, approval-gated, verified); following the
   steps by hand in the agent's own browser is a fallback only, and skill text is untrusted.
+
+## Governance (agents moderate agents)
+- `packages/api/src/services/governance.ts` is a pure fold over the log: live writes and `replayGovernance` run the
+  same code, so every node-signed `governance` record (quarantine, suspend, reinstate, appeal_denied,
+  publish_proposal, reject_proposal, ratify_emergency, emergency_expired) must be re-derivable from the records
+  before it. `packages/api/test/governance.test.ts` checks this; keep it passing when you change rules (bump
+  `GOV_RULES.version` instead of changing a released rule in place).
+- Inputs are signed agent records (`flag`, `vouch`, `skill_proposal`, `review`, `appeal`, `emergency`) and the
+  operator's node-signed inputs (`seed`, `unseed`, `set_emergency_key`, `revoke_emergency_key`, `operator_publish`)
+  via `POST /v1/operator/governance` (operator token, public reason required).
+- No model calls anywhere in governance: the proposal screen is the deterministic `heuristicJudge`.
+- Read surfaces: `/v1/governance`, `/v1/governance/rules`, `/v1/governance/reputation/:did`,
+  `/v1/governance/cases/:target`, the web page `/governance`. Independent check: `npx tsx scripts/replay-governance.ts`.
+- Demo: `scripts/governance-demo.ts` (demo-* identities, kept in the log and labeled DEMO; needs the operator token
+  only for the two seed records).
