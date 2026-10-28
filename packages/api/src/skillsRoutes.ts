@@ -12,6 +12,7 @@ import { sha256Hex } from "@agentboard/core";
 import { startPublicReplay, publicReplayStatus, MCP_INTERNAL_HEADER, MCP_INTERNAL_TOKEN, MCP_CLIENT_IP_HEADER } from "./services/publicReplay.js";
 import { clientIp } from "./services/ipLimits.js";
 import { runDetail } from "./services/skillMetrics.js";
+import { openBenchmark, startColdRun, startReuseRun, finalizeBenchmark, listBenchmarks, latestBenchmark, getBenchmark, coldRunDetail } from "./services/benchmark.js";
 
 const same = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 
@@ -49,6 +50,37 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     const viaMcp = Boolean(internal) && internal === MCP_INTERNAL_TOKEN;
     const ip = viaMcp ? (c.req.header(MCP_CLIENT_IP_HEADER) || null) : clientIp((n) => c.req.header(n));
     return c.json(await startPublicReplay(ctx, c.req.param("slug"), { params: b.params ?? b.inputs, challenge: b.challenge }, ip, viaMcp ? "mcp" : "pow"), 202);
+  });
+
+  // ---- reuse benchmark (services/benchmark.ts): public reads, operator-only writes (they spend Muse credits).
+  app.get("/v1/benchmarks", async (c) => c.json(await listBenchmarks(ctx)));
+  app.get("/v1/benchmarks/latest", async (c) => { const b = await latestBenchmark(ctx); return b ? c.json(b) : c.body(null, 204); });
+  app.get("/v1/benchmarks/runs/:cid", async (c) => c.json(await coldRunDetail(ctx, c.req.param("cid"))));
+  app.get("/v1/benchmarks/:ref", async (c) => c.json(await getBenchmark(ctx, c.req.param("ref"))));
+  app.post("/v1/operator/benchmarks", async (c) => {
+    operator(c.req.header("x-skills-token"));
+    const b = await c.req.json().catch(() => null);
+    if (!b || typeof b.skill !== "string" || typeof b.agent_a !== "string" || typeof b.agent_b !== "string") throw new HttpError(400, "invalid_json", "expected {skill, params, agent_a, agent_b, find?}");
+    return c.json(await openBenchmark(ctx, { skill: b.skill, params: b.params, agent_a: b.agent_a, agent_b: b.agent_b, find: b.find && typeof b.find === "object" ? b.find : undefined }), 201);
+  });
+  // Each run is started by its agent: operator token (funding) plus that agent's signed request over "?h=<sha256 of the body>".
+  const signedBy = async (c: any) => {
+    operator(c.req.header("x-skills-token"));
+    const raw = await c.req.text();
+    if (raw.length > 20_000) throw new HttpError(413, "too_large", "request too large");
+    const u = new URL(c.req.url);
+    const did = verifyRequestAuth(c.req.header("authorization"), "POST", u.pathname + u.search, ctx.now());
+    if (!did) throw new HttpError(401, "unauthorized", "send the agent's signed request (Authorization: Agentboard ...)");
+    if (u.searchParams.get("h") !== sha256Hex(new TextEncoder().encode(raw))) throw new HttpError(401, "body_hash", "h must be the sha256 of the request body");
+    let b: any = {}; if (raw.trim()) { try { b = JSON.parse(raw); } catch { throw new HttpError(400, "invalid_json", "expected JSON"); } }
+    return { did, b: b && typeof b === "object" ? b : {} };
+  };
+  app.post("/v1/operator/benchmarks/:id/cold", async (c) => { const { did } = await signedBy(c); return c.json(await startColdRun(ctx, c.req.param("id"), did), 201); });
+  app.post("/v1/operator/benchmarks/:id/reuse", async (c) => { const { did, b } = await signedBy(c); return c.json(await startReuseRun(ctx, c.req.param("id"), did, typeof b.skill === "string" ? b.skill : ""), 202); });
+  app.post("/v1/operator/benchmarks/:id/finalize", async (c) => {
+    operator(c.req.header("x-skills-token"));
+    const b = await c.req.json().catch(() => ({}));
+    return c.json(await finalizeBenchmark(ctx, c.req.param("id"), b && typeof b === "object" ? b : {}), 201);
   });
 
   // ---- operator: hide a leftover test agent (node-signed moderation record in the log; nothing deleted)

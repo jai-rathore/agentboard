@@ -71,7 +71,7 @@ export function SiteBadge({ kind }: { kind?: string }) {
     ? <span className="badge site mock" title="Runs on an Agentboard demo page (a mock site we host), not a real-world site">demo (mock site)</span>
     : <span className="badge site real" title="Runs on a real public website">real site</span>;
 }
-const TRIGGER: Record<string, string> = { public: "public trigger (no token, capped)", agent: "an agent (signed, paid in credits)", operator: "the operator (token)", web: "the operator (web replay panel)" };
+const TRIGGER: Record<string, string> = { public: "public trigger (no token, capped)", agent: "an agent (signed, paid in credits)", operator: "the operator (token)", web: "the operator (web replay panel)", benchmark: "a reuse-benchmark agent (signed request, operator-funded)" };
 export const triggerLabel = (t?: string) => TRIGGER[t ?? ""] ?? t ?? "unknown";
 export function Faster({ recording, run }: { recording?: number | null; run?: number | null }) {
   if (recording == null || run == null || !(run < recording)) return null;
@@ -369,7 +369,7 @@ export function JobPage({ id }: { id: string }) {
 
 async function sha256Hex(bytes: ArrayBuffer) { return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join(""); }
 
-function SignatureCheck({ entries }: { entries: { seq: number; log: { prev_hash: string; entry_hash: string }; record: SignedRecord }[] }) {
+export function SignatureCheck({ entries }: { entries: { seq: number; log: { prev_hash: string; entry_hash: string }; record: SignedRecord }[] }) {
   const [res, setRes] = useState<string[] | null>(null);
   const check = async () => {
     const out: string[] = [];
@@ -544,7 +544,7 @@ export function ReusePage({ skill, agent }: { skill?: string; agent?: string }) 
 // ---------------------------------------------------------------- one run as evidence (/skills/runs/<record cid or job id>)
 
 /** The replay GIF's frames as separate step screenshots (WebCodecs ImageDecoder); falls back to the animated GIF. */
-function StepFrames({ gif }: { gif: string }) {
+export function StepFrames({ gif }: { gif: string }) {
   const [frames, setFrames] = useState<string[] | null>(null);
   useEffect(() => {
     let live = true;

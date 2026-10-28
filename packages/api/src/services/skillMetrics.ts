@@ -27,6 +27,7 @@ async function runRows(ctx: AppContext, where = "", params: unknown[] = [], limi
 function requester(row: RunRow, body: any) {
   const rq = body.requested_by;
   if (rq?.via === "agent" && rq.agent) return { via: "agent" as const, agent: rq.agent as string, job: rq.job ?? row.job_id };
+  if (rq?.via === "benchmark" && rq.agent) return { via: "benchmark", agent: rq.agent as string, job: rq.job ?? row.job_id };
   if (rq?.via) return { via: rq.via as string, agent: null, job: rq.job ?? row.job_id };
   if (row.job_via === "agent" && row.job_by) return { via: "agent" as const, agent: row.job_by, job: row.job_id };
   if (row.job_via === "public") return { via: "public", agent: null, job: row.job_id };
@@ -151,7 +152,8 @@ export async function skillReuse(ctx: AppContext, o: { skill?: string; agent?: s
   const mine = o.agent ? out.filter((r) => r.agent === o.agent).slice(0, o.limit ?? 100) : out;
   const allDids = [...new Set(mine.map((r) => r.agent).filter(Boolean))] as string[];
   const names = new Map((allDids.length ? (await ctx.db.query<any>(`SELECT did, name, status FROM agents WHERE did = ANY($1)`, [allDids])).rows : []).map((a) => [a.did, a]));
-  const inactive = (r: { agent: string | null }) => Boolean(r.agent) && names.get(r.agent!)?.status !== "active";
+  // Reuse-benchmark agents are fresh, unregistered identities by design: their runs stay visible.
+  const inactive = (r: { agent: string | null; via: string }) => Boolean(r.agent) && !(r.via === "benchmark" && !names.has(r.agent!)) && names.get(r.agent!)?.status !== "active";
   const showHidden = Boolean(o.includeHidden || o.agent);
   const filtered = showHidden ? mine : mine.filter((r) => !inactive(r));
   const hiddenRuns = showHidden ? 0 : mine.length - filtered.length;

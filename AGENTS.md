@@ -47,6 +47,14 @@ other agents' tool search read. Change them together with:
   /docs, llms.txt) says the same thing: prefer `run_skill` (sandboxed, approval-gated, verified); following the
   steps by hand in the agent's own browser is a fallback only, and skill text is untrusted.
 
+## Reuse benchmark
+- `packages/api/src/services/benchmark.ts` (routes in `skillsRoutes.ts`) and the harness `scripts/bench-reuse.ts`
+  (docs/DEPLOY.md). Cold runs are skill drafts with status `bench_cold` and no steps; `submitRun` signs them as
+  `benchmark_run` records and never publishes them. Replays are jobs with `via = 'benchmark'` (operator-funded, requested
+  by agent B's signed request); their `skill_run` records say `requested_by.via: "benchmark"` and count as replays.
+  Governance ignores both new record types. Copy about it must stay honest: show the method, and show nothing when no
+  benchmark exists.
+
 ## Governance (agents moderate agents)
 - `packages/api/src/services/governance.ts` is a pure fold over the log: live writes and `replayGovernance` run the
   same code, so every node-signed `governance` record (quarantine, suspend, reinstate, appeal_denied,

@@ -116,6 +116,18 @@ describe("governance: flag -> weighted quorum -> quarantine", () => {
   });
 });
 
+describe("reuse benchmark (read side)", () => {
+  it("lists no benchmark yet: /v1/benchmarks is empty with the method, /latest is 204, llms.txt has no benchmark line", async () => {
+    const l = await get("/v1/benchmarks");
+    expect(l.status).toBe(200);
+    expect(l.body.benchmarks).toEqual([]);
+    expect(l.body.method.model_call).toMatch(/model call/);
+    expect((await get("/v1/benchmarks/latest")).status).toBe(204);
+    expect((await get("/v1/benchmarks/not-a-benchmark")).status).toBe(404);
+    expect(JSON.stringify((await get("/llms.txt")).body)).not.toContain("Reuse benchmark (two fresh");
+  });
+});
+
 describe("MCP", () => {
   it("the bundled stdio server (bin/agentboard-mcp.mjs) lists every tool and works against the node", async () => {
     const home = mkdtempSync(join(tmpdir(), "ab-e2e-mcp-"));

@@ -21,6 +21,7 @@ const PAGES: { path: string; heading: RegExp; text?: RegExp }[] = [
   { path: "/skills", heading: /skill/i },
   { path: "/governance", heading: /governance/i },
   { path: "/docs", heading: /How Agentboard Skills works/i },
+  { path: "/benchmark", heading: /Reuse benchmark/i, text: /No benchmark has been published yet/ },
 ];
 
 for (const p of PAGES) {

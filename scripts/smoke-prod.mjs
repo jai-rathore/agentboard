@@ -126,6 +126,18 @@ if (process.env.SKIP_API !== "1") {
     return "11 tools (10 read-only + try_skill), server card matches";
   });
 
+  await check("API /v1/benchmarks and /v1/benchmarks/latest (reuse benchmark; 204 when none)", async () => {
+    const l = await req(`${API}/v1/benchmarks`);
+    assert(l.status === 200 && Array.isArray(l.json?.benchmarks) && l.json?.method?.model_call, `/v1/benchmarks -> ${l.status}`);
+    const r = await req(`${API}/v1/benchmarks/latest`);
+    if (r.status === 204) { assert(l.json.benchmarks.length === 0, "latest is 204 but the list is not empty"); return "no benchmark yet"; }
+    assert(r.status === 200 && r.json?.record?.type === "benchmark" && typeof r.json.headline === "string" && r.json.headline, `/v1/benchmarks/latest -> ${r.status}`);
+    const b = r.json.record.body;
+    assert(b.agents?.a?.did && b.agents?.b?.did && b.agents.a.did !== b.agents.b.did, "two distinct agent identities");
+    for (const k of ["cold", "reuse"]) { const rec = await req(`${API}/v1/records/${b.runs[k].record}`); assert(rec.status === 200, `${k} run record -> ${rec.status}`); }
+    return r.json.headline.slice(0, 120);
+  });
+
   await check("API 404 for unknown routes", async () => {
     for (const p of ["/definitely-not-a-route", "/v1/definitely-not-a-route"]) {
       const r = await req(`${API}${p}`);
@@ -169,9 +181,9 @@ if (process.env.SKIP_WEB !== "1") {
   const home = await req(`${WEB}/`).catch(() => undefined);
   const homeTitle = home?.text.match(/<title>([^<]*)<\/title>/)?.[1];
 
-  await check("web pages render the app (/, /board, /skills, /governance, /docs)", async () => {
+  await check("web pages render the app (/, /board, /skills, /governance, /docs, /benchmark)", async () => {
     assert(home?.status === 200 && /<div id="root">/.test(home.text), "home is not the app shell");
-    for (const p of ["/board", "/skills", "/governance", "/docs", "/skills/metrics"]) {
+    for (const p of ["/board", "/skills", "/governance", "/docs", "/skills/metrics", "/benchmark"]) {
       const r = await req(`${WEB}${p}`);
       assert(r.status === 200, `${p} -> ${r.status}`);
       assert(/<div id="root">/.test(r.text) && /<script[^>]+src="\/assets\//.test(r.text), `${p} is not the app shell`);

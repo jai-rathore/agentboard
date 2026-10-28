@@ -17,6 +17,7 @@ import { HttpError } from "../context.js";
 import { appendToLog } from "./log.js";
 import { museResponses, outputText, reasoningSummary, type MuseUsage } from "./muse.js";
 import { siteKind, SITE_LABEL, replayCountsBySlug } from "./skillMetrics.js";
+import { submitColdRun, benchmarkForJob } from "./benchmark.js";
 
 export const ARTIFACT_MIME = ["video/mp4", "image/jpeg", "image/png", "image/gif"] as const;
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
@@ -264,6 +265,11 @@ export async function healSkill(ctx: AppContext, skill: Skill, run: RunInput, st
 export async function submitRun(ctx: AppContext, run: RunInput) {
   if (!run.draft_id === !run.skill_cid) throw new HttpError(400, "target", "send exactly one of draft_id or skill_cid");
   if (run.success !== run.verdict.success) throw new HttpError(400, "verdict", "success must match the Muse verdict");
+  if (run.draft_id) {
+    // a reuse-benchmark cold run (task statement only): signed as a benchmark_run, never publishes a skill
+    const d0 = await getDraft(ctx, run.draft_id);
+    if (d0.status === "bench_cold" || d0.status === "bench_cold_done") return submitColdRun(ctx, d0, run);
+  }
   const final = await putArtifact(ctx, Buffer.from(run.final_jpeg_b64, "base64"), "image/jpeg");
   const gif = run.gif_b64 ? await putArtifact(ctx, Buffer.from(run.gif_b64, "base64"), "image/gif") : null;
 
@@ -303,7 +309,8 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
   const time = timeSaved(await recordingMs(ctx, source), run);
   const job = run.job_id ? (await ctx.db.query<any>(`SELECT id, via, requested_by FROM skill_jobs WHERE id = $1`, [run.job_id])).rows[0] : null;
   // Who triggered the run: an agent paying credits, the public capped trigger, the operator (token), or the web replay panel.
-  const requestedBy = job ? (job.via === "agent" ? { via: "agent", agent: job.requested_by, job: job.id } : job.via === "public" ? { via: "public", job: job.id } : { via: "operator", job: job.id }) : { via: "web" };
+  // Reuse-benchmark replays name the benchmark and the agent that asked (operator-funded; not an agent-funded run).
+  const requestedBy = job ? (job.via === "agent" ? { via: "agent", agent: job.requested_by, job: job.id } : job.via === "benchmark" ? { via: "benchmark", agent: job.requested_by, job: job.id, benchmark: await benchmarkForJob(ctx, job.id) } : job.via === "public" ? { via: "public", job: job.id } : { via: "operator", job: job.id }) : { via: "web" };
 
   // ---- drift: verified replays of a published skill whose steps no longer match the site
   const stale = current && run.success ? [...new Set([...staleSteps(current.body.skill, run.actions), ...run.step_changes.map((c) => c.step)])].sort((a, b) => a - b) : [];

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { API, get } from "./api";
 import { Link, ago, short } from "./App";
 import { fmtDur, SiteBadge } from "./skills";
+import { BenchmarkStat } from "./benchmark";
 
 export const GITHUB = "https://github.com/jai-rathore/agentboard";
 /** The one-line install (GitHub; the npm package is not published). */
@@ -138,6 +139,7 @@ export function Landing() {
         <Link to="/docs" className="btn ghost">Docs</Link>
       </div>
       <BigMetrics />
+      <BenchmarkStat />
       <p className="small"><b>Evaluate in 60 seconds:</b> connect any MCP client to <code>{API}/mcp</code>, then <code>find_skill</code> → <code>try_skill</code> → <code>skill_run_status</code> → <code>verify_record</code>. <Link to="/docs#evaluate">Details →</Link></p>
     </section>
     <ActivityFeed />

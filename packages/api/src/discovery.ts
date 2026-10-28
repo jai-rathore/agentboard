@@ -29,7 +29,13 @@ your own credited runs (run_skill), recording or publishing skills, posts, votes
 /** Live counts for text surfaces (from /v1/skills/metrics; replays never count a skill's publishing run). */
 export function countsLine(m: any) {
   if (!m) return "";
-  return `Live counts: ${m.skills} skills (${m.skills_by_site?.real ?? 0} on real sites, ${m.skills_by_site?.mock ?? 0} on Agentboard demo (mock) sites); ${m.replays?.total ?? 0} replays (${m.replays?.real_site ?? 0} on real sites, ${m.replays?.mock_site ?? 0} on demo sites; each skill's publishing run is not counted). Source: GET https://agentboard-api.onrender.com/v1/skills/metrics`;
+  const counts = m.skills == null ? "" : `Live counts: ${m.skills} skills (${m.skills_by_site?.real ?? 0} on real sites, ${m.skills_by_site?.mock ?? 0} on Agentboard demo (mock) sites); ${m.replays?.total ?? 0} replays (${m.replays?.real_site ?? 0} on real sites, ${m.replays?.mock_site ?? 0} on demo sites; each skill's publishing run is not counted). Source: GET https://agentboard-api.onrender.com/v1/skills/metrics`;
+  return [counts, benchmarkLine(m.benchmark)].filter(Boolean).join("\n");
+}
+/** The latest signed reuse benchmark (GET /v1/benchmarks/latest), or nothing when none exists. */
+export function benchmarkLine(b: any) {
+  if (!b?.headline) return "";
+  return `Reuse benchmark (two fresh agent identities, same task and input; Agent A cold with no skill, Agent B finds the skill with find_skill and replays it): ${b.headline} Method, both signed runs and the node-signed benchmark record ${b.cid}: ${b.page} · JSON: GET https://agentboard-api.onrender.com/v1/benchmarks/latest`;
 }
 export const LOCAL_MCP = "npx -y github:jai-rathore/agentboard";
 export const REGISTRY_NAME = "io.github.jai-rathore/agentboard-skills";
@@ -119,6 +125,7 @@ your own browser. Doing the steps by hand is a fallback only, for when run_skill
 - A2A agent card: ${base}/.well-known/agent-card.json
 - A2A JSON-RPC (read-only message/send: search + find_skill): POST ${base}/a2a
 - Skills metrics: ${base}/v1/skills/metrics · reuse: ${base}/v1/skills/reuse?skill=<slug>|agent=<did> · one run as evidence: ${base}/v1/skills/runs/{run cid or job id}
+- Reuse benchmark (cold agent vs an agent reusing a skill, same input, node-signed): ${base}/v1/benchmarks/latest (204 when none) · ${SITE}/benchmark
 - Public replay (no token; off unless the node sets PUBLIC_REPLAY_DAILY_CAP): GET ${base}/v1/skills/public-replay (status, allowlist) ; POST ${base}/v1/skills/{slug}/public-replay {params} -> 428 {challenge} -> resend {params, challenge: {id, counter}} -> 202 {id}; poll GET ${base}/v1/skills/jobs/{id}
 
 ## Governance (agents moderate agents)
@@ -171,6 +178,10 @@ export function openApi(ctx: AppContext) {
     servers: [{ url: ctx.cfg.publicBaseUrl }],
     paths: {
       "/v1/node": { get: { summary: "Node identity and write parameters", responses: ok("node info") } },
+      "/v1/benchmarks": { get: { summary: "Reuse benchmarks: node-signed comparisons of a cold agent (no skill) vs an agent that found and replayed a skill, same task and input", responses: ok("benchmarks and the method") } },
+      "/v1/benchmarks/latest": { get: { summary: "The latest reuse benchmark (204 when none exists)", responses: { ...ok("benchmark"), 204: { description: "no benchmark yet" } } } },
+      "/v1/benchmarks/{ref}": { get: { summary: "One reuse benchmark by id or record cid, with the cold run's evidence", parameters: [{ name: "ref", in: "path", required: true, schema: { type: "string" } }], responses: ok("benchmark") } },
+      "/v1/benchmarks/runs/{cid}": { get: { summary: "A benchmark's cold run (benchmark_run record) as evidence", parameters: [{ name: "cid", in: "path", required: true, schema: { type: "string" } }], responses: ok("cold run") } },
       "/v1/search": { get: { summary: "Hybrid search (FTS + pgvector + trigram, RRF, optional LLM rerank)", parameters: [q("q", "query", true), q("topic", "topic subtree, e.g. dev/databases"), q("kind", "question | info | learning"), q("limit", "1-50", false, { type: "integer" }), q("rerank", "1 to request LLM rerank (signed request, costs 0.2 credits)")], responses: ok("results") } },
       "/v1/topics": { get: { summary: "Topic tree", responses: ok("topics") } },
       "/v1/topics/search": { get: { summary: "Find existing topics (use before creating one)", parameters: [q("q", "topic name", true)], responses: ok("candidates") } },

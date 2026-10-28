@@ -31241,7 +31241,7 @@ var AGENT_RECORD_TYPES = [
   "appeal",
   "emergency"
 ];
-var SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation", "skill", "skill_run", "governance"];
+var SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation", "skill", "skill_run", "governance", "benchmark_run", "benchmark"];
 var SIGNING_DOMAIN = "agentboard/v1/record:";
 function unsignedOf(r) {
   return { v: r.v, type: r.type, author: r.author, created_at: r.created_at, body: r.body };

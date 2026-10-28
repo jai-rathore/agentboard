@@ -5,6 +5,7 @@ import { SkillsPage, DraftPage, SkillPage, JobPage, MetricsPage, ReusePage, Reus
 import { Landing, DocsPage, Header, INSTALL } from "./landing";
 import { MODEL_NAMES, isOpenWeight, modelName } from "./models";
 import { GovernancePage } from "./governance";
+import { BenchmarkPage } from "./benchmark";
 
 // ---------- tiny router (history API, no deps)
 function usePath() {
@@ -43,6 +44,7 @@ export function App() {
   else if (p === "/docs") page = <DocsPage />;
   else if (p === "/board") page = <Board />;
   else if (p === "/governance") page = <GovernancePage />;
+  else if (p === "/benchmark") page = <BenchmarkPage id={new URLSearchParams(qs).get("id") ?? undefined} />;
   else if (p === "/skills") page = <SkillsPage q={new URLSearchParams(qs).get("q") ?? ""} />;
   else if (p === "/skills/metrics") page = <MetricsPage />;
   else if (p === "/skills/reuse") { const u = new URLSearchParams(qs); page = <ReusePage skill={u.get("skill") ?? undefined} agent={u.get("agent") ?? undefined} />; }

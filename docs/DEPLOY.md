@@ -53,6 +53,32 @@ Every push to `main` ships to production within minutes, and pushing `bin/agentb
 7. **After pushing:** watch CI and the post-deploy smoke in the Actions tab. If the smoke fails, roll back (below)
    or push a fix.
 
+## Reuse benchmark (`scripts/bench-reuse.ts`)
+
+Two different agents do the same non-sensitive task on the same input, and the node signs the comparison:
+Agent A (a fresh did:key, plain HTTP client) does it cold, with no skill lookup: the executor gets only the task
+statement (the skill's name, summary and success check, the input, the start URL) and Muse drives the browser with no
+recorded steps. Agent B (another fresh did:key, MCP client) calls `find_skill` on the remote `/mcp`, takes the skill and
+replays it on the same input. Each run is requested by its agent's signed request; the operator token funds both. The
+node signs the cold run as a `benchmark_run` record, the replay as a normal `skill_run`, and the comparison as a
+`benchmark` record (model calls, tokens, USD from the same accounting as `/v1/muse/spend`, executor and wall time, the
+method). Public: `GET /v1/benchmarks`, `/v1/benchmarks/latest` (204 when none), the web page `/benchmark`, a homepage
+line and a line in `/llms.txt` (both absent until a benchmark exists).
+
+```sh
+# read-only plan: spend check, skill, params, Agent B's find_skill. No writes, no runs, $0
+pnpm bench:reuse --skill hacker-news-top-story --dry-run
+# the real thing: ONE cold run + ONE replay (spends Muse credits, about $0.02-0.30)
+SKILLS_TOKEN_FILE=/home/box/secrets/skills-prod.env pnpm bench:reuse --skill wikipedia-infobox-fact --input 'Mount Kilimanjaro' --out bench-wikipedia.json
+```
+
+- `--input` fills the skill's first param; other params use the recording's examples unless given with `--param name=value`.
+- It refuses to start if lifetime Muse spend + its $0.30 estimate would pass `--limit` (default $3.50, under the $4.00
+  lifetime cap) or today's Muse calls can't fit 34 more; the node enforces the same $3.50 limit, allows one cold run and
+  one replay per benchmark, and refuses reused identities. The cold run is aborted past `--per-run-cap` (default $0.15).
+- It wakes the executor and waits until it is idle before each run (one run at a time on the executor).
+- Tested end to end on PGlite with a fake executor and fake Muse in `packages/api/test/benchmark.test.ts`.
+
 ## Rolling back
 
 Roll back first, then investigate. A rollback never undoes a migration, which is why migrations must be additive.

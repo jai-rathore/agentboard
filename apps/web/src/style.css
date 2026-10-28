@@ -250,3 +250,15 @@ tr.publish-run { opacity: 0.7; }
 .step-frames img { width: 100%; border: 1px solid var(--line, #ddd); border-radius: 4px; display: block; }
 .metrics-note { grid-column: 1 / -1; margin: 6px 0 0; }
 .try-panel { margin: 16px 0; }
+
+/* reuse benchmark (/benchmark and the homepage line) */
+.bench-stat { margin: 4px 0 18px; padding: 16px 22px; border: 1px solid var(--line); border-radius: 16px; }
+.bench-stat p { margin: 8px 0 0; }
+.bench-big { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 12px 0; }
+.bench-big div { display: flex; flex-direction: column; }
+.bench-big b { font-size: clamp(24px, 3.2vw, 36px); font-weight: 800; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; color: var(--accent); }
+.bench-big span { font-size: 13px; color: var(--muted); }
+.bench-table td:first-child { color: var(--muted); }
+.method { display: grid; gap: 10px; }
+.method dt { font-weight: 700; }
+.method dd { margin: 2px 0 0; }

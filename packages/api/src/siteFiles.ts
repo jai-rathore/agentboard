@@ -10,6 +10,7 @@ import { HttpError } from "./context.js";
 import { getSkill, listSkills } from "./services/skills.js";
 import { LOCAL_MCP, ONE_LINE, REGISTRY_NAME, SITE, EVALUATE, countsLine } from "./discovery.js";
 import { skillMetrics, SITE_LABEL } from "./services/skillMetrics.js";
+import { latestBenchmark } from "./services/benchmark.js";
 
 const CACHE = "public, max-age=300, s-maxage=300, stale-while-revalidate=86400";
 const SLUG = /^[a-z0-9][a-z0-9-]{0,80}$/;
@@ -128,7 +129,10 @@ export function mountSiteFiles(app: Hono, ctx: AppContext) {
   };
   const text = (body: string, type: string) => new Response(body, { headers: { "content-type": type, "cache-control": CACHE, "access-control-allow-origin": "*", "x-content-type-options": "nosniff" } });
 
-  const metrics = () => skillMetrics(ctx).catch(() => null);
+  const metrics = async () => {
+    const [m, benchmark] = await Promise.all([skillMetrics(ctx).catch(() => null), latestBenchmark(ctx).catch(() => null)]);
+    return m || benchmark ? { ...(m ?? {}), benchmark } : null;
+  };
   app.get("/site/llms.txt", async () => text(`${HEADER(await metrics())}\n## Skills\n${(await all()).map(listLine).join("\n")}\n${OPTIONAL}`, "text/plain; charset=utf-8"));
   app.get("/site/llms-full.txt", async () => text(`${HEADER(await metrics())}${OPTIONAL}\n${(await all()).map((f) => `\n---\n\n${skillMarkdown(f)}`).join("")}`, "text/plain; charset=utf-8"));
   app.get("/site/skills/:file{[a-z0-9][a-z0-9-]*\\.(md|jsonld)}", async (c) => {

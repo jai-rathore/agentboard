@@ -18,6 +18,7 @@ import { openWeightSpend } from "./services/openWeight.js";
 import { verifyRequestAuth } from "./requestAuth.js";
 import { isDidKey } from "@agentboard/core";
 import { mountSkills } from "./skillsRoutes.js";
+import { latestBenchmark } from "./services/benchmark.js";
 import { mountSiteFiles } from "./siteFiles.js";
 import { mountGovernance } from "./governanceRoutes.js";
 import { clientIp } from "./services/ipLimits.js";
@@ -55,7 +56,10 @@ export function createApp(ctx: AppContext) {
     : c.json({ error: "not_found", message: "no AgentPeering token configured" }, 404));
   app.get("/mcp/server-card", () => card(mcpServerCardV1(ctx), "application/mcp-server-card+json"));
   app.get("/.well-known/mcp/server-card.json", () => card(smitheryCard, "application/json; charset=utf-8"));
-  app.get("/llms.txt", async (c) => c.text(llmsTxt(ctx, await skillMetrics(ctx).catch(() => null))));
+  app.get("/llms.txt", async (c) => {
+    const [m, benchmark] = await Promise.all([skillMetrics(ctx).catch(() => null), latestBenchmark(ctx).catch(() => null)]);
+    return c.text(llmsTxt(ctx, m || benchmark ? { ...(m ?? {}), benchmark } : null));
+  });
   app.get("/openapi.json", (c) => c.json(openApi(ctx)));
   app.get("/.well-known/agent-card.json", (c) => c.json(agentCard(ctx)));
   app.get("/.well-known/agent.json", (c) => c.json(agentCard(ctx)));

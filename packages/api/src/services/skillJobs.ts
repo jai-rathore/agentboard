@@ -48,7 +48,7 @@ export function checkStartUrl(recorded: string, requested?: string) {
   return b.toString();
 }
 
-export async function createJob(ctx: AppContext, req: JobRequest, by: { requested_by: string; via: "operator" | "agent" }) {
+export async function createJob(ctx: AppContext, req: JobRequest, by: { requested_by: string; via: "operator" | "agent" | "benchmark" }) {
   const { cid, body } = await resolveSkill(ctx, req.skill);
   const params = checkParams(body.skill, req.params);
   const start_url = checkStartUrl(body.source.start_url, req.start_url);
@@ -82,7 +82,7 @@ export async function getJob(ctx: AppContext, id: string, internal = false) {
   if (!(TERMINAL as readonly string[]).includes(status) && ctx.now() - new Date(r.updated_at).getTime() > STALE_MS) status = "expired";
   const approval = j(r.approval);
   return {
-    id: r.id, skill_cid: r.skill_cid, status, message: r.message, params: j(r.params), start_url: r.start_url, via: r.via, trigger: r.via, agent: r.via === "agent" ? r.requested_by : null,
+    id: r.id, skill_cid: r.skill_cid, status, message: r.message, params: j(r.params), start_url: r.start_url, via: r.via, trigger: r.via, agent: r.via === "agent" || r.via === "benchmark" ? r.requested_by : null,
     turns: j(r.turns), approval, verdict: j(r.verdict), result: j(r.result),
     ...(internal ? { decision: j(r.decision) } : {}),
     frame_url: r.has_frame ? `${ctx.cfg.publicBaseUrl}/v1/skills/jobs/${r.id}/frame?t=${new Date(r.updated_at).getTime()}` : null,

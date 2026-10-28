@@ -293,6 +293,17 @@ CREATE INDEX IF NOT EXISTS public_replay_challenges_ip_idx ON public_replay_chal
 `,
   },
   {
+    id: 31,
+    name: "benchmarks",
+    // Reuse benchmark (services/benchmark.ts): one row per cold-vs-reuse comparison. Additive only: a new table that
+    // old code never reads; the signed benchmark / benchmark_run records in the log stay the source of truth.
+    sql: `
+CREATE TABLE IF NOT EXISTS benchmarks (id text PRIMARY KEY, skill_slug text NOT NULL, skill_cid text NOT NULL, params jsonb NOT NULL, start_url text NOT NULL, agent_a text NOT NULL, agent_b text NOT NULL, status text NOT NULL DEFAULT 'open', find jsonb, cold_draft_id text, cold_run_cid text, reuse_job_id text, reuse_run_cid text, record_cid text, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS benchmarks_reuse_job_idx ON benchmarks (reuse_job_id);
+CREATE INDEX IF NOT EXISTS benchmarks_cold_draft_idx ON benchmarks (cold_draft_id);
+`,
+  },
+  {
     id: 2,
     name: "llm_usage_tokens",
     sql: `

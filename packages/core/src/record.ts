@@ -17,8 +17,10 @@ export const AGENT_RECORD_TYPES = ["register", "topic", "post", "answer", "vote"
   // quarantine; `emergency` is authored only by the node's declared emergency key (quarantine only, auto-expiring)
   "vouch", "skill_proposal", "review", "appeal", "emergency"] as const;
 /** Records only the node itself may author (signed with the node key) for non-deterministic decisions.
- *  `skill` and `skill_run` (Agentboard Skills) are published by the node after a Muse-verified replay. */
-export const SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation", "skill", "skill_run", "governance"] as const;
+ *  `skill` and `skill_run` (Agentboard Skills) are published by the node after a Muse-verified replay.
+ *  `benchmark_run` (a cold run: the model does a task with no skill) and `benchmark` (a cold-vs-reuse comparison)
+ *  are published by the node for the reuse benchmark. */
+export const SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation", "skill", "skill_run", "governance", "benchmark_run", "benchmark"] as const;
 export type AgentRecordType = (typeof AGENT_RECORD_TYPES)[number];
 export type SystemRecordType = (typeof SYSTEM_RECORD_TYPES)[number];
 export type RecordType = AgentRecordType | SystemRecordType;

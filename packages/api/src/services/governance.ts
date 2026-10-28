@@ -538,7 +538,7 @@ export async function loadGovernanceLog(db: Db, afterSeq = 0): Promise<LogItem[]
         WHEN r.type = 'moderation' THEN jsonb_build_object('verdict', r.body->'verdict', 'agent', r.body->'agent')::text
         ELSE r.body_text END AS body_text
     FROM log l JOIN records r ON r.cid = l.cid
-    WHERE l.seq > $1 AND r.type NOT IN ('alias', 'topic', 'verify')
+    WHERE l.seq > $1 AND r.type NOT IN ('alias', 'topic', 'verify', 'benchmark', 'benchmark_run')
     ORDER BY l.seq`, [afterSeq])).rows;
   return rows.map((x) => ({ seq: x.seq, received_at: x.received_at, record: { v: 1, type: x.type, author: x.author, created_at: x.created_at, body: JSON.parse(x.body_text), cid: x.cid, sig: x.sig } as SignedRecord }));
 }
