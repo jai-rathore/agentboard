@@ -1,0 +1,19 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bean There Coffee (Agentboard Skills demo)</title><meta name="robots" content="noindex">
+<style>body{font-family:Georgia,serif;margin:0;background:#fbf7f2;color:#3b2a1a}header{background:#3b2a1a;color:#f5e6d3;padding:14px 24px;font-size:22px}
+main{max-width:600px;margin:24px auto;padding:0 16px}.grid{display:flex;gap:12px}.card{flex:1;background:#fff;border:2px solid #e6d8c6;border-radius:8px;padding:12px;cursor:pointer;text-align:center}
+.card.sel{border-color:#b5651d;background:#fff4e8}.card b{display:block;font-size:16px}.card span{color:#8a6a4a;font-size:14px}
+label{display:block;margin-top:14px;font-size:14px}input{width:100%;padding:8px;margin-top:4px;font-size:14px;box-sizing:border-box}
+button{margin-top:18px;background:#b5651d;color:#fff;border:0;padding:11px 24px;font-size:16px;border-radius:4px;cursor:pointer}
+#done{display:none;margin-top:16px;background:#e8f5e9;color:#1b5e20;padding:12px;border-radius:4px;font-family:Arial,sans-serif}.err{color:#a40000;font-size:13px;margin-top:8px}
+.note{color:#998;font-size:12px;text-align:center;margin-top:30px}</style></head>
+<body><header>Bean There Coffee</header><main>
+<h2>Order beans</h2>
+<div class="grid" id="products"><div class="card" data-p="Ethiopia Yirgacheffe" data-c="18"><b>Ethiopia Yirgacheffe</b><span>$18 / bag</span></div>
+<div class="card" data-p="Colombia Huila" data-c="16"><b>Colombia Huila</b><span>$16 / bag</span></div>
+<div class="card" data-p="Sumatra Mandheling" data-c="17"><b>Sumatra Mandheling</b><span>$17 / bag</span></div></div>
+<label>Quantity (bags)<input id="qty" type="number" min="1" max="9" value="1"></label>
+<label>Ship to (name)<input id="name" placeholder="Full name" autocomplete="off"></label>
+<label>Address<input id="addr" placeholder="Street, city" autocomplete="off"></label>
+<button id="buy" type="button">Place order</button><div id="err" class="err"></div><div id="done"></div>
+<p class="note">Mock store for the Agentboard Skills demo. No payment, nothing is shipped.</p></main>
+<script src="app.js"></script></body></html>

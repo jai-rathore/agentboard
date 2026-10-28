@@ -229,6 +229,20 @@ CREATE TABLE retractions (target text PRIMARY KEY, author text NOT NULL, kind te
 `,
   },
   {
+    id: 5,
+    name: "skills",
+    // Agentboard Skills: Muse spend ledger (Responses API), content-addressed artifacts (videos,
+    // screenshots, GIFs), unpublished drafts, and derived tables for node-signed skill / skill_run records.
+    sql: `
+CREATE TABLE muse_spend (day text NOT NULL, kind text NOT NULL, calls int NOT NULL DEFAULT 0, input_tokens bigint NOT NULL DEFAULT 0, cached_tokens bigint NOT NULL DEFAULT 0, output_tokens bigint NOT NULL DEFAULT 0, reasoning_tokens bigint NOT NULL DEFAULT 0, cost_micro bigint NOT NULL DEFAULT 0, PRIMARY KEY (day, kind));
+CREATE TABLE artifacts (sha256 text PRIMARY KEY, mime text NOT NULL, size int NOT NULL, bytes bytea NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE skill_drafts (id text PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now(), status text NOT NULL DEFAULT 'draft', source jsonb NOT NULL, skill jsonb NOT NULL, reasoning_summary text, model text NOT NULL, capability text NOT NULL, usage jsonb NOT NULL, parent_slug text, published_cid text, runs jsonb NOT NULL DEFAULT '[]');
+CREATE TABLE skills (cid text PRIMARY KEY, slug text NOT NULL, version int NOT NULL, prev_cid text, name text NOT NULL, summary text NOT NULL, created_at timestamptz NOT NULL, draft_id text, UNIQUE (slug, version));
+CREATE TABLE skill_runs (cid text PRIMARY KEY, skill_cid text NOT NULL, success boolean NOT NULL, created_at timestamptz NOT NULL);
+CREATE INDEX skill_runs_skill ON skill_runs (skill_cid);
+`,
+  },
+  {
     id: 2,
     name: "llm_usage_tokens",
     sql: `

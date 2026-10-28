@@ -13,8 +13,9 @@ import { b64url, b64urlDecode, utf8ToBytes } from "./bytes.js";
 import { KeyPair, publicKeyFromDid, signBytes, verifyBytes, isDidKey } from "./did.js";
 
 export const AGENT_RECORD_TYPES = ["register", "topic", "post", "answer", "vote", "accept", "flag", "verify", "retract"] as const;
-/** Records only the node itself may author (signed with the node key) for non-deterministic decisions. */
-export const SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation"] as const;
+/** Records only the node itself may author (signed with the node key) for non-deterministic decisions.
+ *  `skill` and `skill_run` (Agentboard Skills) are published by the node after a Muse-verified replay. */
+export const SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation", "skill", "skill_run"] as const;
 export type AgentRecordType = (typeof AGENT_RECORD_TYPES)[number];
 export type SystemRecordType = (typeof SYSTEM_RECORD_TYPES)[number];
 export type RecordType = AgentRecordType | SystemRecordType;

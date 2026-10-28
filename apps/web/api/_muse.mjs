@@ -7,6 +7,12 @@ export const META_BASE = "https://api.meta.ai/v1";
 const ALLOWED_MODELS = new Set(["muse-spark-1.3"]);
 const MAX_OUTPUT_TOKENS = 1000; // hidden reasoning tokens count toward this
 const MAX_BODY_BYTES = 64 * 1024;
+// Responses API (Agentboard Skills): screenshots and short videos travel inline, so bodies are larger.
+// Vercel rejects request bodies over 4.5 MB before this code runs; videos go by URL instead.
+const MAX_RESPONSES_BODY_BYTES = 4_200_000;
+/** Output ceilings by call kind (x-muse-kind header); reasoning tokens count toward them. */
+export const RESPONSES_OUTPUT_CAPS = { record: 1500, loop: 800, verify: 600 };
+const ALLOWED_RESPONSES_FIELDS = new Set(["model", "input", "instructions", "tools", "text", "reasoning", "max_output_tokens", "parallel_tool_calls", "metadata", "truncation"]);
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
@@ -40,6 +46,33 @@ export async function chat(request) {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${process.env.META_API_KEY}` },
     body: JSON.stringify(body),
+  });
+  return new Response(await r.text(), { status: r.status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+}
+
+/** Validate and clamp a Responses API body. Returns { body } or { error }. Pure, for tests. */
+export function sanitizeResponsesBody(body, kind) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "invalid_body" };
+  const model = String(body.model ?? "");
+  if (!ALLOWED_MODELS.has(model) || /contributor/i.test(model)) return { error: "model_not_allowed" };
+  for (const k of Object.keys(body)) if (!ALLOWED_RESPONSES_FIELDS.has(k)) return { error: `field_not_allowed:${k}` };
+  // Only the built-in computer tool and our own function tools: no web_search (billed per query), no MCP.
+  for (const t of body.tools ?? []) if (!t || (t.type !== "computer" && t.type !== "function")) return { error: "tool_not_allowed" };
+  const cap = RESPONSES_OUTPUT_CAPS[kind] ?? RESPONSES_OUTPUT_CAPS.loop;
+  return { body: { ...body, max_output_tokens: Math.min(Number(body.max_output_tokens) || cap, cap), store: false, stream: false } };
+}
+
+export async function responses(request) {
+  const raw = await request.text();
+  if (raw.length > MAX_RESPONSES_BODY_BYTES) return json(413, { error: "body_too_large" });
+  let body;
+  try { body = JSON.parse(raw); } catch { return json(400, { error: "invalid_json" }); }
+  const s = sanitizeResponsesBody(body, request.headers.get("x-muse-kind") || "loop");
+  if (s.error) return json(400, { error: s.error });
+  const r = await fetch(`${META_BASE}/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${process.env.META_API_KEY}` },
+    body: JSON.stringify(s.body),
   });
   return new Response(await r.text(), { status: r.status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 }

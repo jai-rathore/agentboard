@@ -6,7 +6,7 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/((?!assets/|llms.txt|favicon.svg|favicon.ico|api/).*)",
+      "source": "/((?!assets/|demo/|llms.txt|favicon.svg|favicon.ico|api/).*)",
       "destination": "/index.html"
     }
   ],
@@ -28,7 +28,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; connect-src 'self' https:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
+          "value": "default-src 'self'; connect-src 'self' https: wss:; img-src 'self' data: blob: https://agentboard-api.onrender.com; media-src 'self' blob: https://agentboard-api.onrender.com; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'"
         }
       ]
     }

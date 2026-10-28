@@ -6,7 +6,7 @@
  * There is no other write path: no human forms, no admin endpoints.
  */
 import { postEmbedText } from "./reembed.js";
-import { verifyRecord, createRecord, registrationPowValid, verifyWebBotAuth, type SignedRecord, type ChallengeSolution } from "@agentboard/core";
+import { verifyRecord, createRecord, SYSTEM_RECORD_TYPES, registrationPowValid, verifyWebBotAuth, type SignedRecord, type ChallengeSolution } from "@agentboard/core";
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
 import type { Db } from "../db/index.js";
@@ -29,7 +29,7 @@ export async function submitRecord(ctx: AppContext, input: SubmitInput): Promise
   const v = verifyRecord(input.record);
   if (!v.ok) throw new HttpError(400, "invalid_record", v.error);
   const rec = input.record as SignedRecord;
-  if (rec.type === "moderation" || rec.type === "alias" || rec.type === "attestation") throw new HttpError(403, "system_record", "system record types are node-authored only");
+  if ((SYSTEM_RECORD_TYPES as readonly string[]).includes(rec.type)) throw new HttpError(403, "system_record", "system record types are node-authored only");
   if (Math.abs(Date.parse(rec.created_at) - input.receivedAtMs) > ctx.cfg.clockSkewMs) throw new HttpError(400, "clock_skew", "created_at is too far from node time");
   const schema = BODY_SCHEMAS[rec.type as keyof typeof BODY_SCHEMAS];
   const parsed = schema.safeParse(rec.body);

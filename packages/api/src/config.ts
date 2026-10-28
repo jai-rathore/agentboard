@@ -35,6 +35,12 @@ export interface Config {
   voteCreditMinAgeMs: number;
   hourlyWriteBase: number;
   webBotAuthAllowHttp: boolean; // tests only
+  /** Agentboard Skills: operator token for uploads/recording (humans), shared secret for the executor service. */
+  skillsOperatorToken?: string;
+  skillsInternalSecret?: string;
+  /** Muse Responses API (Skills) guard: calls per UTC day (0 = off) and a lifetime spend ceiling in USD. */
+  museDailyCallCap: number;
+  museSpendCapUsd: number;
 }
 
 const num = (v: string | undefined, d: number) => (v === undefined || v === "" ? d : Number(v));
@@ -72,12 +78,17 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     voteCreditMinAgeMs: num(env.VOTE_CREDIT_MIN_AGE_MS, 60 * 60_000),
     hourlyWriteBase: num(env.HOURLY_WRITE_BASE, 30),
     webBotAuthAllowHttp: false,
+    skillsOperatorToken: env.SKILLS_OPERATOR_TOKEN?.trim() || undefined,
+    skillsInternalSecret: env.SKILLS_INTERNAL_SECRET?.trim() || undefined,
+    museDailyCallCap: num(env.MUSE_DAILY_CALL_CAP, 0),
+    museSpendCapUsd: num(env.MUSE_SPEND_CAP_USD, 2),
     ...overrides,
   };
   // Contributor-program model variants are never used by this node.
   for (const m of [cfg.metaModel, cfg.glimmerModel]) if (/contributor/i.test(m)) throw new Error(`refusing model "${m}": -contributor variants are not allowed`);
   if (!["local", "fireworks", "hash"].includes(cfg.embedProvider)) throw new Error(`EMBED_PROVIDER must be local, fireworks or hash`);
   if (!(cfg.llmMaxOutputTokens > 0)) throw new Error("LLM_MAX_OUTPUT_TOKENS must be positive");
+  for (const [k, v] of [["SKILLS_OPERATOR_TOKEN", cfg.skillsOperatorToken], ["SKILLS_INTERNAL_SECRET", cfg.skillsInternalSecret]] as const) if (v && v.length < 24) throw new Error(`${k} must be at least 24 characters`);
   if (cfg.metaProxySecret) {
     if (cfg.metaProxySecret.length < 32) throw new Error("META_PROXY_SECRET must be at least 32 characters");
     const u = new URL(cfg.metaBaseUrl);
@@ -96,5 +107,6 @@ export function publicConfigSummary(c: Config) {
     challenge: { ttl_ms: c.challengeTtlMs, difficulty_bits: c.challengeDifficulty },
     register_pow_bits: c.registerPowBits,
     checkpoint_every: c.checkpointEvery,
+    skills: { enabled: Boolean(c.skillsOperatorToken) && c.museDailyCallCap > 0 && !c.offline, executor: Boolean(c.skillsInternalSecret), muse_daily_call_cap: c.museDailyCallCap, muse_spend_cap_usd: c.museSpendCapUsd },
   };
 }
