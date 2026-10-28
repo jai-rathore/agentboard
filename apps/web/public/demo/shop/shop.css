@@ -13,3 +13,4 @@ table{width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size
 .totals{margin-top:12px;font-family:Arial,sans-serif;font-size:15px;text-align:right;line-height:1.7}.totals b{font-size:18px}.disc{color:#1b5e20}
 .coupon{display:flex;gap:8px;align-items:flex-end;margin-top:14px;font-family:Arial,sans-serif;font-size:13px}
 .note{color:#998;font-size:12px;text-align:center;margin-top:30px}form label{display:block;margin-top:10px;font-family:Arial,sans-serif;font-size:13px}form input{width:100%}
+header .cart.empty{opacity:.55;cursor:default}

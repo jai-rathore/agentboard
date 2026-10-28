@@ -19,5 +19,11 @@ function totals() {
   const shipping = subtotal === 0 || subtotal - discount >= 40 ? 0 : 5;
   return { subtotal, code: c ? code : null, discount, shipping, total: Math.max(0, subtotal - discount + shipping) };
 }
-function badge() { const n = cart.get().reduce((s, x) => s + x.qty, 0); const b = document.getElementById("cartlink"); if (b) b.textContent = `Cart (${n})`; }
+// The cart link only works once the cart has something in it, so "Add to cart" always lands before "Cart" can be opened.
+function badge() {
+  const n = cart.get().reduce((s, x) => s + x.qty, 0); const b = document.getElementById("cartlink"); if (!b) return;
+  b.textContent = `Cart (${n})`; b.classList.toggle("empty", n === 0);
+  if (n === 0) { b.setAttribute("aria-disabled", "true"); b.title = "Your cart is empty"; } else { b.removeAttribute("aria-disabled"); b.removeAttribute("title"); }
+}
+document.addEventListener("click", (e) => { const a = e.target.closest && e.target.closest("#cartlink.empty"); if (a) e.preventDefault(); }, true);
 document.addEventListener("DOMContentLoaded", badge);

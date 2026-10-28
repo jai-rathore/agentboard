@@ -8,7 +8,7 @@ function render() {
   for (const p of hits) {
     const d = document.createElement("div"); d.className = "card";
     d.innerHTML = `<b>${p.name}</b><span class="cat">${p.cat}</span><span class="price">${money(p.price)}</span><button type="button">Add to cart</button>`;
-    d.querySelector("button").addEventListener("click", () => { addToCart(p.id); document.getElementById("msg").textContent = `Added ${p.name} (${money(p.price)}) to your cart.`; });
+    d.querySelector("button").addEventListener("click", (e) => { addToCart(p.id); e.currentTarget.textContent = "✓ Added"; document.getElementById("msg").textContent = `Added ${p.name} (${money(p.price)}) to your cart.`; });
     grid.appendChild(d);
   }
 }
