@@ -10,7 +10,11 @@
  *     PUBLIC_REPLAY_DAILY_CAP node-wide, the node's daily budget for non-operator runs (SKILLS_AGENT_RUNS_PER_DAY,
  *     shared with agent-funded runs), and Muse headroom under the daily call cap and the lifetime USD ceiling
  *     (every Muse call of the run is still reserved and counted one by one).
- *   - Jobs are via = 'public'; the signed run record says trigger: "public".
+ *   - Jobs are via = 'public'; the signed run record says trigger: "public". Their Muse calls (loop, verify, heal) count in
+ *     the public bucket: MUSE_PUBLIC_RESERVED_CALLS of the daily cap that other jobs cannot use (services/muse.ts).
+ *   - When a cap is hit (per network, node-wide, node run budget, Muse daily cap or USD ceiling, or public replay
+ *     switched off), the answer is the latest verified signed run of that skill instead of an error: status "cached",
+ *     clearly marked as a cached verified run (not a new replay) with its record cid and run page. No job is created.
  */
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { canonicalize, sha256, sha256Hex, leadingZeroBits, publicReplaySafety, bytesToHex } from "@agentboard/core";
@@ -123,34 +127,96 @@ async function consume(ctx: AppContext, kind: ChallengeKind, slug: string, ipH: 
   }
 }
 
+/** Cap and budget errors that are answered with the latest cached verified run instead of an error. */
+export const CACHED_FALLBACK_CODES = new Set(["public_replay_disabled", "public_replay_ip_limit", "public_replay_daily_cap", "node_run_quota", "muse_daily_cap", "muse_spend_cap", "muse_disabled"]);
+
+/** The latest verified (Muse-verified, node-signed) run of any version of this skill, or null. */
+export async function latestVerifiedRun(ctx: AppContext, slug: string) {
+  const row = (await ctx.db.query<any>(
+    `SELECT r.cid, r.created_at, rec.body_text, s.cid AS skill_cid, s.slug, s.version, s.name, l.seq::int AS seq
+     FROM skill_runs r JOIN skills s ON s.cid = r.skill_cid JOIN records rec ON rec.cid = r.cid JOIN log l ON l.cid = r.cid
+     WHERE s.slug = $1 AND r.success ORDER BY r.created_at DESC LIMIT 1`, [slug])).rows[0];
+  if (!row) return null;
+  const b = JSON.parse(row.body_text);
+  const ev = b.evidence ?? {};
+  const art = (h: unknown) => (typeof h === "string" && /^[0-9a-f]{64}$/.test(h) ? h : null);
+  const gif = art(ev.gif), shot = art(ev.final_screenshot);
+  return {
+    run_record: row.cid as string,
+    run_record_page: `${ctx.cfg.skillsWebUrl}/skills/runs/${row.cid}`,
+    log_seq: row.seq as number,
+    verified_at: new Date(row.created_at).toISOString(),
+    skill: { cid: row.skill_cid, slug: row.slug, version: row.version, name: row.name, page: `${ctx.cfg.skillsWebUrl}/s/${row.skill_cid}` },
+    trigger: b.requested_by?.via ?? null,
+    params: b.params ?? {},
+    verdict: { success: Boolean(b.verdict?.success ?? b.success), evidence: b.verdict?.evidence ?? null, model: b.verdict?.model ?? b.model ?? null },
+    gif_url: gif ? `${ctx.cfg.publicBaseUrl}/v1/artifacts/${gif}.gif` : null,
+    final_screenshot_url: shot ? `${ctx.cfg.publicBaseUrl}/v1/artifacts/${shot}.jpg` : null,
+    verify: `verify_record({cid: "${row.cid}"}) or GET /v1/records/${row.cid}`,
+  };
+}
+
+/** Answer for a capped request: the latest verified run, marked as cached. Throws the original error when there is none. */
+async function cachedOrThrow(ctx: AppContext, slug: string, e: unknown) {
+  if (!(e instanceof HttpError) || !CACHED_FALLBACK_CODES.has(e.code)) throw e;
+  const run = await latestVerifiedRun(ctx, slug).catch(() => null);
+  if (!run) throw e;
+  const when = run.verified_at.replace("T", " ").slice(0, 16) + " UTC";
+  return {
+    status: "cached", cached: true, live: false, trigger: "public",
+    message: `Live replay is paused (${e.code}: ${e.message}). Here is the latest cached verified run of ${slug} instead, not a new replay: signed run record ${run.run_record}, verified ${when}. Run page: ${run.run_record_page}`,
+    reason: { error: e.code, message: e.message },
+    cached_run: run,
+    run_record: run.run_record,
+    run_record_page: run.run_record_page,
+    retry: "Public replay caps and the Muse daily call cap reset at 00:00 UTC.",
+  };
+}
+
+/**
+ * Fire-and-forget GET of the executor's /healthz while the caller solves the challenge, so a free Render executor that
+ * spun down starts booting now instead of after the answer (its cold start is ~20-60 s). Never awaited, never fails.
+ */
+function wakeExecutor(ctx: AppContext) {
+  if (ctx.cfg.offline || !ctx.cfg.skillsInternalSecret) return;
+  void ctx.fetchImpl(`${ctx.cfg.skillsExecutorUrl}/healthz`, { signal: AbortSignal.timeout(90_000) }).then((r) => r.body?.cancel()).catch(() => {});
+}
+
 /**
  * Start a public replay. Without a challenge solution it validates everything cheap first (enabled, allowlist,
- * safety, params, caps, Muse headroom) and then answers 428 with a fresh challenge.
+ * safety, params, caps, Muse headroom) and then answers 428 with a fresh challenge. When a cap is hit it answers with
+ * the latest cached verified run of the skill (status "cached") instead of an error.
  */
 export async function startPublicReplay(ctx: AppContext, slugIn: string, req: { params?: unknown; challenge?: unknown }, ip: string | null, kind: ChallengeKind) {
-  assertEnabled(ctx);
   const slug = String(slugIn ?? "").toLowerCase();
+  // Switched off (PUBLIC_REPLAY_DAILY_CAP = 0): allowlisted slugs still get their latest verified run.
+  try { assertEnabled(ctx); } catch (e) { if (ctx.cfg.publicReplaySkills.includes(slug)) return cachedOrThrow(ctx, slug, e); throw e; }
   if (!ip) throw new HttpError(400, "client_ip_required", "the client IP could not be determined (CF-Connecting-IP or True-Client-IP); public replay needs it for the per-network limit");
   const { cid, body } = await publicSkill(ctx, slug);
   const given = req.params && typeof req.params === "object" && !Array.isArray(req.params) ? (req.params as Record<string, unknown>) : {};
   const params = checkParams(body.skill, given);
   const ipH = ipHash(ip), pHash = paramsHash(params);
-  checkCaps(ctx, await counts(ctx, ctx.db, ipH));
-  await museHeadroom(ctx, ctx.cfg.publicReplayMinMuseCalls, ctx.cfg.publicReplayMinMuseUsd);
+  try {
+    checkCaps(ctx, await counts(ctx, ctx.db, ipH));
+    await museHeadroom(ctx, ctx.cfg.publicReplayMinMuseCalls, ctx.cfg.publicReplayMinMuseUsd, ctx.db, "public");
+  } catch (e) { return cachedOrThrow(ctx, slug, e); }
   if (!req.challenge) {
     const challenge = await issue(ctx, kind, slug, ipH, pHash);
+    wakeExecutor(ctx);
     throw new HttpError(428, "challenge_required", kind === "pow" ? "solve the proof-of-work challenge and resend with {params, challenge: {id, counter}}" : `answer the challenge: ${challenge.question}`, { challenge });
   }
   await consume(ctx, kind, slug, ipH, pHash, req.challenge);
   const id = crypto.randomUUID();
   const start_url = body.source.start_url as string;
-  await ctx.db.tx(async (tx) => {
-    await tx.query(`SELECT pg_advisory_xact_lock(${LOCK})`);
-    checkCaps(ctx, await counts(ctx, tx, ipH));
-    await museHeadroom(ctx, ctx.cfg.publicReplayMinMuseCalls, ctx.cfg.publicReplayMinMuseUsd, tx);
-    await tx.query(`INSERT INTO skill_jobs (id, skill_cid, params, start_url, requested_by, via, status, message, client_ip_hash, created_at, updated_at) VALUES ($1,$2,$3,$4,'public','public','queued','Waking the executor',$5,$6,$6)`,
-      [id, cid, JSON.stringify(params), start_url, ipH, new Date(ctx.now())]);
-  });
+  try {
+    await ctx.db.tx(async (tx) => {
+      await tx.query(`SELECT pg_advisory_xact_lock(${LOCK})`);
+      checkCaps(ctx, await counts(ctx, tx, ipH));
+      await museHeadroom(ctx, ctx.cfg.publicReplayMinMuseCalls, ctx.cfg.publicReplayMinMuseUsd, tx, "public");
+      await tx.query(`INSERT INTO skill_jobs (id, skill_cid, params, start_url, requested_by, via, status, message, client_ip_hash, created_at, updated_at) VALUES ($1,$2,$3,$4,'public','public','queued','Waking the executor',$5,$6,$6)`,
+        [id, cid, JSON.stringify(params), start_url, ipH, new Date(ctx.now())]);
+    });
+  } catch (e) { return cachedOrThrow(ctx, slug, e); }
   await dispatchJob(ctx, id);
   const job = await getJob(ctx, id);
   return { ...job, trigger: "public", poll: `/v1/skills/jobs/${id}`, run_page: jobUrl(ctx, id) };

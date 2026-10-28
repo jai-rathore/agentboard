@@ -31,50 +31,81 @@ export function costOf(model: string, u: { input_tokens?: number; output_tokens?
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+/**
+ * Which daily bucket a call is counted in. "public" = calls made for a public capped replay (remote MCP try_skill /
+ * POST /v1/skills/:slug/public-replay, including its verify and heal calls); they are stored as `public:<kind>` rows in
+ * muse_spend. MUSE_PUBLIC_RESERVED_CALLS of the daily cap are held back for them: every other job (seeding, pipelines,
+ * operator and agent runs, benchmarks) stops while today's calls plus the unused part of the reserve reach the cap.
+ * Public calls may use the whole cap. Both pools still count against the one daily cap and the lifetime USD ceiling.
+ */
+export type MusePool = "default" | "public";
+const spendKind = (kind: MuseKind, pool: MusePool) => (pool === "public" ? `public:${kind}` : kind);
+
+/** Today's Muse Spark calls (all pools) and the public pool's share, plus the reserve still held back. */
+export async function museCallsToday(ctx: AppContext, db: AppContext["db"] = ctx.db) {
+  const r = (await db.query<any>(
+    `SELECT COALESCE(SUM(calls),0)::int AS total, COALESCE(SUM(calls) FILTER (WHERE kind LIKE 'public:%'),0)::int AS pub FROM muse_spend WHERE day = $1 AND kind NOT LIKE 'open:%'`,
+    [today()],
+  )).rows[0] ?? {};
+  const total = Number(r.total ?? 0), pub = Number(r.pub ?? 0);
+  const reserved = Math.max(0, Math.min(ctx.cfg.musePublicReservedCalls, ctx.cfg.museDailyCallCap));
+  return { total, public: pub, reserved, reserve_left: Math.max(0, reserved - pub) };
+}
+
+/** Calls a job in this pool can still make today (the default pool never eats into the unused public reserve). */
+export function callsLeft(ctx: AppContext, t: { total: number; reserve_left: number }, pool: MusePool) {
+  return Math.max(0, ctx.cfg.museDailyCallCap - t.total - (pool === "public" ? 0 : t.reserve_left));
+}
+
 export async function museSpend(ctx: AppContext) {
   const rows = (await ctx.db.query<any>(`SELECT day, kind, calls, input_tokens, cached_tokens, output_tokens, reasoning_tokens, cost_micro FROM muse_spend WHERE kind NOT LIKE 'open:%'`)).rows;
   const d = today();
   const t = rows.filter((r) => r.day === d);
   const sum = (rs: any[], k: string) => rs.reduce((s, r) => s + Number(r[k]), 0);
+  const calls = await museCallsToday(ctx);
   return {
     model: ctx.cfg.metaModel,
-    today: { calls: sum(t, "calls"), input_tokens: sum(t, "input_tokens"), cached_tokens: sum(t, "cached_tokens"), output_tokens: sum(t, "output_tokens"), usd: sum(t, "cost_micro") / 1e6, by_kind: Object.fromEntries(t.map((r) => [r.kind, { calls: Number(r.calls), usd: Number(r.cost_micro) / 1e6 }])) },
+    today: { calls: sum(t, "calls"), input_tokens: sum(t, "input_tokens"), cached_tokens: sum(t, "cached_tokens"), output_tokens: sum(t, "output_tokens"), usd: sum(t, "cost_micro") / 1e6, by_kind: Object.fromEntries(t.map((r) => [r.kind, { calls: Number(r.calls), usd: Number(r.cost_micro) / 1e6 }])), public_calls: calls.public },
     total_usd: sum(rows, "cost_micro") / 1e6,
     total_calls: sum(rows, "calls"),
     daily_call_cap: ctx.cfg.museDailyCallCap,
+    public_reserved_calls: calls.reserved,
+    public_reserve_left_today: calls.reserve_left,
+    calls_left_today: { public: callsLeft(ctx, calls, "public"), other: callsLeft(ctx, calls, "default") },
     spend_cap_usd: ctx.cfg.museSpendCapUsd,
   };
 }
 
 /**
- * Headroom check before starting a run that will make many Muse calls: Muse must be enabled, today's calls plus
- * minCalls must fit under the daily cap, and lifetime spend plus minUsd under the USD ceiling. Read-only; each
- * call is still reserved and counted one by one in reserve(). Pass a transaction's db to check inside it.
+ * Headroom check before starting a run that will make many Muse calls: Muse must be enabled, minCalls must fit in
+ * what the run's pool can still use today (see MusePool), and lifetime spend plus minUsd under the USD ceiling.
+ * Read-only; each call is still reserved and counted one by one in reserve(). Pass a transaction's db to check inside it.
  */
-export async function museHeadroom(ctx: AppContext, minCalls: number, minUsd: number, db: AppContext["db"] = ctx.db) {
+export async function museHeadroom(ctx: AppContext, minCalls: number, minUsd: number, db: AppContext["db"] = ctx.db, pool: MusePool = "default") {
   if (ctx.cfg.offline || ctx.cfg.museDailyCallCap <= 0 || !(ctx.cfg.metaProxySecret || ctx.cfg.metaApiKey)) throw new HttpError(503, "muse_disabled", "Muse calls are disabled on this node");
   const total = Number((await db.query<any>(`SELECT COALESCE(SUM(cost_micro),0)::float8 AS c FROM muse_spend WHERE kind NOT LIKE 'open:%'`)).rows[0]?.c ?? 0) / 1e6;
   if (total + minUsd > ctx.cfg.museSpendCapUsd) throw new HttpError(429, "muse_spend_cap", `Muse spend ceiling would be reached ($${total.toFixed(4)} of $${ctx.cfg.museSpendCapUsd} used; a run needs about $${minUsd})`);
-  const callsToday = Number((await db.query<any>(`SELECT COALESCE(SUM(calls),0)::int AS n FROM muse_spend WHERE day = $1 AND kind NOT LIKE 'open:%'`, [today()])).rows[0]?.n ?? 0);
-  if (callsToday + minCalls > ctx.cfg.museDailyCallCap) throw new HttpError(429, "muse_daily_cap", `not enough Muse calls left today (${callsToday} of ${ctx.cfg.museDailyCallCap} used; a run needs up to ${minCalls}); the cap resets at 00:00 UTC`);
-  return { calls_today: callsToday, daily_call_cap: ctx.cfg.museDailyCallCap, spend_usd: total, spend_cap_usd: ctx.cfg.museSpendCapUsd };
+  const t = await museCallsToday(ctx, db);
+  const left = callsLeft(ctx, t, pool);
+  if (minCalls > left) throw new HttpError(429, "muse_daily_cap", `not enough Muse calls left today (${t.total} of ${ctx.cfg.museDailyCallCap} used${pool === "public" ? "" : `, ${t.reserve_left} held back for public try_skill`}; a run needs up to ${minCalls}); the cap resets at 00:00 UTC`);
+  return { calls_today: t.total, public_calls_today: t.public, calls_left: left, daily_call_cap: ctx.cfg.museDailyCallCap, public_reserved_calls: t.reserved, spend_usd: total, spend_cap_usd: ctx.cfg.museSpendCapUsd };
 }
 
-/** Reserve one call: atomically counts it against today's cap, and refuses once lifetime spend reaches the ceiling. */
-async function reserve(ctx: AppContext, kind: MuseKind) {
+/** Reserve one call: atomically counts it against today's cap (and its pool), and refuses once lifetime spend reaches the ceiling. */
+async function reserve(ctx: AppContext, kind: MuseKind, pool: MusePool) {
   if (ctx.cfg.offline || ctx.cfg.museDailyCallCap <= 0 || !(ctx.cfg.metaProxySecret || ctx.cfg.metaApiKey)) throw new HttpError(503, "muse_disabled", "Muse calls are disabled on this node");
   const total = Number((await ctx.db.query<any>(`SELECT COALESCE(SUM(cost_micro),0)::float8 AS c FROM muse_spend WHERE kind NOT LIKE 'open:%'`)).rows[0]?.c ?? 0) / 1e6;
   if (total >= ctx.cfg.museSpendCapUsd) throw new HttpError(429, "muse_spend_cap", `Muse spend ceiling reached ($${total.toFixed(4)} of $${ctx.cfg.museSpendCapUsd})`);
   const d = today();
-  const callsToday = Number((await ctx.db.query<any>(`SELECT COALESCE(SUM(calls),0)::int AS n FROM muse_spend WHERE day = $1 AND kind NOT LIKE 'open:%'`, [d])).rows[0]?.n ?? 0);
-  if (callsToday >= ctx.cfg.museDailyCallCap) throw new HttpError(429, "muse_daily_cap", `daily Muse call cap (${ctx.cfg.museDailyCallCap}) reached`);
-  await ctx.db.query(`INSERT INTO muse_spend (day, kind, calls) VALUES ($1,$2,1) ON CONFLICT (day, kind) DO UPDATE SET calls = muse_spend.calls + 1`, [d, kind]);
+  const t = await museCallsToday(ctx);
+  if (callsLeft(ctx, t, pool) < 1) throw new HttpError(429, "muse_daily_cap", pool === "public" || t.reserve_left === 0 ? `daily Muse call cap (${ctx.cfg.museDailyCallCap}) reached` : `daily Muse call cap reached for this job (${t.total} of ${ctx.cfg.museDailyCallCap} used; the last ${t.reserve_left} are held back for public try_skill)`);
+  await ctx.db.query(`INSERT INTO muse_spend (day, kind, calls) VALUES ($1,$2,1) ON CONFLICT (day, kind) DO UPDATE SET calls = muse_spend.calls + 1`, [d, spendKind(kind, pool)]);
 }
 
-async function record(ctx: AppContext, kind: MuseKind, u: MuseUsage) {
+async function record(ctx: AppContext, kind: MuseKind, u: MuseUsage, pool: MusePool) {
   await ctx.db.query(
     `UPDATE muse_spend SET input_tokens = input_tokens + $3, cached_tokens = cached_tokens + $4, output_tokens = output_tokens + $5, reasoning_tokens = reasoning_tokens + $6, cost_micro = cost_micro + $7 WHERE day = $1 AND kind = $2`,
-    [today(), kind, u.input_tokens, u.cached_tokens, u.output_tokens, u.reasoning_tokens, Math.round(u.usd * 1e6)],
+    [today(), spendKind(kind, pool), u.input_tokens, u.cached_tokens, u.output_tokens, u.reasoning_tokens, Math.round(u.usd * 1e6)],
   );
 }
 
@@ -103,8 +134,11 @@ async function openWeightResponses(ctx: AppContext, kind: MuseKind, body: Record
   return { response, usage: r.usage, model: r.model, kind, ms: r.ms, provider: "baseten" };
 }
 
-/** One guarded Responses API call. Retries 5xx and network errors with backoff (each attempt is reserved and counted). */
-export async function museResponses(ctx: AppContext, kind: MuseKind, body: Record<string, unknown>, attempts = 3): Promise<MuseResult> {
+/**
+ * One guarded Responses API call. Retries 5xx and network errors with backoff (each attempt is reserved and counted).
+ * pool "public" counts the call in the public try_skill bucket (see MusePool).
+ */
+export async function museResponses(ctx: AppContext, kind: MuseKind, body: Record<string, unknown>, attempts = 3, pool: MusePool = "default"): Promise<MuseResult> {
   const model = ctx.cfg.metaModel;
   if (/contributor/i.test(model)) throw new HttpError(500, "model_not_allowed", "contributor models are never used");
   const payload = JSON.stringify(sanitize(body, kind, model));
@@ -117,7 +151,7 @@ export async function museResponses(ctx: AppContext, kind: MuseKind, body: Recor
   const url = `${ctx.cfg.metaBaseUrl.replace(/\/$/, "")}/responses`;
   let last = "";
   for (let i = 0; i < attempts; i++) {
-    await reserve(ctx, kind);
+    await reserve(ctx, kind, pool);
     const t0 = Date.now();
     try {
       const res = await ctx.fetchImpl(url, {
@@ -130,7 +164,7 @@ export async function museResponses(ctx: AppContext, kind: MuseKind, body: Recor
       if (res.ok) {
         const response = JSON.parse(text);
         const usage = costOf(model, response.usage ?? {});
-        await record(ctx, kind, usage);
+        await record(ctx, kind, usage, pool);
         return { response, usage, model, kind, ms: Date.now() - t0 };
       }
       last = `HTTP ${res.status}: ${text.replace(/\s+/g, " ").slice(0, 200)}`;

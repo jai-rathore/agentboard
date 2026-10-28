@@ -49,7 +49,9 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     const internal = c.req.header(MCP_INTERNAL_HEADER);
     const viaMcp = Boolean(internal) && internal === MCP_INTERNAL_TOKEN;
     const ip = viaMcp ? (c.req.header(MCP_CLIENT_IP_HEADER) || null) : clientIp((n) => c.req.header(n));
-    return c.json(await startPublicReplay(ctx, c.req.param("slug"), { params: b.params ?? b.inputs, challenge: b.challenge }, ip, viaMcp ? "mcp" : "pow"), 202);
+    const out: any = await startPublicReplay(ctx, c.req.param("slug"), { params: b.params ?? b.inputs, challenge: b.challenge }, ip, viaMcp ? "mcp" : "pow");
+    // 200 + status "cached": a cap was hit, so this is the latest verified run, not a new replay (no job was started).
+    return c.json(out, out.status === "cached" ? 200 : 202);
   });
 
   // ---- reuse benchmark (services/benchmark.ts): public reads, operator-only writes (they spend Muse credits).
@@ -195,7 +197,10 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     if (kind !== "loop" && kind !== "verify") throw new HttpError(400, "kind", "x-muse-kind must be loop or verify");
     const body = await c.req.json().catch(() => null);
     if (!body || typeof body !== "object") throw new HttpError(400, "invalid_json", "expected a Responses API body");
-    const r = await museResponses(ctx, kind, body);
+    // Calls for a public replay (job via = 'public') are counted in the public try_skill bucket; the executor names the job.
+    const jobId = c.req.header("x-skills-job");
+    const pool = jobId && /^[0-9a-f-]{36}$/.test(jobId) && (await ctx.db.query<any>(`SELECT via FROM skill_jobs WHERE id = $1`, [jobId])).rows[0]?.via === "public" ? "public" : "default";
+    const r = await museResponses(ctx, kind, body, 3, pool);
     return c.json({ response: r.response, usage: r.usage, model: r.model, ms: r.ms });
   });
   app.post("/internal/skills/runs", async (c) => {

@@ -62,7 +62,12 @@ services:
         sync: false
       # Muse Responses API guard (record/loop/verify calls): calls per UTC day and a lifetime USD ceiling.
       - key: MUSE_DAILY_CALL_CAP
-        value: "150"
+        value: "400"
+      # Of that daily cap, calls held back for public try_skill replays (remote MCP, no key): other jobs stop at
+      # cap minus the unused reserve; public replays may use the whole cap. Past a cap try_skill answers with the
+      # latest cached verified run instead of an error.
+      - key: MUSE_PUBLIC_RESERVED_CALLS
+        value: "30"
       - key: MUSE_SPEND_CAP_USD
         value: "1.00"
       # Agent-funded skill runs (MCP run_skill signed by an agent key). Raise the two run limits for a

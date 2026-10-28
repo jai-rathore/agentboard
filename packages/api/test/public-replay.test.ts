@@ -132,9 +132,12 @@ describe("public replay: client IP and challenge", () => {
     expect((await post("search-hn", { params: { query: "x" } }, { "cf-connecting-ip": "x".repeat(65) })).body.error).toBe("client_ip_required");
     // a forged in-process MCP header from outside is not trusted
     expect((await post("search-hn", { params: { query: "x" } }, { [MCP_CLIENT_IP_HEADER]: "5.5.5.5", "x-agentboard-mcp-internal": "guess" })).body.error).toBe("client_ip_required");
+    const before = urls.length;
     const r = await post("search-hn", { params: { query: "x" } }, { "true-client-ip": "2001:db8::1" });
     expect(r.status).toBe(428);
     expect(r.body.challenge).toMatchObject({ kind: "pow", bits: 4 });
+    // handing out the challenge wakes the (free, sleeping) executor while the caller solves it
+    expect(urls.slice(before)).toContain(`${node.ctx.cfg.skillsExecutorUrl}/healthz`);
   });
   it("challenges are single use and bound to the skill, params and network", async () => {
     const h = ip("7.7.7.7");
@@ -167,10 +170,11 @@ describe("public replay: caps", () => {
     expect((await node.req("GET", `/v1/skills/jobs/${a.body.id}`)).body.trigger).toBe("public");
     expect((await replay("search-hn", { query: "go" }, ip("10.0.0.1"))).status).toBe(202);
     const third = await replay("search-hn", { query: "zig" }, ip("10.0.0.1"));
-    expect(third.status).toBe(429);
-    expect(third.body.error).toBe("public_replay_ip_limit");
+    // a cap answers with the latest cached verified run instead of an error
+    expect(third.status).toBe(200);
+    expect(third.body).toMatchObject({ status: "cached", cached: true, live: false, reason: { error: "public_replay_ip_limit" } });
     // CF-Connecting-IP wins over True-Client-IP
-    expect((await post("search-hn", { params: { query: "zig" } }, { "cf-connecting-ip": "10.0.0.1", "true-client-ip": "10.0.0.99" })).body.error).toBe("public_replay_ip_limit");
+    expect((await post("search-hn", { params: { query: "zig" } }, { "cf-connecting-ip": "10.0.0.1", "true-client-ip": "10.0.0.99" })).body.reason.error).toBe("public_replay_ip_limit");
     // the executor being busy does not use up a slot
     executorStatus = 409;
     expect((await replay("search-hn", { query: "busy" }, ip("10.0.0.2"))).status).toBe(409);
@@ -179,8 +183,8 @@ describe("public replay: caps", () => {
     expect((await replay("search-hn", { query: "b" }, ip("10.0.0.2"))).status).toBe(202);
     // global daily cap (4)
     const g = await replay("search-hn", { query: "c" }, ip("10.0.0.3"));
-    expect(g.status).toBe(429);
-    expect(g.body.error).toBe("public_replay_daily_cap");
+    expect(g.status).toBe(200);
+    expect(g.body.reason.error).toBe("public_replay_daily_cap");
     // next UTC day: fresh budget
     now = Date.parse("2026-10-30T00:00:01Z");
     expect((await replay("search-hn", { query: "c" }, ip("10.0.0.1"))).status).toBe(202);
@@ -189,16 +193,64 @@ describe("public replay: caps", () => {
     now = Date.parse("2026-10-31T00:10:00Z");
     node.ctx.cfg.skillsAgentRunsPerDay = 1;
     expect((await replay("search-hn", { query: "a" }, ip("10.1.0.1"))).status).toBe(202);
-    expect((await replay("search-hn", { query: "b" }, ip("10.1.0.2"))).body.error).toBe("node_run_quota");
+    expect((await replay("search-hn", { query: "b" }, ip("10.1.0.2"))).body.reason.error).toBe("node_run_quota");
     node.ctx.cfg.skillsAgentRunsPerDay = 50;
     const cap = node.ctx.cfg.museSpendCapUsd;
     node.ctx.cfg.museSpendCapUsd = 0.05; // lifetime spend so far plus a run's headroom would cross it
-    expect((await post("search-hn", { params: { query: "b" } }, ip("10.1.0.3"))).body.error).toBe("muse_spend_cap");
+    expect((await post("search-hn", { params: { query: "b" } }, ip("10.1.0.3"))).body.reason.error).toBe("muse_spend_cap");
     node.ctx.cfg.museSpendCapUsd = cap;
     const calls = node.ctx.cfg.museDailyCallCap;
     node.ctx.cfg.museDailyCallCap = 10; // fewer than the 20 calls a run may need
-    expect((await post("search-hn", { params: { query: "b" } }, ip("10.1.0.3"))).body.error).toBe("muse_daily_cap");
+    expect((await post("search-hn", { params: { query: "b" } }, ip("10.1.0.3"))).body.reason.error).toBe("muse_daily_cap");
     node.ctx.cfg.museDailyCallCap = calls;
+  });
+});
+
+describe("public replay: cached verified run when a cap is hit", () => {
+  it("returns the latest verified run of the skill, marked cached, and starts no job", async () => {
+    now = Date.parse("2026-10-31T06:00:00Z");
+    const jobs = async () => Number((await node.ctx.db.query<any>(`SELECT count(*)::int AS n FROM skill_jobs`)).rows[0].n);
+    const before = await jobs();
+    const latest = (await node.ctx.db.query<any>(`SELECT r.cid FROM skill_runs r JOIN skills s ON s.cid = r.skill_cid WHERE s.slug = 'search-hn' AND r.success ORDER BY r.created_at DESC LIMIT 1`)).rows[0].cid;
+    const cap = node.ctx.cfg.publicReplayDailyCap;
+    node.ctx.cfg.skillsAgentRunsPerDay = 50;
+    let r: any;
+    try {
+      // room for exactly one more public replay today
+      node.ctx.cfg.publicReplayDailyCap = (await node.req("GET", "/v1/skills/public-replay")).body.used_today + 1;
+      expect((await replay("search-hn", { query: "first" }, ip("10.3.0.1"))).status).toBe(202);
+      r = await post("search-hn", { params: { query: "second" } }, ip("10.3.0.2"));
+    } finally { node.ctx.cfg.publicReplayDailyCap = cap; }
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ status: "cached", cached: true, live: false, trigger: "public", reason: { error: "public_replay_daily_cap" }, run_record: latest, run_record_page: `https://web.test/skills/runs/${latest}` });
+    expect(r.body.message).toMatch(/^Live replay is paused \(public_replay_daily_cap: .*\)\. Here is the latest cached verified run of search-hn instead, not a new replay: signed run record bag/);
+    expect(r.body.message).toContain(`https://web.test/skills/runs/${latest}`);
+    expect(r.body.cached_run).toMatchObject({ run_record: latest, skill: { slug: "search-hn" }, verdict: { success: true }, verify: expect.stringContaining(latest) });
+    expect(r.body.cached_run.verified_at).toMatch(/^\d{4}-\d\d-\d\dT/);
+    expect(r.body.cached_run.final_screenshot_url).toMatch(/\/v1\/artifacts\/[0-9a-f]{64}\.jpg$/);
+    expect(r.body.id).toBeUndefined();
+    expect(await jobs()).toBe(before + 1); // only the first, live replay created a job
+    // the cached run's record verifies like any other
+    expect((await node.req("GET", `/v1/records/${latest}`)).status).toBe(200);
+  });
+  it("switched off: allowlisted skills answer cached; others keep the error; no verified run keeps the error", async () => {
+    const cap = node.ctx.cfg.publicReplayDailyCap;
+    node.ctx.cfg.publicReplayDailyCap = 0;
+    try {
+      const r = await post("search-hn", { params: { query: "x" } }, ip("10.3.0.3"));
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({ status: "cached", reason: { error: "public_replay_disabled" } });
+      const n = await post("not-listed", { params: { query: "x" } }, ip("10.3.0.3"));
+      expect(n.status).toBe(503);
+      expect(n.body.error).toBe("public_replay_disabled");
+    } finally { node.ctx.cfg.publicReplayDailyCap = cap; }
+    const { latestVerifiedRun } = await import("../src/services/publicReplay.js");
+    expect(await latestVerifiedRun(node.ctx, "no-such-skill")).toBeNull();
+  });
+  it("errors that are not caps are never answered from the cache", async () => {
+    expect((await post("search-hn", { params: {} }, ip("10.3.0.4"))).body.error).toBe("missing_params");
+    expect((await post("file-ticket", { params: { subject: "x" } }, ip("10.3.0.4"))).body.error).toBe("not_safe_for_public_replay");
+    expect((await post("search-hn", { params: { query: "x" } })).body.error).toBe("client_ip_required");
   });
 });
 
@@ -291,7 +343,10 @@ describe("try_skill on the remote /mcp", () => {
     expect(txt(ok)).toMatch(/skill_run_status\(\{run_id: /);
     expect((await ask("mcp two")).isError).toBeFalsy();
     const limited = await c.callTool({ name: "try_skill", arguments: { slug: "search-hn", inputs: { query: "three" } } });
-    expect(txt(limited)).toMatch(/public_replay_ip_limit/);
+    expect(limited.isError).toBeFalsy();
+    expect(txt(limited)).toMatch(/^CACHED VERIFIED RUN \(not a new replay\): live replay is paused \(public_replay_ip_limit\)/);
+    expect(txt(limited)).toMatch(/"status": "cached"/);
+    expect(txt(limited)).toMatch(/"run_record_page": "https:\/\/web\.test\/skills\/runs\/bag/);
     // an HTTP proof-of-work challenge does not work for the MCP path and vice versa
     const httpCh = (await post("search-hn", { params: { query: "mix" } }, ip("11.0.0.2"))).body.challenge;
     const c2 = await connect(ip("11.0.0.2"));

@@ -133,6 +133,8 @@ async function replay(m, send, ask, isAborted) {
   if (!/^https?:\/\//.test(start_url || "")) throw Object.assign(new Error("the skill needs an http(s) start URL"), { code: "start_url" });
   const params = Object.fromEntries(skill.params.map((p) => [p.name, String(m.params?.[p.name] ?? p.example)]));
   const usage = { calls: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, usd: 0 };
+  // Names the API job on each Muse call, so the API can count public replays in their reserved daily bucket.
+  const jobHeader = m.job_id ? { "x-skills-job": String(m.job_id) } : {};
   const addUsage = (u) => { usage.calls++; for (const k of ["input_tokens", "cached_tokens", "output_tokens", "usd"]) usage[k] += u[k] || 0; send({ type: "usage", usage }); };
   const actions = [], history = [], gifFrames = [], stepChanges = [];
   let humanMs = 0;
@@ -165,7 +167,7 @@ async function replay(m, send, ask, isAborted) {
         { type: "input_text", text: `${taskText(skill, params)}\n\nDone so far:\n${history.slice(-12).join("\n") || "(nothing yet)"}${note}\n\nCurrent screenshot (turn ${turn} of ${MAX_TURNS}):` },
         { type: "input_image", image_url: `data:image/jpeg;base64,${jpg.toString("base64")}` },
       ] }];
-      const r = await api("/internal/muse/responses", { instructions: LOOP_INSTRUCTIONS, tools: [{ type: "computer" }, SELECT_TOOL, STEP_TOOL], reasoning: { effort: "minimal" }, max_output_tokens: 800, input }, { "x-muse-kind": "loop" });
+      const r = await api("/internal/muse/responses", { instructions: LOOP_INSTRUCTIONS, tools: [{ type: "computer" }, SELECT_TOOL, STEP_TOOL], reasoning: { effort: "minimal" }, max_output_tokens: 800, input }, { "x-muse-kind": "loop", ...jobHeader });
       addUsage(r.usage);
       const out = r.response.output ?? [];
       const say = out.filter((o) => o.type === "message").flatMap((o) => o.content ?? []).map((c) => c.text ?? "").join(" ").trim();
@@ -228,7 +230,7 @@ async function replay(m, send, ask, isAborted) {
       reasoning: { effort: "minimal" }, max_output_tokens: 600,
       text: { format: { type: "json_schema", name: "verdict", strict: true, schema: VERIFY_SCHEMA } },
       input: [{ role: "user", content: [{ type: "input_text", text: `Success check: ${check}\nExpected parameters: ${JSON.stringify(params)}\nDoes this final browser screenshot satisfy the success check? Only judge what is visible.` }, { type: "input_image", image_url: `data:image/jpeg;base64,${finalJpg.toString("base64")}` }] }],
-    }, { "x-muse-kind": "verify" });
+    }, { "x-muse-kind": "verify", ...jobHeader });
     addUsage(v.usage);
     let verdict = { success: false, evidence: "verifier returned no verdict" };
     try { verdict = JSON.parse((v.response.output ?? []).filter((o) => o.type === "message").flatMap((o) => o.content ?? []).map((c) => c.text ?? "").join("")); } catch {}

@@ -15,7 +15,7 @@ import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
 import { appendToLog } from "./log.js";
-import { museResponses, outputText, reasoningSummary, type MuseUsage } from "./muse.js";
+import { museResponses, outputText, reasoningSummary, type MuseUsage, type MusePool } from "./muse.js";
 import { siteKind, SITE_LABEL, replayCountsBySlug } from "./skillMetrics.js";
 import { submitColdRun, benchmarkForJob } from "./benchmark.js";
 
@@ -229,7 +229,7 @@ const HEAL_SCHEMA = {
 } as const;
 const ChangeZ = z.object({ step: z.number().int(), field: z.string().max(40), before: z.string().max(400), after: z.string().max(400), reason: z.string().max(400) });
 
-export async function healSkill(ctx: AppContext, skill: Skill, run: RunInput, stale: number[]) {
+export async function healSkill(ctx: AppContext, skill: Skill, run: RunInput, stale: number[], pool: MusePool = "default") {
   const observed = run.actions.filter((a) => a.turn >= 0).map((a) => `turn ${a.turn}: ${a.type} ${a.detail}${a.target ? ` [element: "${a.target}"]` : ""}`).join("\n").slice(0, 6000);
   const notes = run.step_changes.map((c) => `step ${c.step}: ${c.observed}`).join("\n") || "(none)";
   const r = await museResponses(ctx, "heal", {
@@ -240,7 +240,7 @@ export async function healSkill(ctx: AppContext, skill: Skill, run: RunInput, st
     // minimal effort: "low" spent the whole output budget on reasoning in testing
     reasoning: { effort: "minimal", summary: "auto" },
     text: { format: { type: "json_schema", name: "healed_skill", strict: true, schema: HEAL_SCHEMA } },
-  });
+  }, 3, pool);
   if (r.response.status === "incomplete") throw new HttpError(502, "muse_incomplete", `Muse stopped early while healing (${r.response.incomplete_details?.reason ?? "unknown"})`);
   let out: { skill: Skill; changes: z.infer<typeof ChangeZ>[] };
   try {
@@ -317,7 +317,7 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
   let heal: Awaited<ReturnType<typeof healSkill>> | null = null;
   let healError: string | null = null;
   if (stale.length && current?.latest) {
-    try { heal = await healSkill(ctx, current.body.skill, run, stale); } catch (e) { healError = (e as Error).message.slice(0, 300); console.warn(`[skills] heal failed: ${healError}`); }
+    try { heal = await healSkill(ctx, current.body.skill, run, stale, job?.via === "public" ? "public" : "default"); } catch (e) { healError = (e as Error).message.slice(0, 300); console.warn(`[skills] heal failed: ${healError}`); }
   }
 
   const runSummary = {

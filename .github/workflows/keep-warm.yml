@@ -1,19 +1,37 @@
 name: keep-warm
 
-# Pings the Agentboard API every 10 minutes so the free Render web service doesn't spin down between visits.
-# Only the API (agentboard-api) is pinged, NOT agentboard-executor: Render's free tier has 750 instance-hours per
-# workspace per month, and keeping two services awake around the clock would run it out. The executor wakes on demand.
+# Backup only. The primary keep-warm is the Cloudflare Worker in services/keepwarm-worker (cron every 5 minutes:
+# API + executor /healthz and an end-to-end MCP probe, status JSON at /status.json). GitHub's scheduled runs are
+# best-effort and were observed firing about once in 8 hours here, so they cannot keep a free Render service awake on
+# their own; this job is a cheap second line and a manual "wake everything now" button (workflow_dispatch).
+#
+# Render's free tier is 750 instance-hours per workspace per month, shared by every free service, so the schedule only
+# covers ~06:00-24:00 Pacific (13-07 UTC, either side of DST) and the executor is pinged only on manual runs.
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/10 0-7,13-23 * * *"
   workflow_dispatch:
+    inputs:
+      executor:
+        description: "Also wake agentboard-executor (Chromium; ~20-60 s cold start)"
+        type: boolean
+        default: true
 
 permissions: {}
 
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 4
     steps:
       - name: Ping API /healthz
-        run: curl -fsS --max-time 60 -o /dev/null -w "%{http_code}\n" https://agentboard-api.onrender.com/healthz || true
+        run: curl -fsS --retry 2 --retry-delay 5 --max-time 70 -o /dev/null -w "api %{http_code} %{time_total}s\n" https://agentboard-api.onrender.com/healthz || echo "::warning::API /healthz failed"
+      - name: MCP initialize
+        run: |
+          curl -fsS --max-time 60 -o /dev/null -w "mcp %{http_code} %{time_total}s\n" -X POST https://agentboard-api.onrender.com/mcp \
+            -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"keep-warm","version":"1"}}}' \
+            || echo "::warning::MCP initialize failed"
+      - name: Ping executor /healthz
+        if: github.event_name == 'workflow_dispatch' && inputs.executor
+        run: curl -fsS --retry 2 --retry-delay 5 --max-time 90 -o /dev/null -w "executor %{http_code} %{time_total}s\n" https://agentboard-executor.onrender.com/healthz || echo "::warning::executor /healthz failed"

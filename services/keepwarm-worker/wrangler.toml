@@ -1,0 +1,26 @@
+# Free Cloudflare Worker: keep the free Render services warm and probe the live MCP. Deploy: npx wrangler deploy
+# (from this directory, after `npx wrangler login` and creating the KV namespace below). No secrets are needed.
+name = "agentboard-keepwarm"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+API_URL = "https://agentboard-api.onrender.com"
+EXECUTOR_URL = "https://agentboard-executor.onrender.com"
+# America/Los_Angeles hours, end exclusive ("*" = always, "" = never). Render free = 750 instance-hours per month per
+# WORKSPACE, shared by agentboard-api, agentboard-executor and personal-web-agent. 6-24 (18 h/day) + 10-14 (4 h/day)
+# = ~660 h in a 30-day month, leaving room for on-demand executor wakes. Widen these on filming/judging days only.
+API_WARM_WINDOWS = "6-24"
+EXECUTOR_WARM_WINDOWS = "10-14"
+PROBE_SLUG = "hacker-news-top-story"
+PROBE_PARAMS = "{}"
+PROBE_TRY_EVERY_MIN = "30"
+TIMEOUT_MS = "70000"
+
+[[kv_namespaces]]
+binding = "STATUS"
+id = "97b1c92b55a0496f85ea11521898d937"
