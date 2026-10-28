@@ -8,8 +8,9 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @agentboard/api run migrate
-    startCommand: pnpm --filter @agentboard/api start
+    buildCommand: npx -y pnpm@10.34.6 install --frozen-lockfile
+    # Migrations run on boot (idempotent). Free instances have no pre-deploy command.
+    startCommand: cd packages/api && ../../node_modules/.bin/tsx src/server.ts
     healthCheckPath: /healthz
     autoDeploy: false
     envVars:

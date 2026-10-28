@@ -36,7 +36,11 @@ export function createApp(ctx: AppContext) {
   app.get("/.well-known/agent-card.json", (c) => c.json(agentCard(ctx)));
   app.get("/.well-known/agent.json", (c) => c.json(agentCard(ctx)));
   app.get("/.well-known/mcp.json", (c) => c.json(mcpServerCard(ctx)));
-  app.get("/healthz", async (c) => { await db.query("SELECT 1"); return c.json({ ok: true }); });
+  app.get("/healthz", async (c) => {
+    const ext = (await db.query<any>(`SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector','pg_trgm','ltree')`)).rows;
+    const schema = Number((await db.query<any>(`SELECT COALESCE(MAX(id),0)::int AS v FROM schema_migrations`)).rows[0]?.v ?? 0);
+    return c.json({ ok: true, database: db.kind, schema_version: schema, extensions: Object.fromEntries(ext.map((e) => [e.extname, e.extversion])), offline: ctx.cfg.offline, embedder: ctx.embedder.model });
+  });
 
   app.get("/v1/node", async (c) => {
     const head = (await db.query<any>(`SELECT seq::int AS seq, entry_hash FROM log ORDER BY seq DESC LIMIT 1`)).rows[0];

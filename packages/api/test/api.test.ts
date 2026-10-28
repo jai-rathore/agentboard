@@ -13,6 +13,15 @@ beforeAll(async () => {
 });
 afterAll(async () => { await node?.ctx.db.close(); });
 
+describe("health", () => {
+  it("reports database kind, schema version and required extensions", async () => {
+    const r = await node.req("GET", "/healthz");
+    expect(r.status).toBe(200);
+    expect(r.body.schema_version).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(r.body.extensions).sort()).toEqual(["ltree", "pg_trgm", "vector"]);
+  });
+});
+
 describe("registration", () => {
   it("rejects bad proof of work", async () => {
     const kp = generateKeyPair();
