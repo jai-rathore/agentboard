@@ -6,6 +6,7 @@ import { verifyRecord, entryHash, gatedSteps, effectiveRiskFlags, FLAG_LABELS, G
 import { API, EXECUTOR_WS, operatorFetch } from "./api";
 import { Link, useData, short, ago } from "./App";
 import { modelName, isOpenWeight } from "./models";
+import { TryItNow } from "./tryit";
 
 const DEMOS = [
   { name: "Acme Helpdesk (demo site)", url: `${location.origin}/demo/helpdesk/` },
@@ -414,7 +415,7 @@ export function SkillPage({ cid }: { cid: string }) {
       {lb && <ModelCall model={lb.verdict.model} capability={`verified with ${lb.verdict.capability}`} />}
       {hf && <ModelCall model={hf.model} capability={hf.capability} extra={usd(hf.usage?.usd)} />}
     </div>
-    {time && <p className="time-line"><HumanInput approvals={time.approvals_per_run ?? 0} /> per replay: the agent does every click and keystroke; a human only approves 🔒 steps.{time.verified_runs > 0 && <> {plural(time.verified_runs, "verified replay")} of this version so far.</>}{time.agent_faster && <> ⚡ Fastest replay {fmtDur(time.fastest_run_ms)} vs {fmtDur(time.recording_ms)} for the human who recorded it.</>}</p>}
+    {time && <p className="time-line"><HumanInput approvals={time.approvals_per_run ?? 0} /> per replay: the agent does every click and keystroke; a human only approves 🔒 steps.{time.verified_runs > 0 && <> {plural(time.verified_runs, "verified run")} of this version so far ({(r.data.reuse?.verified_replays ?? 0) ? plural(r.data.reuse.verified_replays, "verified replay") : "no replays yet"}; the run that published the skill is not counted as a replay).</>}{time.agent_faster && <> ⚡ Fastest verified run {fmtDur(time.fastest_run_ms)} vs {fmtDur(time.recording_ms)} for the human who recorded it.</>}</p>}
     {hf && prev_skill && <div className="healed-box">
       <b>🩹 Self-healed from <Link to={`/s/${hf.skill}`}>v{prev_skill.version}</Link></b> after {heal_run ? <>run log #{heal_run.seq}</> : "a verified run"} on {heal_run?.record.body.start_url}: steps {hf.stale_steps.join(", ")} no longer matched the site{hf.reported?.length ? `, and the agent reported: ${hf.reported.map((x: any) => `step ${x.step}: ${x.observed}`).join("; ")}` : ""}. Spark re-read the screen and rewrote them; the run's final screenshot verified the result.
       <StepDiff before={prev_skill.skill} after={b.skill} changes={hf.changes} />
@@ -427,7 +428,7 @@ export function SkillPage({ cid }: { cid: string }) {
         {lb && <p className="small">{lb.success ? "✓" : "✗"} {lb.verdict.evidence} <a href={art(lb.evidence.final_screenshot)} target="_blank" rel="noreferrer">final screenshot</a>{last === heal_run && " (the run that healed this version)"}</p>}</div>
     </div>
     <SkillView skill={b.skill} diff={diffIdx} />
-    {r.data.public_replay && <PublicReplayPanel slug={b.slug} params={b.skill.params} />}
+    {r.data.public_replay && <div className="panel try-panel"><TryItNow slug={b.slug} params={b.skill.params} /></div>}
     <h2>Use it from an agent</h2>
     <pre className="mono small code-block">{`claude mcp add agentboard -- npx -y github:jai-rathore/agentboard
 # then, in Claude Code or Cursor:
@@ -585,7 +586,7 @@ export function RunPage({ id }: { id: string }) {
     <h1>{isReplay ? <span className="badge big replay">Replay</span> : <span className="badge big publish">Publishing run</span>} {d.skill.name} <SiteBadge kind={d.site_kind} /></h1>
     <p className="lead small">{isReplay
       ? <>A replay of <Link to={`/s/${d.skill.cid}`}>v{d.skill.version}</Link> of a skill that was recorded once by a person{d.recording.video ? <> (<a href={d.recording.video} target="_blank" rel="noreferrer">the original recording</a>)</> : null}. This run is separate from the recording: an agent drove the browser from the skill's steps.</>
-      : <>The first verified replay of the recording, signed together with <Link to={`/s/${d.skill.cid}`}>v{d.skill.version}</Link>. It is part of publishing the skill and is <b>not counted as reuse</b>.{d.recording.video ? <> <a href={d.recording.video} target="_blank" rel="noreferrer">The recording</a>.</> : null}</>}</p>
+      : <>The first verified run of the recording, signed together with <Link to={`/s/${d.skill.cid}`}>v{d.skill.version}</Link>. It is part of publishing the skill and is <b>not counted as reuse</b>.{d.recording.video ? <> <a href={d.recording.video} target="_blank" rel="noreferrer">The recording</a>.</> : null}</>}</p>
     {d.site_kind === "mock" && <p className="small demo-note">This ran on an Agentboard demo page (a mock site we host), not a real-world site.</p>}
     <div className="meta">trigger: <b>{d.trigger}</b> ({triggerLabel(d.trigger)}){d.agent && <> · <Link to={`/a/${d.agent}`}>{short(d.agent)}</Link></>} · {ago(d.run.record.created_at)} · log #{d.run.seq}{d.job && <> · <Link to={`/skills/r/${d.job.id}`}>live run page</Link></>}{d.skill.latest_version !== d.skill.version && <> · latest is <Link to={`/s/${d.skill.latest_cid}`}>v{d.skill.latest_version}</Link></>}</div>
     <div className={`verdict-box ${d.success ? "good" : "badv"}`}><ModelCall model={d.models.verifier} capability={`verified with ${d.models.verifier_capability ?? "image understanding"}`} /><p>{d.success ? "✓ Verified" : "✗ Not verified"}: {d.verdict?.evidence}</p></div>
@@ -613,45 +614,4 @@ export function RunPage({ id }: { id: string }) {
     <p className="small muted">Check it here (Ed25519 signature, content id, log entry hash, and that the screenshot and GIF bytes hash to the sha256 in the signed record), or with the MCP <code>verify_record</code> tool. Raw: <a href={`${API}/v1/records/${d.signature.cid}`}>/v1/records/{d.signature.cid.slice(0, 16)}…</a></p>
     <SignatureCheck entries={[d.run]} />
   </article>;
-}
-
-// ---------------------------------------------------------------- public replay ("try it yourself"): capped, no token
-
-async function leadingZeroBitsOf(buf: ArrayBuffer) { const b = new Uint8Array(buf); let z = 0; for (const x of b) { if (x === 0) { z += 8; continue; } z += Math.clz32(x) - 24; break; } return z; }
-async function solvePow(ch: { nonce: string; bits: number; params_hash: string }, slug: string) {
-  const enc = new TextEncoder();
-  for (let n = 0; n < 50_000_000; n++) {
-    if (await leadingZeroBitsOf(await crypto.subtle.digest("SHA-256", enc.encode(`${ch.nonce}:${slug}:${ch.params_hash}:${n}`))) >= ch.bits) return n;
-  }
-  throw new Error("no solution");
-}
-
-function PublicReplayPanel({ slug, params }: { slug: string; params: any[] }) {
-  const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(params.map((p: any) => [p.name, ""])));
-  const [status, setStatus] = useState(""), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
-  const call = async (body: unknown) => {
-    const res = await fetch(`${API}/v1/skills/${slug}/public-replay`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    return { status: res.status, body: await res.json().catch(() => ({})) };
-  };
-  const start = async () => {
-    setErr(""); setBusy(true);
-    try {
-      const p = Object.fromEntries(Object.entries(vals).map(([k, v]) => [k, v.trim()]));
-      setStatus("Asking for a challenge…");
-      const first = await call({ params: p });
-      if (first.status !== 428) throw new Error(first.body.message ?? `HTTP ${first.status}`);
-      setStatus(`Solving a small proof of work in your browser (${first.body.challenge.bits} bits)…`);
-      const counter = await solvePow(first.body.challenge, slug);
-      const r = await call({ params: p, challenge: { id: first.body.challenge.id, counter } });
-      if (r.status !== 202) throw new Error(r.body.message ?? `HTTP ${r.status}`);
-      go(`/skills/r/${r.body.id}`);
-    } catch (e) { setErr((e as Error).message); setStatus(""); } finally { setBusy(false); }
-  };
-  return <div className="panel try-panel">
-    <h2>Try it yourself (public replay)</h2>
-    <p className="small muted">Runs a real replay on the public site with your inputs: no token, no account. Capped per network and per day; only allowlisted skills that never submit, buy, send or delete. You get a run page with the signed record.</p>
-    {params.map((p: any) => <label key={p.name}>{p.name} <span className="muted small">e.g. {p.example}</span><input value={vals[p.name] ?? ""} onChange={(e) => setVals({ ...vals, [p.name]: e.target.value })} /></label>)}
-    <button disabled={busy || params.some((p: any) => !(vals[p.name] ?? "").trim())} onClick={start}>{busy ? "Working…" : "Replay it"}</button>
-    {status && <p className="muted small">{status}</p>}{err && <p className="err small">{err}</p>}
-  </div>;
 }

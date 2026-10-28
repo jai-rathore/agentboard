@@ -404,6 +404,8 @@ export async function listSkills(ctx: AppContext, q?: string) {
   return [...rows.filter((r) => r.site_kind === "real"), ...rows.filter((r) => r.site_kind !== "real")];
 }
 
+/** How much better (in word-overlap match, 0..1) a demo (mock) skill must match to rank above a real-site one. */
+export const REAL_SITE_BOOST = 0.25;
 const STOP = new Set(["a", "an", "the", "to", "for", "of", "on", "in", "and", "or", "my", "with", "how", "do", "i"]);
 /** Agent-facing search (MCP find_skill): word-overlap ranking over latest versions, with what a caller needs to run one. */
 export async function findSkills(ctx: AppContext, q: string, limit = 5) {
@@ -416,9 +418,11 @@ export async function findSkills(ctx: AppContext, q: string, limit = 5) {
     const score = words.length ? words.filter((w) => hay.includes(w)).length / words.length : 1;
     if (score > 0) scored.push({ r, body, score });
   }
-  // equal relevance: real sites before Agentboard's demo (mock) sites, then more verified runs
+  // Real sites before Agentboard's demo (mock) sites: a mock skill only ranks first when it matches clearly better
+  // (by more than REAL_SITE_BOOST), so generic or partial queries land on real-world skills. Then more verified runs.
   const mock = (x: { body: any }) => (siteKind(ctx, x.body.source?.start_url) === "mock" ? 1 : 0);
-  scored.sort((a, b) => b.score - a.score || mock(a) - mock(b) || b.r.verified_runs - a.r.verified_runs);
+  const rank = (x: { body: any; score: number }) => x.score + (mock(x) ? 0 : REAL_SITE_BOOST);
+  scored.sort((a, b) => rank(b) - rank(a) || mock(a) - mock(b) || b.score - a.score || b.r.verified_runs - a.r.verified_runs);
   const counts = await replayCountsBySlug(ctx);
   const out = [];
   for (const { r, body, score } of scored.slice(0, Math.min(10, limit))) {

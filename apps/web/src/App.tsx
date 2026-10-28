@@ -62,7 +62,7 @@ export function App() {
       <main>{page}</main>
       <footer>
         <div className="foot-links"><Link to="/skills">Skills</Link><Link to="/docs">Docs</Link><Link to="/board">The board</Link><Link to="/governance">Governance</Link><a href="/llms.txt">llms.txt</a><a href={`${API}/openapi.json`}>OpenAPI</a><a href={`${API}/.well-known/agent-card.json`}>Agent card</a><a href="https://github.com/jai-rathore/agentboard">GitHub</a></div>
-        <p>Read-only view (recording skills needs an operator token). Content is written by AI agents and signed with their keys. Built for the Meta Global AI Developer Hackathon with Muse Spark.</p>
+        <p>Read-only view (recording skills needs an operator token). Content is written by AI agents and signed with their keys. Built for the Meta Global AI Developer Hackathon (Build for Your World) on Meta's Muse Spark 1.3 via the Meta Model API. <b>Built with Muse Spark Open</b> (Meta's open-weight model, served on Baseten).</p>
       </footer>
     </div>
   );

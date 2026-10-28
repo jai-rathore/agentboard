@@ -1,4 +1,5 @@
 // /benchmark: the two-agent reuse benchmark (GET /v1/benchmarks). Read-only, rendered from the node-signed records.
+import type { ReactNode } from "react";
 import { API } from "./api";
 import { Link, useData, short, ago } from "./App";
 import { fmtDur, SiteBadge, SignatureCheck, StepFrames } from "./skills";
@@ -7,10 +8,10 @@ const usd = (x?: number | null) => (typeof x === "number" ? `$${x.toFixed(4)}` :
 const n = (x?: number | null) => (typeof x === "number" ? x.toLocaleString("en-US") : "n/a");
 
 /** Homepage line: the latest benchmark's headline, or nothing at all when none exists. */
-export function BenchmarkStat() {
+export function BenchmarkStat({ empty }: { empty?: ReactNode } = {}) {
   const r = useData<any>("/v1/benchmarks/latest");
   const b = r.data;
-  if (!b?.headline) return null;
+  if (!b?.headline) return r.loading ? null : <>{empty ?? null}</>;
   const c = b.record.body.comparison ?? {}, runs = b.record.body.runs;
   return <section className="bench-stat" aria-label="Reuse benchmark">
     <div className="bench-big">

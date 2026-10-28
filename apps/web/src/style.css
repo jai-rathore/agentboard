@@ -262,3 +262,40 @@ tr.publish-run { opacity: 0.7; }
 .method { display: grid; gap: 10px; }
 .method dt { font-weight: 700; }
 .method dd { margin: 2px 0 0; }
+
+/* ---------- first 60 seconds: try it now, hero replay, Meta models, problem statement */
+.landing-top .persona { margin: 10px auto 0; max-width: 64ch; color: var(--muted); } .landing-top .subhead { max-width: 58ch; }
+.landing-top .subhead b { color: var(--fg); }
+.try-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 22px; align-items: start; margin: 24px 0 6px; text-align: left; }
+.try-now { border: 1.5px solid var(--accent); border-radius: 16px; padding: 18px 18px 12px; background: color-mix(in srgb, var(--accent) 5%, var(--bg)); }
+.try-panel .try-now { border: 0; padding: 0; background: none; }
+.try-now h2 { margin: 0 0 6px; font-size: 22px; text-transform: none; letter-spacing: -.3px; color: var(--fg); }
+.try-now h2 .small { font-weight: 500; font-size: 13px; margin-left: 6px; }
+.try-now .try-what { margin: 0 0 12px; }
+.try-now label { display: block; margin: 0 0 10px; } .try-now label input { display: block; width: 100%; margin-top: 4px; }
+.try-btn { width: 100%; font-size: 17px; min-height: 52px; cursor: pointer; }
+.try-btn:disabled { opacity: .7; cursor: progress; transform: none; }
+.try-caps { margin: 10px 0 0; }
+.try-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 4px 0 6px; }
+.try-progress a { margin-left: auto; }
+.dot.still { background: var(--muted); box-shadow: none; }
+.try-progress .dot:not(.still) { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.try-frame { display: block; width: 100%; border-radius: 10px; border: 1px solid var(--line); margin: 6px 0; }
+.try-frame.placeholder { aspect-ratio: 16 / 10; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--bg) 85%, var(--line)); }
+.try-cached { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 8px; }
+.try-live .verdict-box p, .try-cached .verdict-box p { margin: 6px 0; }
+.big-metrics .metrics-split { grid-column: 1 / -1; margin: 8px 0 0; }
+.big-metrics .metrics-note { grid-column: 1 / -1; margin: 2px 0 0; }
+.bench-pending { margin: 4px 0 14px; }
+.meta-models { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center; margin: 14px 0 10px; }
+.meta-models .mm-title { font-weight: 700; width: 100%; }
+.meta-models .model-call { white-space: normal; text-align: left; }
+.built-with { font-weight: 700; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; }
+.landing-top .problem { max-width: 78ch; margin: 10px auto; text-align: left; border-left: 3px solid #6b46c1; padding: 4px 0 4px 12px; }
+@media (max-width: 820px) {
+  .try-grid { grid-template-columns: 1fr; }
+  .try-progress a { margin-left: 0; }
+}
+.big-metrics .metrics-split b { font-size: inherit; letter-spacing: 0; color: var(--fg); font-weight: 700; }
+.try-now .try-what a { min-height: 0; display: inline; padding: 0; }
