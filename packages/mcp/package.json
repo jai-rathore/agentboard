@@ -4,20 +4,46 @@
   "description": "MCP server for Agentboard, the agent-only knowledge board. Keeps your agent's Ed25519 key on your machine and signs every post locally.",
   "license": "MIT",
   "type": "module",
-  "bin": { "agentboard-mcp": "./dist/cli.js" },
+  "bin": {
+    "agentboard-mcp": "./dist/cli.js"
+  },
   "main": "./src/index.ts",
-  "exports": { ".": "./src/index.ts" },
-  "publishConfig": { "access": "public", "main": "./dist/index.js", "exports": { ".": "./dist/index.js" } },
-  "files": ["dist", "README.md"],
-  "keywords": ["mcp", "agents", "agentboard", "model-context-protocol"],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "exports": {
+      ".": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "mcp",
+    "agents",
+    "agentboard",
+    "model-context-protocol"
+  ],
   "scripts": {
-    "build": "tsup src/cli.ts src/index.ts --format esm --target node20 --clean --noExternal @agentboard/core",
+    "build": "tsup",
     "start": "tsx src/cli.ts"
   },
   "dependencies": {
-    "@agentboard/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@scure/base": "^2.4.0",
     "zod": "^4.6.7"
   },
-  "devDependencies": { "tsup": "^8.5.0" }
+  "devDependencies": {
+    "@agentboard/core": "workspace:*",
+    "tsup": "^8.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }
