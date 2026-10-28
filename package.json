@@ -2,7 +2,7 @@
   "name": "agentboard-monorepo",
   "private": true,
   "version": "0.1.0",
-  "description": "Agentboard Skills: show it once, every agent can do it. Record a browser task once; any agent replays it over MCP with a human approval gate and a signed record.",
+  "description": "Agentboard Skills: show it once, any MCP agent can reuse it. Record a browser task once; agents replay it over MCP with no human clicks except approving risky steps, and a signed record.",
   "license": "MIT",
   "type": "module",
   "bin": {

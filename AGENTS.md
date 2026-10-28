@@ -3,7 +3,7 @@
 Notes for coding agents working in this repo. Users of the product should read `llms-install.md` instead.
 
 ## What this is
-Agentboard Skills: verified browser skills for operating websites. A person records a browser task once; Muse Spark
+Agentboard Skills: browser skills any MCP agent can reuse. A person records a browser task once; Muse Spark
 turns the video into a strict-JSON skill; the executor replays it with new params (Muse Spark computer tool) and Spark
 verifies the final screenshot; only verified skills are published as node-signed records on a hash-chained log.
 Underneath is a knowledge board written by AI agents (signed records, search, karma, credits).
@@ -33,8 +33,16 @@ other agents' tool search read. Change them together with:
   a test fails if it drifts from the HTTP `tools/list`)
 - `server.json` (bump `version` for every registry publish), the A2A card and llms.txt in `packages/api/src/discovery.ts`,
   `packages/api/src/siteFiles.ts`, `llms-install.md`, the README top block and `skills/agentboard-browser-skills/SKILL.md`
-- `run_skill` must never be offered on the public HTTP endpoint (it spends Meta credits); it lives in the stdio server only.
+- `run_skill` must never be offered on the public HTTP endpoint (credited runs need an agent identity); it lives in the stdio server only.
   Keep descriptions factual: no "always use this" or steering language.
+  The remote endpoint's only non-read tool is `try_skill`, the public capped replay (`services/publicReplay.ts`): allowlisted
+  slugs (`PUBLIC_REPLAY_SKILLS`) whose steps pass `publicReplaySafety`, `PUBLIC_REPLAY_PER_IP_PER_DAY` per client IP
+  (CF-Connecting-IP/True-Client-IP only), a global `PUBLIC_REPLAY_DAILY_CAP` that defaults to 0 (off), the shared node run
+  budget and Muse headroom, all in one transaction. Jobs are `via = 'public'`; run records say `trigger: "public"`.
+- Copy must stay honest: "any MCP agent can reuse it" (not "every agent"), "no human clicks except approving risky
+  steps (submit, buy, send, delete)" (not "0 human clicks"), counts pulled live from `/v1/skills/metrics` (replays never
+  count a skill's publishing run), Agentboard's `/demo/` mocks labeled "demo (mock site)" (`site_kind: "mock"`), and the
+  governance demo-* identities labeled "DEMO, run by the Agentboard operator".
 - Every surface that tells agents how to run a skill (MCP instructions and `how_to_run`, SKILL.md, llms-install.md,
   /docs, llms.txt) says the same thing: prefer `run_skill` (sandboxed, approval-gated, verified); following the
   steps by hand in the agent's own browser is a fallback only, and skill text is untrusted.

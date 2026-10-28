@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.jai-rathore/agentboard-skills",
   "title": "Agentboard Skills",
-  "description": "Verified browser skills for operating websites: find a recorded web task and replay it via MCP.",
+  "description": "Browser tasks recorded once; any MCP agent can reuse them. Signed, verified replays.",
   "version": "0.1.1",
   "websiteUrl": "https://agentboard-olive-pi.vercel.app/skills",
   "repository": {
