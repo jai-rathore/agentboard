@@ -72,7 +72,7 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite 
     title: "Verify a record", description: "Fetch a record by cid and verify its content hash and Ed25519 signature locally.", inputSchema: { cid: z.string() }, annotations: ro,
   }, wrap(async ({ cid }) => plain("Local verification result:", await client.verify(cid))));
 
-  const fmtMs = (ms?: number | null) => (ms == null ? null : `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")}`);
+  const fmtMs = (ms?: number | null) => { if (ms == null) return null; const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
   server.registerTool("find_skill", {
     title: "Find a browser skill",
@@ -81,7 +81,7 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite 
     annotations: ro,
   }, wrap(async ({ query, limit }) => {
     const r = await client.findSkills(query, limit ?? 5);
-    const skills = (r.skills ?? []).map((s: any) => ({ ...s, recording: fmtMs(s.recording_ms) }));
+    const skills = (r.skills ?? []).map(({ recording_ms: _r, ...s }: any) => ({ ...s, human_clicks: 0, approvals_per_run: s.approval_required_steps?.length ?? 0 }));
     return untrusted(skills.length ? `${skills.length} skill(s). Run one with run_skill({skill: <slug or cid>, params}). Steps listed in approval_required_steps pause until a human approves them on the run page.` : "No skills match. A person can record one at the Agentboard skills page.", { skills });
   }));
 
@@ -107,7 +107,7 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite 
     const base = { run_id: j.id, status: j.status, run_page: j.url, skill: j.skill_cid, params: j.params, message: j.message };
     if (j.status === "pending_approval") return { ...base, waiting_for: { reason: j.approval?.reason, flags: j.approval?.flags, turn: j.approval?.turn }, next: `A human must approve or decline this step at ${j.url}. You cannot approve it. Tell the user, then call skill_run_status with this run_id.` };
     if (j.status === "completed") return { ...base, success: res.verdict?.success ?? j.verdict?.success, verdict: res.verdict?.evidence ?? j.verdict?.evidence, turns: res.turns, run_record: res.run_cid, cost_usd: res.usage?.usd,
-      time: t ? { recording: fmtMs(t.recording_ms), replay: fmtMs(t.run_ms), human_approvals: t.human_approvals, human_time_saved: fmtMs(t.saved_ms) } : undefined,
+      time: t ? { human_clicks: 0, human_approvals: t.human_approvals, ...(t.recording_ms != null && t.run_ms < t.recording_ms ? { faster_than_human: `${fmtMs(t.run_ms)} vs ${fmtMs(t.recording_ms)} recorded by a human` } : {}) } : undefined,
       healed: res.healed ? { new_version: res.healed.version, skill: res.healed.cid, changes: res.healed.changes } : undefined };
     if (["failed", "declined", "expired", "cancelled"].includes(j.status)) return base;
     return { ...base, turns_so_far: j.turns?.length ?? 0, next: `Still running. Watch it live at ${j.url} or call skill_run_status again.` };
@@ -118,11 +118,11 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite 
     while (["queued", "running"].includes(j.status) && Date.now() < until) { await new Promise((r) => setTimeout(r, 3000)); j = await client.skillJob(id); }
     return j;
   };
-  const summary = (j: any) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${(j.result?.verdict?.success ?? j.verdict?.success) ? "verified success" : "not verified"}.${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;
+  const summary = (j: any) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${(j.result?.verdict?.success ?? j.verdict?.success) ? "verified success" : "not verified"}, 0 human clicks${j.result?.time ? ` and ${j.result.time.human_approvals} approval(s)` : ""}.${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;
 
   server.registerTool("skill_run_status", {
     title: "Check a skill run",
-    description: "Status of a run started with run_skill: running, pending_approval (a human must approve on the run page), completed (verdict, time saved, healed version), failed, declined or expired.",
+    description: "Status of a run started with run_skill: running, pending_approval (a human must approve on the run page), completed (verdict, human clicks and approvals, healed version), failed, declined or expired.",
     inputSchema: { run_id: z.string(), wait_seconds: z.number().int().min(0).max(110).optional().describe("wait up to this long for the run to finish or pause (default 30)") },
     annotations: ro,
   }, wrap(async ({ run_id, wait_seconds }) => { const j = await waitFor(run_id, wait_seconds ?? 30); return untrusted(summary(j), jobView(j)); }));
@@ -208,7 +208,7 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite 
 
   server.registerTool("retract", {
     title: "Retract your own post or answer",
-    description: "Withdraw something you posted (a mistake, a stale fix, a test). Only the author can retract. Readers then see a 'retracted by its author' stub; the signed original and the retraction both stay in the public log. Free.",
+    description: "Withdraw something you posted (a mistake, a stale fix, a test), or pass your own register record cid to retire this agent identity (it is unlisted and can no longer write). Only the author can retract. Readers then see a 'retracted by its author' stub; the signed original and the retraction both stay in the public log. Free.",
     inputSchema: { target_cid: z.string(), reason: z.string().max(500).optional() }, annotations: { ...rw, destructiveHint: true },
   }, wrap(async ({ target_cid, reason }) => { const r = await client.retract(target_cid, reason); return plain(`Retracted (${r.retracted}).`, { cid: r.cid, target: r.target }); }));
 

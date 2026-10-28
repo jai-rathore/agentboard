@@ -95,7 +95,13 @@ export const APPROVAL_HUMAN_MS = 5000;
 export function timeSaved(recording: number | null, run: { duration_ms: number; actions: { approval: string }[] }) {
   const approvals = run.actions.filter((a) => a.approval === "human").length;
   const human = approvals * APPROVAL_HUMAN_MS;
-  return { recording_ms: recording, run_ms: run.duration_ms, human_approvals: approvals, human_ms: human, saved_ms: recording == null ? null : Math.max(0, recording - human) };
+  // Lead with human input: the agent does every click; a human only approves gated steps.
+  // Wall-clock comparison is only meaningful (and only shown) when the agent beat the human recording.
+  return {
+    human_clicks: 0, human_approvals: approvals, recording_ms: recording, run_ms: run.duration_ms,
+    agent_faster: recording != null && run.duration_ms < recording,
+    human_ms: human, saved_ms: recording == null ? null : Math.max(0, recording - human),
+  };
 }
 
 export const artifactUrl = (ctx: AppContext, sha: string) => `${ctx.cfg.publicBaseUrl}/v1/artifacts/${sha}`;
@@ -294,6 +300,8 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
     source = current.body.source;
   }
   const time = timeSaved(await recordingMs(ctx, source), run);
+  const job = run.job_id ? (await ctx.db.query<any>(`SELECT id, via, requested_by FROM skill_jobs WHERE id = $1`, [run.job_id])).rows[0] : null;
+  const requestedBy = job ? (job.via === "agent" ? { via: "agent", agent: job.requested_by, job: job.id } : { via: "operator", job: job.id }) : { via: "web" };
 
   // ---- drift: verified replays of a published skill whose steps no longer match the site
   const stale = current && run.success ? [...new Set([...staleSteps(current.body.skill, run.actions), ...run.step_changes.map((c) => c.step)])].sort((a, b) => a - b) : [];
@@ -313,6 +321,7 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
     time,
     ...(current ? { drift: { stale_steps: stale, reported: run.step_changes, healed: Boolean(heal && !heal.unchanged), ...(healError ? { error: healError } : {}) } } : {}),
     executor: run.executor,
+    requested_by: requestedBy,
   };
   const runRec = sysRecord(ctx, "skill_run", { skill: published?.cid ?? skillCid!, ...runSummary });
   let healed: SignedRecord | null = null;
@@ -414,6 +423,7 @@ export async function getSkill(ctx: AppContext, cid: string) {
   const recording = await recordingMs(ctx, body.source);
   const verifiedRuns = runs.filter((r: any) => r.record.body.success);
   const savedTotal = recording == null ? null : verifiedRuns.reduce((t: number, r: any) => t + (r.record.body.time?.saved_ms ?? Math.max(0, recording - APPROVAL_HUMAN_MS * r.record.body.actions.filter((a: any) => a.approval === "human").length)), 0);
+  const fastest = verifiedRuns.length ? Math.min(...verifiedRuns.map((r: any) => Number(r.record.body.time?.run_ms ?? r.record.body.duration_ms))) : null;
   return {
     skill,
     slug: s.slug, version: s.version, latest_version: versions[0]?.version ?? s.version, latest_cid: versions[0]?.cid ?? cid,
@@ -421,7 +431,7 @@ export async function getSkill(ctx: AppContext, cid: string) {
     prev_skill: prev ? { cid: prev.cid, version: JSON.parse(prev.body_text).version, skill: JSON.parse(prev.body_text).skill } : null,
     heal_run: healRun ? toRecord(healRun) : null,
     safety: { risk_flags: effectiveRiskFlags(body.skill), declared_flags: body.skill.risk_flags, approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, flags: g.flags })), gated_flags: GATED_FLAGS },
-    time: { recording_ms: recording, approval_human_ms: APPROVAL_HUMAN_MS, verified_runs: verifiedRuns.length, saved_total_ms: savedTotal },
+    time: { human_clicks: 0, approvals_per_run: gatedSteps(body.skill).length, recording_ms: recording, fastest_run_ms: fastest, agent_faster: recording != null && fastest != null && fastest < recording, approval_human_ms: APPROVAL_HUMAN_MS, verified_runs: verifiedRuns.length, saved_total_ms: savedTotal },
     badge: { verified: verifiedRuns.length > 0 || Boolean(healRun && JSON.parse(healRun.body_text).success), replayed: runs.length, verified_runs_this_version: verifiedRuns.length, verified_runs_all_versions: allVerified, healed: Boolean(body.healed_from) },
     node: ctx.node.did,
   };

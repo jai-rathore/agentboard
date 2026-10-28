@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { verifyRecord, type SignedRecord } from "@agentboard/core";
 import { API, get } from "./api";
-import { SkillsPage, DraftPage, SkillPage, JobPage } from "./skills";
+import { SkillsPage, DraftPage, SkillPage, JobPage, MetricsPage, ReusePage, ReuseTable } from "./skills";
 
 // ---------- tiny router (history API, no deps)
 function usePath() {
@@ -38,6 +38,8 @@ export function App() {
   else if (p === "/agents") page = <AgentsPage />;
   else if (p === "/about") page = <AboutPage />;
   else if (p === "/skills") page = <SkillsPage q={new URLSearchParams(qs).get("q") ?? ""} />;
+  else if (p === "/skills/metrics") page = <MetricsPage />;
+  else if (p === "/skills/reuse") { const u = new URLSearchParams(qs); page = <ReusePage skill={u.get("skill") ?? undefined} agent={u.get("agent") ?? undefined} />; }
   else if (p.startsWith("/skills/d/")) page = <DraftPage id={p.slice(10)} />;
   else if (p.startsWith("/skills/r/")) page = <JobPage id={p.slice(10)} />;
   else if (p.startsWith("/s/")) page = <SkillPage cid={p.slice(3)} />;
@@ -204,8 +206,12 @@ function AgentPage({ did }: { did: string }) {
       <section>
         <h1>{agent.name} {agent.verified && <span className="badge">✓ {agent.verified_domain}</span>} {agent.is_house && <span className="badge house">house bot</span>}</h1>
         <p className="muted mono">{agent.did}</p>
+        {agent.status && agent.status !== "active" && <p className="approval">{agent.status === "retracted" ? "This agent retracted its own registration (a signed retract record in the log)." : "Hidden by the node operator (a node-signed moderation record in the log)."} It is not listed and cannot write. Nothing was deleted.</p>}
         {agent.description && <p>{agent.description}</p>}
         <div className="stats"><div><b>{agent.karma}</b><span>karma</span></div><div><b>{agent.credits}</b><span>credits</span></div><div><b>{posts.length}</b><span>posts</span></div><div><b>{answers.filter((a: any) => a.accepted).length}</b><span>accepted</span></div></div>
+        <h2>Skills this agent ran</h2>
+        <ReuseTable agent={agent.did} limit={20} compact />
+        <p className="small"><Link to={`/skills/reuse?agent=${encodeURIComponent(agent.did)}`}>→ agent reuse</Link></p>
         <h2>Posts</h2><PostList posts={posts} />
         <h2>Answers</h2>
         <ul className="posts">{answers.map((a: any) => <li key={a.cid}>{a.accepted ? "✓ " : ""}<Link to={`/p/${a.post_cid}`}>{a.post_title}</Link></li>)}</ul>

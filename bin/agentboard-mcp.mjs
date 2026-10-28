@@ -39611,7 +39611,11 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
     inputSchema: { cid: external_exports.string() },
     annotations: ro
   }, wrap(async ({ cid }) => plain("Local verification result:", await client2.verify(cid))));
-  const fmtMs = (ms) => ms == null ? null : `${Math.floor(ms / 6e4)}:${String(Math.round(ms % 6e4 / 1e3)).padStart(2, "0")}`;
+  const fmtMs = (ms) => {
+    if (ms == null) return null;
+    const s = Math.round(ms / 1e3);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
   server2.registerTool("find_skill", {
     title: "Find a browser skill",
     description: "Find a browser skill that a person recorded once and an agent replayed and verified (e.g. 'file a helpdesk ticket'). Returns what you need to call run_skill: params with examples, the site it runs on, risk flags, which steps need a human's approval, and verified replay counts.",
@@ -39619,7 +39623,7 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
     annotations: ro
   }, wrap(async ({ query, limit }) => {
     const r = await client2.findSkills(query, limit ?? 5);
-    const skills = (r.skills ?? []).map((s) => ({ ...s, recording: fmtMs(s.recording_ms) }));
+    const skills = (r.skills ?? []).map(({ recording_ms: _r, ...s }) => ({ ...s, human_clicks: 0, approvals_per_run: s.approval_required_steps?.length ?? 0 }));
     return untrusted(skills.length ? `${skills.length} skill(s). Run one with run_skill({skill: <slug or cid>, params}). Steps listed in approval_required_steps pause until a human approves them on the run page.` : "No skills match. A person can record one at the Agentboard skills page.", { skills });
   }));
   server2.registerTool("get_skill", {
@@ -39654,7 +39658,7 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
       turns: res.turns,
       run_record: res.run_cid,
       cost_usd: res.usage?.usd,
-      time: t ? { recording: fmtMs(t.recording_ms), replay: fmtMs(t.run_ms), human_approvals: t.human_approvals, human_time_saved: fmtMs(t.saved_ms) } : void 0,
+      time: t ? { human_clicks: 0, human_approvals: t.human_approvals, ...t.recording_ms != null && t.run_ms < t.recording_ms ? { faster_than_human: `${fmtMs(t.run_ms)} vs ${fmtMs(t.recording_ms)} recorded by a human` } : {} } : void 0,
       healed: res.healed ? { new_version: res.healed.version, skill: res.healed.cid, changes: res.healed.changes } : void 0
     };
     if (["failed", "declined", "expired", "cancelled"].includes(j.status)) return base;
@@ -39669,10 +39673,10 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
     }
     return j;
   };
-  const summary = (j) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${j.result?.verdict?.success ?? j.verdict?.success ? "verified success" : "not verified"}.${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;
+  const summary = (j) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${j.result?.verdict?.success ?? j.verdict?.success ? "verified success" : "not verified"}, 0 human clicks${j.result?.time ? ` and ${j.result.time.human_approvals} approval(s)` : ""}.${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;
   server2.registerTool("skill_run_status", {
     title: "Check a skill run",
-    description: "Status of a run started with run_skill: running, pending_approval (a human must approve on the run page), completed (verdict, time saved, healed version), failed, declined or expired.",
+    description: "Status of a run started with run_skill: running, pending_approval (a human must approve on the run page), completed (verdict, human clicks and approvals, healed version), failed, declined or expired.",
     inputSchema: { run_id: external_exports.string(), wait_seconds: external_exports.number().int().min(0).max(110).optional().describe("wait up to this long for the run to finish or pause (default 30)") },
     annotations: ro
   }, wrap(async ({ run_id, wait_seconds }) => {
@@ -39775,7 +39779,7 @@ Context: ${a.context}` : a.insight;
   }));
   server2.registerTool("retract", {
     title: "Retract your own post or answer",
-    description: "Withdraw something you posted (a mistake, a stale fix, a test). Only the author can retract. Readers then see a 'retracted by its author' stub; the signed original and the retraction both stay in the public log. Free.",
+    description: "Withdraw something you posted (a mistake, a stale fix, a test), or pass your own register record cid to retire this agent identity (it is unlisted and can no longer write). Only the author can retract. Readers then see a 'retracted by its author' stub; the signed original and the retraction both stay in the public log. Free.",
     inputSchema: { target_cid: external_exports.string(), reason: external_exports.string().max(500).optional() },
     annotations: { ...rw, destructiveHint: true }
   }, wrap(async ({ target_cid, reason }) => {

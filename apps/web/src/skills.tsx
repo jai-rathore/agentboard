@@ -54,12 +54,20 @@ export function SkillView({ skill, diff }: { skill: any; diff?: any[] }) {
   </div>;
 }
 
-export const fmtDur = (ms?: number | null) => (ms == null ? "n/a" : ms < 60000 ? `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s` : `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, "0")} min`);
+export const fmtDur = (ms?: number | null) => { if (ms == null) return "n/a"; if (ms < 10000) return `${(ms / 1000).toFixed(1)} s`; const s = Math.round(ms / 1000); return s < 60 ? `${s} s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} min`; };
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
+/** Lead with human input (0 clicks + approvals). Show human-vs-agent wall clock only when the agent was faster. */
+export function HumanInput({ approvals }: { approvals: number }) {
+  return <span className="human-input"><b>👆 0 human clicks</b> · {plural(approvals, "approval")}</span>;
+}
+export function Faster({ recording, run }: { recording?: number | null; run?: number | null }) {
+  if (recording == null || run == null || !(run < recording)) return null;
+  return <span className="faster small"> · ⚡ agent {fmtDur(run)} vs {fmtDur(recording)} for the human</span>;
+}
 function TimeSaved({ t }: { t: any }) {
   if (!t) return null;
-  if (t.recording_ms == null) return <span className="small muted">Recorded from screenshots, so there is no clock to compare against.</span>;
-  return <span className="time"><b>⏱ Saves ~{fmtDur(t.saved_ms)} of human time</b> <span className="muted small">(recording {fmtDur(t.recording_ms)} − {t.human_approvals} approval{t.human_approvals === 1 ? "" : "s"} × ~5 s; the agent took {fmtDur(t.run_ms)} unattended)</span></span>;
+  return <span className="time"><HumanInput approvals={t.human_approvals ?? 0} /><Faster recording={t.recording_ms} run={t.run_ms} /></span>;
 }
 
 /** Field-by-field diff between two versions' steps, plus Spark's stated reasons. */
@@ -84,6 +92,7 @@ export function SkillsPage({ q }: { q: string }) {
   return <div className="grid">
     <section>
       <h1>Skills <span className="muted small">show it once, every agent can do it</span></h1>
+      <p className="small"><Link to="/skills/metrics">metrics</Link> · <Link to="/skills/reuse">agent reuse</Link></p>
       <p className="muted">A person records a browser task once. Muse Spark turns the recording into a strict-JSON skill; an executor replays it with new values through Muse Spark's computer tool and Spark verifies the result. Only verified skills are published, as node-signed records in the public log.</p>
       <div className="search"><input value={query} placeholder="Search skills…" onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") go(`/skills${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ""}`); }} /></div>
       {r.loading ? <p className="muted">Loading…</p> : r.error ? <p className="err">{r.error}</p> : !r.data.skills.length ? <p className="muted">No verified skills yet.</p> :
@@ -292,7 +301,7 @@ export function JobPage({ id }: { id: string }) {
   return <article>
     <div className="crumbs"><Link to="/skills">skills</Link> / run</div>
     <h1>Skill run <span className={`draft-tag st-${job.status}`}>{job.status.replace("_", " ")}</span></h1>
-    <div className="meta">requested by {job.via === "agent" ? "an agent (signed, paid in credits)" : "the operator"} through MCP <code>run_skill</code> · <Link to={`/s/${job.skill_cid}`}>skill</Link> · started {ago(job.created_at)}</div>
+    <div className="meta">requested by {job.via === "agent" ? <>{job.agent ? <Link to={`/a/${job.agent}`}>an agent</Link> : "an agent"} (signed, paid in credits)</> : "the operator"} through MCP <code>run_skill</code> · <Link to={`/s/${job.skill_cid}`}>skill</Link> · started {ago(job.created_at)}</div>
     <p className="small mono">{Object.entries(job.params).map(([k, v]) => `${k}=${v}`).join(" · ")} · {job.start_url}</p>
     {job.status === "pending_approval" && job.approval && <div className="approval big">
       <b>⏸ A human must approve this step.</b> <span>{job.approval.reason}</span>
@@ -347,6 +356,8 @@ export function SkillPage({ cid }: { cid: string }) {
   const last = runs.find((x: any) => x.record.body.success) ?? runs[0] ?? heal_run;
   const lb = last?.record.body;
   const diffIdx = prev_skill && hf ? b.skill.steps.map((st: any, i: number) => JSON.stringify(st) !== JSON.stringify(prev_skill.skill.steps[i])) : undefined;
+  const faster = (rb: any) => Boolean(rb.success && rb.time?.recording_ms != null && rb.time.run_ms != null && rb.time.run_ms < rb.time.recording_ms);
+  const anyFaster = runs.some((x: any) => faster(x.record.body));
   return <article>
     <div className="crumbs"><Link to="/skills">skills</Link> / {b.slug}</div>
     <h1>{b.skill.name} {badge.verified && <span className="badge big">✓ verified, replayed {badge.replayed}×</span>}{hf && <span className="badge big heal">🩹 self-healed</span>}</h1>
@@ -358,7 +369,7 @@ export function SkillPage({ cid }: { cid: string }) {
       {lb && <ModelCall model={lb.verdict.model} capability={`verified with ${lb.verdict.capability}`} />}
       {hf && <ModelCall model={hf.model} capability={hf.capability} extra={usd(hf.usage?.usd)} />}
     </div>
-    {time && <p className="time-line">{time.recording_ms != null ? <>Shown once in <b>{fmtDur(time.recording_ms)}</b>. Each replay needs ~5 s of human time per approval. Saved so far: <b>{fmtDur(time.saved_total_ms)}</b> over {time.verified_runs} verified replay{time.verified_runs === 1 ? "" : "s"} of this version.</> : <span className="muted">Recorded from screenshots (no clock to compare against).</span>}</p>}
+    {time && <p className="time-line"><HumanInput approvals={time.approvals_per_run ?? 0} /> per replay: the agent does every click and keystroke; a human only approves 🔒 steps.{time.verified_runs > 0 && <> {plural(time.verified_runs, "verified replay")} of this version so far.</>}{time.agent_faster && <> ⚡ Fastest replay {fmtDur(time.fastest_run_ms)} vs {fmtDur(time.recording_ms)} for the human who recorded it.</>}</p>}
     {hf && prev_skill && <div className="healed-box">
       <b>🩹 Self-healed from <Link to={`/s/${hf.skill}`}>v{prev_skill.version}</Link></b> after {heal_run ? <>run log #{heal_run.seq}</> : "a verified run"} on {heal_run?.record.body.start_url}: steps {hf.stale_steps.join(", ")} no longer matched the site{hf.reported?.length ? `, and the agent reported: ${hf.reported.map((x: any) => `step ${x.step}: ${x.observed}`).join("; ")}` : ""}. Spark re-read the screen and rewrote them; the run's final screenshot verified the result.
       <StepDiff before={prev_skill.skill} after={b.skill} changes={hf.changes} />
@@ -378,9 +389,12 @@ find_skill({ query: "${b.skill.name.toLowerCase()}" })
 run_skill({ skill: "${b.slug}", params: ${JSON.stringify(Object.fromEntries(b.skill.params.map((p: any) => [p.name, p.example])))} })`}</pre>
     <p className="small muted">Runs from MCP pause at 🔒 steps with status <code>pending_approval</code> and a link to a page like this one, where a human approves. The agent never approves its own submit, buy, send or delete.</p>
     <h2>Replays ({runs.length})</h2>
-    <table className="tbl"><thead><tr><th></th><th>params</th><th>turns</th><th>approvals</th><th>human time saved</th><th>cost</th><th>when</th></tr></thead><tbody>
-      {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td>{rb.success ? "✓" : "✗"}{rb.drift?.healed && " 🩹"}</td><td className="small mono">{Object.values(rb.params).join(" · ").slice(0, 80)}{/[?&]v=2/.test(rb.start_url) && " · redesigned site"}</td><td>{rb.turns}</td><td className="small">{rb.actions.filter((a: any) => a.approval === "human").length} human</td><td className="small">{rb.success && rb.time ? fmtDur(rb.time.saved_ms) : ""}</td><td>{usd(rb.usage.usd)}</td><td className="small">{ago(x.record.created_at)} · #{x.seq}{rb.evidence.gif && <> · <a href={art(rb.evidence.gif)} target="_blank" rel="noreferrer">GIF</a></>}</td></tr>; })}
+    <table className="tbl"><thead><tr><th></th><th>params</th><th>turns</th><th>human input</th>{anyFaster && <th>vs human</th>}<th>cost</th><th>when</th></tr></thead><tbody>
+      {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td>{rb.success ? "✓" : "✗"}{rb.drift?.healed && " 🩹"}</td><td className="small mono">{Object.values(rb.params).join(" · ").slice(0, 80)}{/[?&]v=2/.test(rb.start_url) && " · redesigned site"}</td><td>{rb.turns}</td><td className="small">0 clicks · {plural(rb.actions.filter((a: any) => a.approval === "human").length, "approval")}</td>{anyFaster && <td className="small">{faster(rb) ? `⚡ ${fmtDur(rb.time.run_ms)} vs ${fmtDur(rb.time.recording_ms)}` : ""}</td>}<td>{usd(rb.usage.usd)}</td><td className="small">{ago(x.record.created_at)} · #{x.seq}{rb.evidence.gif && <> · <a href={art(rb.evidence.gif)} target="_blank" rel="noreferrer">GIF</a></>}</td></tr>; })}
     </tbody></table>
+    <h2>Agent reuse</h2>
+    <ReuseTable skill={b.slug} limit={10} compact />
+    <p className="small"><Link to={`/skills/reuse?skill=${encodeURIComponent(b.slug)}`}>→ all runs of {b.slug}, every version</Link></p>
     <h2>Version history</h2>
     <ul className="tree">{versions.map((v: any) => <li key={v.cid}>{v.cid === cid ? <b>v{v.version}</b> : <Link to={`/s/${v.cid}`}>v{v.version}</Link>} <span className="muted small">{ago(v.created_at)} · {v.cid.slice(0, 20)}…</span></li>)}</ul>
     <h2>Signatures</h2>
@@ -389,4 +403,76 @@ run_skill({ skill: "${b.slug}", params: ${JSON.stringify(Object.fromEntries(b.sk
     <h2>Replay it</h2>
     <ReplayPanel target={{ skill_cid: cid }} skill={b.skill} startUrl={heal_run?.record.body.start_url ?? b.source.start_url} />
   </article>;
+}
+
+// ---------------------------------------------------------------- public metrics + agent reuse (read-only, no model calls)
+
+export function MetricsPage() {
+  const r = useData<any>("/v1/skills/metrics");
+  if (r.loading) return <p className="muted">Loading…</p>;
+  if (r.error) return <p className="err">{r.error}</p>;
+  const m = r.data;
+  const pct = (x: number | null) => (x == null ? "n/a" : `${Math.round(x * 100)}%`);
+  return <section>
+    <div className="crumbs"><Link to="/skills">skills</Link> / metrics</div>
+    <h1>Skills metrics</h1>
+    <p className="muted">Computed live from the node-signed <code>skill</code> and <code>skill_run</code> records in the public log, plus the node's Muse spend ledger. Raw JSON: <a href={`${API}/v1/skills/metrics`}>/v1/skills/metrics</a>.</p>
+    <div className="stats metrics">
+      <div><b>{m.skills}</b><span>skills</span></div>
+      <div><b>{m.versions}</b><span>versions</span></div>
+      <div><b>{m.heals}</b><span>self-heals</span></div>
+      <div><b>{m.runs.total}</b><span>runs</span></div>
+      <div><b>{pct(m.runs.success_rate)}</b><span>verified ({m.runs.verified}/{m.runs.total})</span></div>
+      <div><b>{m.runs.by_agents}</b><span>runs by {plural(m.runs.distinct_agents, "agent")}</span></div>
+    </div>
+    <h2>Human effort</h2>
+    <div className="stats metrics">
+      <div><b>0</b><span>human clicks per run</span></div>
+      <div><b>{m.human.approvals}</b><span>human approvals</span></div>
+      <div><b>{m.human.clicks_saved}</b><span>clicks &amp; typed fields done by agents</span></div>
+      <div><b>{fmtDur(m.human.time_saved_ms)}</b><span>human time saved</span></div>
+    </div>
+    <p className="small muted">{m.human.note}{m.human.runs_faster_than_human > 0 && ` ${plural(m.human.runs_faster_than_human, "run")} also finished faster than the human recording.`}</p>
+    <h2>Muse Spark</h2>
+    <div className="stats metrics">
+      <div><b>{m.muse.calls}</b><span>calls</span></div>
+      <div><b>${m.muse.usd.toFixed(4)}</b><span>spend (cap ${m.muse.spend_cap_usd})</span></div>
+    </div>
+    <table className="tbl"><thead><tr><th>kind</th><th>calls</th><th>spend</th></tr></thead><tbody>
+      {Object.entries(m.muse.by_kind).map(([k, v]: any) => <tr key={k}><td>{k}</td><td>{v.calls}</td><td>{usd(v.usd)}</td></tr>)}
+    </tbody></table>
+    <p><Link to="/skills/reuse">→ Agent reuse: who ran which skill</Link></p>
+  </section>;
+}
+
+export function ReuseTable({ skill, agent, limit, compact }: { skill?: string; agent?: string; limit?: number; compact?: boolean }) {
+  const qs = new URLSearchParams({ ...(skill ? { skill } : {}), ...(agent ? { agent } : {}), ...(limit ? { limit: String(limit) } : {}) }).toString();
+  const r = useData<any>(`/v1/skills/reuse${qs ? `?${qs}` : ""}`, [qs]);
+  if (r.loading) return <p className="muted small">Loading…</p>;
+  if (r.error) return <p className="err small">{r.error}</p>;
+  const { runs, summary } = r.data;
+  if (!runs.length) return <p className="muted small">No runs yet.</p>;
+  const who = (x: any) => x.agent ? <><Link to={`/a/${x.agent.did}`}>{x.agent.name ?? short(x.agent.did)}</Link>{x.agent.status && x.agent.status !== "active" && <span className="muted"> ({x.agent.status})</span>}</> : <span className="muted">{x.via === "operator" ? "operator via MCP" : "operator (web)"}</span>;
+  return <>
+    {!compact && <p className="small muted">{plural(summary.runs, "run")} · {plural(summary.agents, "distinct agent")} · {summary.verified} verified</p>}
+    <table className="tbl"><thead><tr><th></th>{!agent && <th>run by</th>}{!skill && <th>skill</th>}<th>human input</th><th>when</th></tr></thead><tbody>
+      {runs.map((x: any) => <tr key={x.run}>
+        <td title={x.evidence ?? ""}>{x.outcome === "verified" ? "✓" : "✗"}{x.healed && " 🩹"}</td>
+        {!agent && <td className="small">{who(x)}</td>}
+        {!skill && <td className="small"><Link to={`/s/${x.skill.cid}`}>{x.skill.name}</Link> <span className="muted">v{x.skill.version}</span></td>}
+        <td className="small">0 clicks · {plural(x.approvals, "approval")}{x.recording_ms != null && x.run_ms != null && x.run_ms < x.recording_ms && <> · ⚡ {fmtDur(x.run_ms)} vs {fmtDur(x.recording_ms)}</>}</td>
+        <td className="small">{ago(x.at)} · log #{x.seq}{x.job && <> · <Link to={`/skills/r/${x.job}`}>run page</Link></>}</td>
+      </tr>)}
+    </tbody></table>
+  </>;
+}
+
+export function ReusePage({ skill, agent }: { skill?: string; agent?: string }) {
+  return <section>
+    <div className="crumbs"><Link to="/skills">skills</Link> / reuse</div>
+    <h1>Agent reuse</h1>
+    <p className="muted">Every replay of a skill is a node-signed <code>skill_run</code> record. This lists who asked for each run (a signed agent paying credits, or the operator), which skill version ran, and whether Spark verified the result.{(skill || agent) && <> Filtered by {skill ? `skill ${skill}` : `agent ${short(agent!)}`} · <Link to="/skills/reuse">show all</Link></>}</p>
+    <ReuseTable skill={skill} agent={agent} limit={200} />
+    <p><Link to="/skills/metrics">→ Metrics</Link></p>
+  </section>;
 }

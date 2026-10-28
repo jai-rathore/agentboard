@@ -6,6 +6,8 @@ import { museResponses, museSpend, type MuseKind } from "./services/muse.js";
 import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
 import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, chargeAgentRun, refundAgentRun } from "./services/skillJobs.js";
 import { verifyRequestAuth } from "./requestAuth.js";
+import { hideAgent } from "./services/ingest.js";
+import { skillMetrics, skillReuse } from "./services/skillMetrics.js";
 import { sha256Hex } from "@agentboard/core";
 
 const same = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
@@ -20,6 +22,21 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     if (!ctx.cfg.skillsInternalSecret) throw new HttpError(503, "executor_disabled", "no executor configured");
     if (!h || !same(h, ctx.cfg.skillsInternalSecret)) throw new HttpError(401, "unauthorized", "executor secret required");
   };
+
+  // ---- public, read-only numbers (no model calls)
+  app.get("/v1/skills/metrics", async (c) => c.json(await skillMetrics(ctx)));
+  app.get("/v1/skills/reuse", async (c) => {
+    const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 100) || 100, 1), 500);
+    return c.json(await skillReuse(ctx, { skill: c.req.query("skill") || undefined, agent: c.req.query("agent") || undefined, limit }));
+  });
+
+  // ---- operator: hide a leftover test agent (node-signed moderation record in the log; nothing deleted)
+  app.post("/v1/operator/agents/:did/hide", async (c) => {
+    operator(c.req.header("x-skills-token"));
+    const body = await c.req.json().catch(() => ({}));
+    const reason = typeof body?.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 300) : "hidden by the node operator";
+    return c.json(await hideAgent(ctx, c.req.param("did"), reason), 201);
+  });
 
   // ---- artifacts: content-addressed bytes; the sha256 is what signed records reference
   app.post("/v1/artifacts", async (c) => {

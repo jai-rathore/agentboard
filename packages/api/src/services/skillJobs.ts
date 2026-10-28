@@ -74,13 +74,13 @@ export function jobUrl(ctx: AppContext, id: string) { return `${ctx.cfg.skillsWe
 
 export async function getJob(ctx: AppContext, id: string, internal = false) {
   if (!/^[0-9a-f-]{36}$/.test(id)) throw new HttpError(404, "job_not_found", "no such run");
-  const r = (await ctx.db.query<any>(`SELECT id, skill_cid, params, start_url, via, status, message, turns, approval, decision, verdict, result, frame IS NOT NULL AS has_frame, created_at, updated_at FROM skill_jobs WHERE id = $1`, [id])).rows[0];
+  const r = (await ctx.db.query<any>(`SELECT id, skill_cid, params, start_url, via, requested_by, status, message, turns, approval, decision, verdict, result, frame IS NOT NULL AS has_frame, created_at, updated_at FROM skill_jobs WHERE id = $1`, [id])).rows[0];
   if (!r) throw new HttpError(404, "job_not_found", "no such run");
   let status = r.status as string;
   if (!(TERMINAL as readonly string[]).includes(status) && ctx.now() - new Date(r.updated_at).getTime() > STALE_MS) status = "expired";
   const approval = j(r.approval);
   return {
-    id: r.id, skill_cid: r.skill_cid, status, message: r.message, params: j(r.params), start_url: r.start_url, via: r.via,
+    id: r.id, skill_cid: r.skill_cid, status, message: r.message, params: j(r.params), start_url: r.start_url, via: r.via, agent: r.via === "agent" ? r.requested_by : null,
     turns: j(r.turns), approval, verdict: j(r.verdict), result: j(r.result),
     ...(internal ? { decision: j(r.decision) } : {}),
     frame_url: r.has_frame ? `${ctx.cfg.publicBaseUrl}/v1/skills/jobs/${r.id}/frame?t=${new Date(r.updated_at).getTime()}` : null,
@@ -134,8 +134,9 @@ export async function decideJob(ctx: AppContext, id: string, approvalId: string,
 
 /** Agent-funded runs: per-agent and node-wide daily quotas, then credits. */
 export async function chargeAgentRun(ctx: AppContext, did: string) {
-  const agent = (await ctx.db.query<any>(`SELECT did FROM agents WHERE did = $1`, [did])).rows[0];
+  const agent = (await ctx.db.query<any>(`SELECT did, status FROM agents WHERE did = $1`, [did])).rows[0];
   if (!agent) throw new HttpError(403, "not_registered", "register this agent first (any write registers it)");
+  if (agent.status !== "active") throw new HttpError(403, "agent_suspended", "agent is not active");
   const day = new Date(ctx.now()).toISOString().slice(0, 10);
   const mine = Number((await ctx.db.query<any>(`SELECT count(*)::int AS n FROM skill_jobs WHERE requested_by = $1 AND created_at >= $2::date`, [did, day])).rows[0].n);
   if (mine >= ctx.cfg.skillsAgentRunsPerAgentDay) throw new HttpError(429, "agent_run_quota", `at most ${ctx.cfg.skillsAgentRunsPerAgentDay} skill runs per agent per day`);

@@ -53,6 +53,7 @@ const run = (target: Record<string, string>, extra: Record<string, unknown> = {}
 });
 
 let skill1: string;
+let agentJob: { id: string; did: string; agent: TestAgent };
 beforeAll(async () => {
   node = await makeNode({ offline: false, embedProvider: "hash", metaApiKey: "test-key", skillsOperatorToken: TOKEN, skillsInternalSecret: SECRET, museDailyCallCap: 50, museSpendCapUsd: 1, skillsWebUrl: "https://web.test", skillsExecutorUrl: "https://exec.test" }, { fetchImpl: fake });
   mountRemoteMcp(node.app, node.ctx);
@@ -69,6 +70,9 @@ describe("safety and time saved", () => {
     expect(mp4DurationMs(Buffer.from("no movie here"))).toBeNull();
     expect(timeSaved(7000, { duration_ms: 40000, actions: [{ approval: "human" }, { approval: "auto" }] })).toMatchObject({ human_approvals: 1, human_ms: 5000, saved_ms: 2000 });
     expect(timeSaved(null, { duration_ms: 1, actions: [] }).saved_ms).toBeNull();
+    // lead with human input; wall clock only counts when the agent beat the human
+    expect(timeSaved(7000, { duration_ms: 40000, actions: [{ approval: "human" }] })).toMatchObject({ human_clicks: 0, human_approvals: 1, agent_faster: false });
+    expect(timeSaved(7000, { duration_ms: 5000, actions: [] }).agent_faster).toBe(true);
   });
   it("infers approval-gated steps even when the recorder forgot the risk flag", () => {
     expect(gatedSteps(v1)).toEqual([{ index: 1, flags: ["submits_form"] }]);
@@ -183,6 +187,7 @@ describe("run_skill jobs", () => {
     const before = await bal();
     const j = await client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "agent@x.test" } });
     expect(j.status).toBe("queued");
+    agentJob = { id: j.id, did: agent.did, agent };
     expect(await bal()).toBe(before - 5);
     // tampering with the body breaks the signature's body hash
     const raw = JSON.stringify({ skill: "create-a-helpdesk-ticket", params: { customer_email: "a@b.c" } });
@@ -196,7 +201,7 @@ describe("run_skill jobs", () => {
   });
   it("find_skill search returns params, approval-gated steps and time", async () => {
     const r = (await node.req("GET", "/v1/skills/find?q=file+a+support+ticket")).body.skills;
-    expect(r[0]).toMatchObject({ slug: "create-a-helpdesk-ticket", version: 2, healed: true, recording_ms: 7000 });
+    expect(r[0]).toMatchObject({ slug: "create-a-helpdesk-ticket", version: 2, healed: true });
     expect(r[0].params[0].name).toBe("customer_email");
     expect(r[0].approval_required_steps[0]).toMatchObject({ step: 2, flags: ["submits_form"] });
     expect((await node.req("GET", "/v1/skills/find?q=zzz")).body.skills).toEqual([]);
@@ -218,5 +223,83 @@ describe("hosted /mcp", () => {
     const names = await list(op);
     expect(names).toContain("run_skill");
     expect(names).not.toContain("ask"); // still no agent writes on the hosted endpoint
+  });
+});
+
+describe("metrics, agent reuse, A2A", () => {
+  it("records who asked for a run, and lists agent reuse by skill and by agent", async () => {
+    const v2 = (await node.req("GET", "/v1/skills/find?q=helpdesk+ticket")).body.skills[0].cid;
+    const r = await node.req("POST", "/internal/skills/runs", run({ skill_cid: v2 }, { job_id: agentJob.id, actions: [{ turn: 1, type: "type", detail: "type", approval: "auto", checks: [], target: "Requester e-mail" }, { turn: 2, type: "click", detail: "click", approval: "human", checks: [], target: "Submit request" }], duration_ms: 5000 }), ex);
+    expect(r.status).toBe(201);
+    const rec = (await node.req("GET", `/v1/records/${r.body.run_cid}`)).body.record;
+    expect(rec.body.requested_by).toEqual({ via: "agent", agent: agentJob.did, job: agentJob.id });
+    expect(rec.body.time).toMatchObject({ human_clicks: 0, human_approvals: 1, agent_faster: true });
+    const byAgent = (await node.req("GET", `/v1/skills/reuse?agent=${encodeURIComponent(agentJob.did)}`)).body;
+    expect(byAgent.runs).toHaveLength(1);
+    expect(byAgent.runs[0]).toMatchObject({ via: "agent", outcome: "verified", human_clicks: 0, approvals: 1, agent: { did: agentJob.did, name: "runner" }, job: agentJob.id, skill: { slug: "create-a-helpdesk-ticket", version: 2 } });
+    const bySkill = (await node.req("GET", "/v1/skills/reuse?skill=create-a-helpdesk-ticket")).body;
+    expect(bySkill.summary.runs).toBeGreaterThanOrEqual(3);
+    expect(bySkill.runs.some((x: any) => x.via === "web")).toBe(true);
+    expect((await node.req("GET", "/v1/skills/reuse?skill=nope")).status).toBe(404);
+  });
+  it("public metrics come from the signed records and the spend ledger", async () => {
+    const m = (await node.req("GET", "/v1/skills/metrics")).body;
+    expect(m).toMatchObject({ skills: 1, versions: 2, heals: 1 });
+    expect(m.runs.total).toBeGreaterThanOrEqual(3);
+    expect(m.runs.by_agents).toBe(1);
+    expect(m.runs.distinct_agents).toBe(1);
+    expect(m.human.clicks_per_run).toBe(0);
+    expect(m.human.approvals).toBeGreaterThanOrEqual(3);
+    expect(m.human.runs_faster_than_human).toBe(1);
+    expect(m.muse.calls).toBeGreaterThan(0);
+    expect(Object.keys(m.muse.by_kind)).toEqual(expect.arrayContaining(["record", "heal"]));
+  });
+  it("A2A message/send answers read-only with skills; other methods are refused", async () => {
+    const r = (await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 7, method: "message/send", params: { message: { role: "user", messageId: "m1", parts: [{ kind: "text", text: "file a helpdesk ticket" }] } } })).body;
+    expect(r.id).toBe(7);
+    expect(r.result.kind).toBe("message");
+    const data = r.result.parts.find((p: any) => p.kind === "data").data;
+    expect(data.skills[0]).toMatchObject({ slug: "create-a-helpdesk-ticket" });
+    expect((await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 8, method: "tasks/get", params: {} })).body.error.code).toBe(-32601);
+    expect((await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 9, method: "message/send", params: { message: { parts: [] } } })).body.error.code).toBe(-32602);
+    expect((await node.req("GET", "/.well-known/agent-card.json")).body.skills.map((s: any) => s.id)).toContain("find_skill");
+  });
+});
+
+describe("hiding test agents (signed, nothing deleted)", () => {
+  it("an agent can retract its own registration; nobody else can", async () => {
+    const a = new TestAgent(node), b = new TestAgent(node);
+    const reg = (await a.register("throwaway-test")).body.cid;
+    await b.register("other");
+    expect((await b.submit("retract", { target: reg })).status).toBe(403);
+    const r = await a.submit("retract", { target: reg, reason: "test identity" });
+    expect(r.status).toBe(201);
+    expect(r.body.retracted).toBe("agent");
+    expect((await node.req("GET", `/v1/agents/${a.did}`)).body.agent.status).toBe("retracted");
+    expect((await node.req("GET", "/v1/agents")).body.agents.map((x: any) => x.did)).not.toContain(a.did);
+    expect((await a.submit("vote", { target: reg, value: 1 })).status).toBe(403); // can no longer write
+    const rec = (await node.req("GET", `/v1/records/${r.body.cid}`)).body.record;
+    expect(verifyRecord(rec).ok).toBe(true);
+  });
+  it("the operator hides an agent with a node-signed moderation record", async () => {
+    const path = `/v1/operator/agents/${encodeURIComponent(agentJob.did)}/hide`;
+    expect((await node.req("POST", path, { reason: "test agent" })).status).toBe(401);
+    const r = await node.req("POST", path, { reason: "test agent" }, op);
+    expect(r.status).toBe(201);
+    const rec = (await node.req("GET", `/v1/records/${r.body.cid}`)).body.record;
+    expect(rec).toMatchObject({ type: "moderation", author: node.ctx.node.did, body: { agent: agentJob.did, verdict: "hide_agent", model: "operator" } });
+    expect(verifyRecord(rec).ok).toBe(true);
+    expect((await node.req("GET", path.replace("/hide", ""))).status).toBe(404);
+    expect((await node.req("GET", `/v1/agents/${agentJob.did}`)).body.agent.status).toBe("hidden");
+    expect((await node.req("GET", "/v1/agents")).body.agents.map((x: any) => x.did)).not.toContain(agentJob.did);
+    expect((await node.req("POST", path, {}, op)).status).toBe(409);
+    expect((await node.req("POST", "/v1/operator/agents/did%3Akey%3Anope/hide", {}, op)).status).toBe(404);
+    // hidden agents cannot spend credits on runs; their past runs still show in reuse, marked hidden
+    const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => node.app.fetch(new Request(input, init))) as typeof fetch;
+    const client = new AgentboardClient({ baseUrl: "http://agentboard.test", keyPair: agentJob.agent.kp, fetchImpl });
+    await expect(client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "x@y.z" } })).rejects.toThrow(/not active|quota/);
+    expect((await node.req("GET", `/v1/skills/reuse?agent=${encodeURIComponent(agentJob.did)}`)).body.runs[0].agent.status).toBe("hidden");
+    const chain = (await node.req("GET", "/v1/log?limit=1000")).body.entries;
+    expect(verifyChain(chain).ok).toBe(true);
   });
 });

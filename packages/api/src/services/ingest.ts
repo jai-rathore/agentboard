@@ -307,6 +307,8 @@ async function acceptAnswer(ctx: AppContext, rec: SignedRecord): Promise<SubmitR
 /** Only the original author may retract. No credits move (writes are not refunded); the log keeps both records. */
 async function retractContent(ctx: AppContext, rec: SignedRecord): Promise<SubmitResult> {
   const b = rec.body as { target: string; reason?: string };
+  const reg = (await ctx.db.query<{ did: string }>(`SELECT did FROM agents WHERE register_cid = $1`, [b.target])).rows[0];
+  if (reg) return retractAgent(ctx, rec, reg.did, b.reason);
   const t = await targetInfo(ctx.db, b.target);
   if (!t) throw new HttpError(404, "target_not_found", "can only retract posts and answers");
   if (t.author !== rec.author) throw new HttpError(403, "not_author", "only the author of a post or answer can retract it");
@@ -321,6 +323,43 @@ async function retractContent(ctx: AppContext, rec: SignedRecord): Promise<Submi
     return a;
   });
   return { status: "accepted", cid: rec.cid, seq: a.seq, target: b.target, retracted: t.kind };
+}
+
+/**
+ * An agent retracts its own registration (target = its `register` record): it is hidden from agent
+ * listings and can no longer write. Its posts and answers are unaffected (retract those one by one).
+ * The log keeps both records, so mirrors derive the same status.
+ */
+async function retractAgent(ctx: AppContext, rec: SignedRecord, did: string, reason?: string): Promise<SubmitResult> {
+  if (did !== rec.author) throw new HttpError(403, "not_author", "an agent can only retract its own registration");
+  const a = await ctx.db.tx(async (tx) => {
+    const a = await appendToLog(tx, ctx, rec);
+    await tx.query(`UPDATE agents SET status = 'retracted' WHERE did = $1`, [did]);
+    await tx.query(`INSERT INTO retractions (target, author, kind, reason, cid, received_at) VALUES ($1,$2,'agent',$3,$4,$5)`, [(rec.body as any).target, did, reason ?? null, rec.cid, a.received_at]);
+    return a;
+  });
+  ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: rec.cid, type: rec.type } }));
+  return { status: "accepted", cid: rec.cid, seq: a.seq, target: (rec.body as any).target, retracted: "agent" };
+}
+
+/**
+ * The node operator hides an agent (test or abandoned identities whose keys are gone). Not a write
+ * path for content: it appends a node-signed `moderation` record {target: register cid, verdict:
+ * "hide_agent"} to the log and marks the agent hidden, which removes it from agent listings and
+ * blocks further writes. Nothing is deleted.
+ */
+export async function hideAgent(ctx: AppContext, did: string, reason: string) {
+  const agent = (await ctx.db.query<any>(`SELECT did, register_cid, status FROM agents WHERE did = $1`, [did])).rows[0];
+  if (!agent) throw new HttpError(404, "agent_not_found", "no such agent");
+  if (agent.status !== "active") throw new HttpError(409, "not_active", `agent is already ${agent.status}`);
+  const mod = systemRecord(ctx, "moderation", { target: agent.register_cid, agent: did, verdict: "hide_agent", reasons: [reason], model: "operator" });
+  const a = await ctx.db.tx(async (tx) => {
+    const a = await appendToLog(tx, ctx, mod);
+    await tx.query(`UPDATE agents SET status = 'hidden' WHERE did = $1`, [did]);
+    return a;
+  });
+  ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: mod.cid, type: mod.type } }));
+  return { status: "accepted", cid: mod.cid, seq: a.seq, agent: did, hidden: true };
 }
 
 async function flagContent(ctx: AppContext, rec: SignedRecord): Promise<SubmitResult> {
