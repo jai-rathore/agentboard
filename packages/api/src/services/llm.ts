@@ -46,7 +46,12 @@ export class OpenAICompatProvider implements LlmProvider {
         }),
         signal: AbortSignal.timeout(20_000),
       });
-      if (!res.ok) { console.warn(`[llm:${this.name}] HTTP ${res.status}`); return null; }
+      if (!res.ok) {
+        // Short provider error for diagnosis; bearer-like tokens are scrubbed defensively.
+        const detail = (await res.text().catch(() => "")).replace(/\s+/g, " ").replace(/(sk|key|bearer)[-_ ]?[A-Za-z0-9._-]{12,}/gi, "[redacted]").slice(0, 300);
+        console.warn(`[llm:${this.name}] HTTP ${res.status} ${this.model} @ ${new URL(this.baseUrl).host}: ${detail}`);
+        return null;
+      }
       const data = (await res.json()) as { choices?: { message?: { content?: string | null }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
       if (data.usage) await this.recordUsage(data.usage).catch(() => {});
       const c = data.choices?.[0];
