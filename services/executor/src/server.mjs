@@ -1,0 +1,211 @@
+// Agentboard Skills executor (separate Render free web service, Docker).
+// One replay at a time: headless Chromium (lean flags, 960x600 JPEG) driven by Muse Spark's built-in
+// computer tool, called through agentboard-api's guarded /internal/muse/responses (daily cap, USD ceiling,
+// output caps). Frames, actions and approval requests stream to the web UI over a WebSocket; committing
+// actions (submit, buy, send, delete) wait for a human. Spark verifies the final screenshot, and the run
+// (final screenshot, GIF, action log) is posted back to the API, which signs it into the log.
+import http from "node:http";
+import { WebSocketServer } from "ws";
+import { chromium } from "playwright-core";
+import { approvalFor, taskText, describeAction, playwrightKey, fill, LOOP_INSTRUCTIONS, VERIFY_SCHEMA } from "./policy.mjs";
+import { makeGif } from "./gif.mjs";
+
+const PORT = Number(process.env.PORT || 10000);
+const API = (process.env.AGENTBOARD_API || "https://agentboard-api.onrender.com").replace(/\/$/, "");
+const SECRET = process.env.SKILLS_INTERNAL_SECRET || "";
+const MAX_TURNS = Math.min(Number(process.env.MAX_TURNS || 15), 15);
+const W = 960, H = 600;
+const CHROMIUM_ARGS = ["--disable-dev-shm-usage", "--no-zygote", "--single-process", "--disable-gpu", "--disable-extensions", "--disable-background-networking", "--mute-audio", "--js-flags=--max-old-space-size=128", "--renderer-process-limit=1"];
+const SELECT_TOOL = { type: "function", name: "select_option", description: "Choose an option in the native dropdown (<select>) that was just clicked or is focused. Use the visible option text.", parameters: { type: "object", properties: { option: { type: "string" } }, required: ["option"], additionalProperties: false } };
+
+const stats = { started_at: new Date().toISOString(), runs: 0, succeeded: 0, failed: 0, busy: false, last: null };
+
+async function api(path, body, headers = {}) {
+  const res = await fetch(`${API}${path}`, { method: body === undefined ? "GET" : "POST", headers: { "content-type": "application/json", "x-skills-secret": SECRET, ...headers }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(120_000) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(j.message || `API ${res.status}`), { status: res.status, code: j.error });
+  return j;
+}
+
+const server = http.createServer((req, res) => {
+  if (req.url === "/healthz" || req.url === "/") {
+    res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+    res.end(JSON.stringify({ ok: true, service: "agentboard-executor", api: API, configured: Boolean(SECRET), max_turns: MAX_TURNS, viewport: `${W}x${H}`, rss_mb: Math.round(process.memoryUsage().rss / 1048576), ...stats }));
+    return;
+  }
+  res.writeHead(404).end();
+});
+
+const wss = new WebSocketServer({ server, path: "/run", maxPayload: 64 * 1024 });
+wss.on("connection", (ws) => {
+  const send = (m) => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); };
+  const pending = new Map();
+  let started = false, aborted = false;
+  ws.on("close", () => { aborted = true; for (const r of pending.values()) r(false); });
+  ws.on("message", async (raw) => {
+    let m; try { m = JSON.parse(String(raw)); } catch { return; }
+    if (m.type === "approval" && pending.has(m.id)) { pending.get(m.id)(Boolean(m.approve)); pending.delete(m.id); return; }
+    if (m.type !== "start" || started) return;
+    started = true;
+    if (stats.busy) { send({ type: "error", error: "busy", message: "Another replay is running (one session at a time). Try again in a minute." }); ws.close(); return; }
+    stats.busy = true;
+    try {
+      await api("/internal/skills/authorize", { token: String(m.token || "") });
+      const ask = (req) => new Promise((resolve) => {
+        const id = Math.random().toString(36).slice(2);
+        pending.set(id, resolve);
+        send({ type: "approval_request", id, ...req });
+        setTimeout(() => { if (pending.has(id)) { pending.delete(id); resolve(false); } }, 120_000);
+      });
+      const result = await replay(m, send, ask, () => aborted);
+      send({ type: "done", result });
+    } catch (e) {
+      send({ type: "error", error: e.code || "error", message: e.message });
+    } finally {
+      stats.busy = false;
+      ws.close();
+    }
+  });
+});
+
+async function loadTarget(m) {
+  if (m.draft_id) { const d = await api(`/v1/skills/drafts/${encodeURIComponent(m.draft_id)}`); return { skill: d.skill, start_url: m.start_url || d.source.start_url || d.skill.start_url_hint, target: { draft_id: d.id } }; }
+  if (m.skill_cid) { const s = await api(`/v1/skills/${encodeURIComponent(m.skill_cid)}`); const b = s.skill.record.body; return { skill: b.skill, start_url: m.start_url || b.source.start_url, target: { skill_cid: m.skill_cid } }; }
+  throw Object.assign(new Error("send draft_id or skill_cid"), { code: "target" });
+}
+
+async function replay(m, send, ask, isAborted) {
+  const t0 = Date.now();
+  const { skill, start_url, target } = await loadTarget(m);
+  if (!/^https?:\/\//.test(start_url || "")) throw Object.assign(new Error("the skill needs an http(s) start URL"), { code: "start_url" });
+  const params = Object.fromEntries(skill.params.map((p) => [p.name, String(m.params?.[p.name] ?? p.example)]));
+  const usage = { calls: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, usd: 0 };
+  const addUsage = (u) => { usage.calls++; for (const k of ["input_tokens", "cached_tokens", "output_tokens", "usd"]) usage[k] += u[k] || 0; send({ type: "usage", usage }); };
+  const actions = [], history = [], gifFrames = [];
+  stats.runs++;
+  send({ type: "status", message: `Launching Chromium for "${skill.name}"`, params, start_url });
+  const browser = await chromium.launch({ args: CHROMIUM_ARGS });
+  try {
+    const page = await (await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 })).newPage();
+    await page.goto(start_url, { waitUntil: "load", timeout: 45_000 });
+    actions.push({ turn: 0, type: "navigate", detail: start_url.slice(0, 300), approval: "auto", checks: [] });
+    let lastSelect = null, finalMessage = "", turn = 0;
+    const shoot = async (label) => {
+      const jpg = await page.screenshot({ type: "jpeg", quality: 70 });
+      send({ type: "frame", turn, label, jpeg: jpg.toString("base64") });
+      return jpg;
+    };
+    for (turn = 1; turn <= MAX_TURNS; turn++) {
+      if (isAborted()) throw Object.assign(new Error("viewer disconnected"), { code: "aborted" });
+      const jpg = await shoot("before");
+      if (gifFrames.length < 16) gifFrames.push(await page.screenshot({ type: "png" }));
+      const note = lastSelect ? `\nThe dropdown you clicked is a native <select> currently set to "${lastSelect.value}" with options: ${lastSelect.options.join(", ")}. Use select_option.` : "";
+      const input = [{ role: "user", content: [
+        { type: "input_text", text: `${taskText(skill, params)}\n\nDone so far:\n${history.slice(-12).join("\n") || "(nothing yet)"}${note}\n\nCurrent screenshot (turn ${turn} of ${MAX_TURNS}):` },
+        { type: "input_image", image_url: `data:image/jpeg;base64,${jpg.toString("base64")}` },
+      ] }];
+      const r = await api("/internal/muse/responses", { instructions: LOOP_INSTRUCTIONS, tools: [{ type: "computer" }, SELECT_TOOL], reasoning: { effort: "minimal" }, max_output_tokens: 800, input }, { "x-muse-kind": "loop" });
+      addUsage(r.usage);
+      const out = r.response.output ?? [];
+      const say = out.filter((o) => o.type === "message").flatMap((o) => o.content ?? []).map((c) => c.text ?? "").join(" ").trim();
+      const call = out.find((o) => o.type === "computer_call");
+      const fn = out.find((o) => o.type === "function_call" && o.name === "select_option");
+      send({ type: "turn", turn, model: r.model, capability: "computer use (built-in computer tool) + image understanding", say, actions: call?.actions ?? [], fn: fn ? { name: fn.name, arguments: fn.arguments } : null, ms: r.ms, usage: r.usage });
+      if (!call && !fn) { finalMessage = say; history.push(`turn ${turn}: finished: ${say.slice(0, 200)}`); break; }
+      if (say) history.push(`turn ${turn}: ${say.slice(0, 160)}`);
+      lastSelect = null;
+      if (fn) {
+        let opt = ""; try { opt = JSON.parse(fn.arguments || "{}").option ?? ""; } catch {}
+        const done = await page.evaluate((o) => {
+          const el = document.activeElement?.tagName === "SELECT" ? document.activeElement : window.__abLastSelect;
+          if (!el) return null;
+          const match = [...el.options].find((x) => x.text.trim().toLowerCase() === o.trim().toLowerCase()) ?? [...el.options].find((x) => x.text.toLowerCase().includes(o.trim().toLowerCase()));
+          if (!match) return null;
+          el.value = match.value; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
+          return match.text;
+        }, opt);
+        actions.push({ turn, type: "select_option", detail: done ? `selected "${done}"` : `no option "${opt.slice(0, 60)}"`, approval: "auto", checks: [] });
+        history.push(`turn ${turn}: select_option "${opt}" -> ${done ? "ok" : "not found"}`);
+      }
+      const checks = (call?.pending_safety_checks ?? []).map((c) => c.code);
+      for (const a of call?.actions ?? []) {
+        const el = await inspect(page, a);
+        const p = approvalFor(a, el, skill.risk_flags, checks);
+        let approval = p.approval === "human" ? "human" : "auto";
+        if (p.approval === "human") {
+          send({ type: "status", message: `Waiting for approval: ${p.reason}` });
+          const ok = await ask({ turn, action: a, element: el, reason: p.reason, screenshot: (await page.screenshot({ type: "jpeg", quality: 70 })).toString("base64") });
+          actions.push({ turn, type: a.type, detail: `${describeAction(a)}${el ? ` on ${el.tag} "${(el.text || el.value || "").slice(0, 40)}"` : ""}`.slice(0, 300), approval: ok ? "human" : "none", checks: checks.slice(0, 5) });
+          if (!ok) throw Object.assign(new Error(`Declined by the operator: ${p.reason}`), { code: "declined" });
+        } else actions.push({ turn, type: a.type, detail: `${describeAction(a)}${el ? ` on ${el.tag} "${(el.text || el.value || "").slice(0, 40)}"` : ""}`.slice(0, 300), approval, checks: checks.slice(0, 5) });
+        history.push(`turn ${turn}: ${describeAction(a)}${el ? ` on ${el.tag} "${(el.text || el.value || el.placeholder || "").slice(0, 40)}"` : ""}`);
+        await execute(page, a);
+        if (el?.tag === "select") lastSelect = el;
+        await page.waitForTimeout(250);
+      }
+      await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+    }
+    // ---- verify: Spark reads the final screenshot against the success check
+    const finalJpg = await shoot("final");
+    gifFrames.push(await page.screenshot({ type: "png" }));
+    const check = fill(skill.success_check, params);
+    const v = await api("/internal/muse/responses", {
+      reasoning: { effort: "minimal" }, max_output_tokens: 600,
+      text: { format: { type: "json_schema", name: "verdict", strict: true, schema: VERIFY_SCHEMA } },
+      input: [{ role: "user", content: [{ type: "input_text", text: `Success check: ${check}\nExpected parameters: ${JSON.stringify(params)}\nDoes this final browser screenshot satisfy the success check? Only judge what is visible.` }, { type: "input_image", image_url: `data:image/jpeg;base64,${finalJpg.toString("base64")}` }] }],
+    }, { "x-muse-kind": "verify" });
+    addUsage(v.usage);
+    let verdict = { success: false, evidence: "verifier returned no verdict" };
+    try { verdict = JSON.parse((v.response.output ?? []).filter((o) => o.type === "message").flatMap((o) => o.content ?? []).map((c) => c.text ?? "").join("")); } catch {}
+    const verdictFull = { success: Boolean(verdict.success), evidence: String(verdict.evidence ?? "").slice(0, 1500), model: v.model, capability: "image understanding + structured output" };
+    send({ type: "verdict", ...verdictFull, final_message: finalMessage });
+    const gif = makeGif(gifFrames);
+    const run = {
+      ...target, start_url, params, success: verdictFull.success, verdict: verdictFull, turns: Math.min(turn, MAX_TURNS), actions: actions.slice(0, 200), usage, model: v.model,
+      final_jpeg_b64: finalJpg.toString("base64"), gif_b64: gif.toString("base64"),
+      executor: { name: "agentboard-executor", chromium: `headless-shell ${browser.version()}`, viewport: `${W}x${H}` }, duration_ms: Date.now() - t0,
+    };
+    const published = await api("/internal/skills/runs", run);
+    verdictFull.success ? stats.succeeded++ : stats.failed++;
+    stats.last = { at: new Date().toISOString(), success: verdictFull.success, turns: run.turns, usd: Math.round(usage.usd * 1e6) / 1e6 };
+    return { ...published, verdict: verdictFull, turns: run.turns, usage, duration_ms: run.duration_ms };
+  } catch (e) {
+    stats.failed++;
+    throw e;
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+/** What is under the pointer (or focused, for keys): used by the approval policy and the select_option helper. */
+async function inspect(page, a) {
+  return page.evaluate(({ a }) => {
+    let el = (a.type === "click" || a.type === "double_click") ? document.elementFromPoint(a.x, a.y) : (a.type === "keypress" ? document.activeElement : null);
+    if (!el || el === document.body) return null;
+    const btn = el.closest("button, a, [role=button], input, select, textarea, label");
+    if (btn?.tagName === "LABEL") el = btn.querySelector("input, select, textarea") ?? btn; else if (btn) el = btn;
+    if (el.tagName === "SELECT") window.__abLastSelect = el;
+    return {
+      tag: el.tagName.toLowerCase(), type: el.getAttribute("type") ?? "", role: el.getAttribute("role") ?? "",
+      text: (el.innerText ?? "").trim().slice(0, 80), value: (el.tagName === "SELECT" ? el.options[el.selectedIndex]?.text : el.value ?? "")?.toString().slice(0, 80) ?? "",
+      aria: el.getAttribute("aria-label") ?? "", placeholder: el.getAttribute("placeholder") ?? "", inForm: Boolean(el.closest("form")),
+      options: el.tagName === "SELECT" ? [...el.options].map((o) => o.text).slice(0, 30) : undefined,
+    };
+  }, { a });
+}
+
+async function execute(page, a) {
+  switch (a.type) {
+    case "click": return page.mouse.click(a.x, a.y, { button: a.button === "right" ? "right" : a.button === "wheel" ? "middle" : "left" });
+    case "double_click": return page.mouse.dblclick(a.x, a.y);
+    case "type": return page.keyboard.type(String(a.text ?? ""), { delay: 8 });
+    case "keypress": return page.keyboard.press(playwrightKey(a.keys));
+    case "scroll": await page.mouse.move(a.x ?? W / 2, a.y ?? H / 2); return page.mouse.wheel(a.scroll_x ?? 0, a.scroll_y ?? 0);
+    case "move": return page.mouse.move(a.x, a.y);
+    case "drag": { const [s, ...rest] = a.path ?? []; if (!s) return; await page.mouse.move(s.x, s.y); await page.mouse.down(); for (const p of rest) await page.mouse.move(p.x, p.y); return page.mouse.up(); }
+    case "wait": return page.waitForTimeout(1000);
+    default: return;
+  }
+}
+
+server.listen(PORT, () => console.log(`[executor] listening on :${PORT}, api ${API}, configured ${Boolean(SECRET)}`));

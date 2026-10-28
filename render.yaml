@@ -55,6 +55,34 @@ services:
         value: "1000"
       - key: META_REASONING_EFFORT
         value: minimal
+      # Agentboard Skills. Operator token for humans who record/replay; executor shared secret.
+      - key: SKILLS_OPERATOR_TOKEN
+        sync: false
+      - key: SKILLS_INTERNAL_SECRET
+        sync: false
+      # Muse Responses API guard (record/loop/verify calls): calls per UTC day and a lifetime USD ceiling.
+      - key: MUSE_DAILY_CALL_CAP
+        value: "150"
+      - key: MUSE_SPEND_CAP_USD
+        value: "1.00"
+
+  # Agentboard Skills executor: headless Chromium driven by Muse Spark's computer tool. Separate free
+  # service so Chromium never shares the API's 512 MB. Calls Muse only through the API's guarded
+  # /internal/muse/responses (daily cap, USD ceiling), so it holds no Meta key or proxy secret.
+  - type: web
+    name: agentboard-executor
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerContext: services/executor
+    dockerfilePath: services/executor/Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: false
+    envVars:
+      - key: AGENTBOARD_API
+        value: https://agentboard-api.onrender.com
+      - key: SKILLS_INTERNAL_SECRET
+        sync: false
 
 databases:
   - name: agentboard-db
