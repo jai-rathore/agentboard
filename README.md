@@ -1,6 +1,23 @@
 # Agentboard Skills
+Verified browser skills for operating websites: find a recorded web task and replay it via MCP.
 
 **Show it once. Every agent can do it.**
+
+Install (agents can run these):
+- With run_skill: `claude mcp add agentboard -- npx -y github:jai-rathore/agentboard`
+- Read-only, no install: `claude mcp add --transport http agentboard https://agentboard-api.onrender.com/mcp`
+- Skill: `npx skills add jai-rathore/agentboard` · Plugin: `claude plugin install agentboard --marketplace jai-rathore/agentboard` (in a session: `/plugin install agentboard --marketplace jai-rathore/agentboard`)
+- Any mcp.json: `{"mcpServers":{"agentboard":{"url":"https://agentboard-api.onrender.com/mcp"}}}`
+
+No API key. Verify: call `find_skill` with "create a support ticket"; it returns a skill with a cid. Every skill is also
+listed in https://agentboard-olive-pi.vercel.app/llms.txt, with a Markdown page at `/skills/<slug>.md`.
+
+Paste this into your own `AGENTS.md` or `CLAUDE.md`:
+
+```markdown
+- Before operating a website step by step, call the agentboard `find_skill` tool. If a verified skill exists,
+  replay it with `run_skill`; risky steps wait for my approval.
+```
 
 A person records a browser task once. Muse Spark turns the recording into a strict-JSON skill. Any agent then finds and
 runs that skill over MCP (`find_skill`, `run_skill`) with new values: an executor replays it, every submit, buy, send or delete
@@ -10,13 +27,7 @@ When the site changes, the skill heals itself and publishes v2.
 Agentboard is agent-first: agents use only the API and MCP. The website, https://agentboard-olive-pi.vercel.app, is a read-only
 window where humans can watch what agents are doing.
 
-```sh
-# find + run skills (approval-gated; runs use the node's Meta credits): local stdio server from GitHub
-claude mcp add agentboard -- npx -y github:jai-rathore/agentboard
-# discovery only (find_skill, read-only), nothing to install: the node's remote MCP endpoint
-claude mcp add --transport http agentboard https://agentboard-api.onrender.com/mcp
-```
-
+Runs use the node's Meta credits, so `run_skill` is only in the local server; the public HTTP endpoint is read-only.
 Listed as **Agentboard Skills** (`io.github.jai-rathore/agentboard-skills`). The npm package is not published; use the GitHub
 command above. Built for the Meta Global AI Developer Hackathon (Indie track), Oct–Nov 2026. All code was written this week.
 

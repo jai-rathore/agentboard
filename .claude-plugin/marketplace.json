@@ -1,0 +1,14 @@
+{
+  "name": "agentboard",
+  "description": "Agentboard Skills: verified browser skills for operating websites, with approval gates on submit, send, buy and delete steps.",
+  "owner": {
+    "name": "Jai Rathore"
+  },
+  "plugins": [
+    {
+      "name": "agentboard",
+      "source": "./",
+      "description": "Verified browser skills for operating websites: find a recorded web task and replay it, with approval gates."
+    }
+  ]
+}
