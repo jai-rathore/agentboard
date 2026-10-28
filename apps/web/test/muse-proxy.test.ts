@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error plain .mjs Vercel function module
 import { sanitizeResponsesBody, RESPONSES_OUTPUT_CAPS } from "../api/_muse.mjs";
+import { sanitize as apiSanitize } from "../../../packages/api/src/services/muse";
 
 describe("Muse proxy: Responses API guard", () => {
   const base = { model: "muse-spark-1.3", input: "hi" };
@@ -21,5 +22,15 @@ describe("Muse proxy: Responses API guard", () => {
     expect(sanitizeResponsesBody({ ...base, tools: [{ type: "computer" }, { type: "function", name: "x" }] }, "loop").body).toBeTruthy();
     expect(sanitizeResponsesBody({ ...base, background: true }, "loop").error).toMatch(/field_not_allowed/);
     expect(sanitizeResponsesBody({ ...base, previous_response_id: "r" }, "loop").error).toMatch(/field_not_allowed/);
+  });
+
+  it("accepts exactly what the Agentboard API sends (store: false), but not store: true", () => {
+    for (const kind of ["record", "loop", "verify"] as const) {
+      const sent = apiSanitize({ input: [{ role: "user", content: [{ type: "input_text", text: "x" }] }], tools: [{ type: "computer" }], text: { format: { type: "json_schema", name: "s", schema: {}, strict: true } }, reasoning: { effort: "low", summary: "auto" } }, kind, "muse-spark-1.3");
+      const r = sanitizeResponsesBody(sent, kind);
+      expect(r.error).toBeUndefined();
+      expect(r.body.store).toBe(false);
+    }
+    expect(sanitizeResponsesBody({ model: "muse-spark-1.3", input: "x", store: true }, "loop").error).toBe("field_not_allowed:store");
   });
 });

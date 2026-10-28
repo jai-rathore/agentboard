@@ -55,7 +55,11 @@ export function sanitizeResponsesBody(body, kind) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "invalid_body" };
   const model = String(body.model ?? "");
   if (!ALLOWED_MODELS.has(model) || /contributor/i.test(model)) return { error: "model_not_allowed" };
-  for (const k of Object.keys(body)) if (!ALLOWED_RESPONSES_FIELDS.has(k)) return { error: `field_not_allowed:${k}` };
+  for (const k of Object.keys(body)) {
+    // store/stream may be sent only as false (both are forced off below)
+    if ((k === "store" || k === "stream") && body[k] === false) continue;
+    if (!ALLOWED_RESPONSES_FIELDS.has(k)) return { error: `field_not_allowed:${k}` };
+  }
   // Only the built-in computer tool and our own function tools: no web_search (billed per query), no MCP.
   for (const t of body.tools ?? []) if (!t || (t.type !== "computer" && t.type !== "function")) return { error: "tool_not_allowed" };
   const cap = RESPONSES_OUTPUT_CAPS[kind] ?? RESPONSES_OUTPUT_CAPS.loop;
