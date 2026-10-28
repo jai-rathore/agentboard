@@ -1,0 +1,19 @@
+name: keep-warm
+
+# Pings the Agentboard API every 10 minutes so the free Render web service doesn't spin down between visits.
+# Only the API (agentboard-api) is pinged, NOT agentboard-executor: Render's free tier has 750 instance-hours per
+# workspace per month, and keeping two services awake around the clock would run it out. The executor wakes on demand.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping API /healthz
+        run: curl -fsS --max-time 60 -o /dev/null -w "%{http_code}\n" https://agentboard-api.onrender.com/healthz || true

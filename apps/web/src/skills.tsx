@@ -49,7 +49,7 @@ export function SkillView({ skill, diff }: { skill: any; diff?: any[] }) {
     <p className="summary">{skill.summary}</p>
     <Safety skill={skill} />
     <h2>Parameters</h2>
-    <table className="tbl"><tbody>{skill.params.map((p: any) => <tr key={p.name}><td className="mono">{`{{${p.name}}}`}</td><td>{p.description}</td><td className="muted">e.g. {p.example}</td></tr>)}</tbody></table>
+    <table className="tbl cards"><tbody>{skill.params.map((p: any) => <tr key={p.name}><td className="mono" data-label="param">{`{{${p.name}}}`}</td><td data-label="what">{p.description}</td><td className="muted" data-label="example">e.g. {p.example}</td></tr>)}</tbody></table>
     <h2>Steps</h2>
     <ol className="steps">{skill.steps.map((s: any, i: number) => <li key={i} className={diff?.[i] ? "changed" : ""}>{gated.has(i) && <span className="lock" title="waits for human approval">🔒</span>}<b>{s.intent}</b> <span className="act">{s.action}</span> <span className="muted">{s.target}</span>{s.value && <code>{s.value}</code>}{diff?.[i] && <span className="healed-tag">healed</span>}</li>)}</ol>
     <h2>Success check</h2><p>{skill.success_check}</p>
@@ -80,10 +80,10 @@ function StepDiff({ before, after, changes }: { before: any; after: any; changes
     const a = before.steps[i], b = after.steps[i];
     const fields = ["intent", "target", "action", "value"].filter((f) => (a?.[f] ?? "") !== (b?.[f] ?? ""));
     if (!fields.length) continue;
-    rows.push(<tr key={i}><td>step {i + 1}</td><td>{fields.map((f) => <div key={f}><span className="muted small">{f}</span> <del>{a?.[f] ?? "(none)"}</del> → <ins>{b?.[f] ?? "(removed)"}</ins></div>)}</td><td className="small muted">{changes.filter((c) => c.step === i + 1).map((c) => c.reason).join("; ")}</td></tr>);
+    rows.push(<tr key={i}><td data-label="step">step {i + 1}</td><td data-label="change">{fields.map((f) => <div key={f}><span className="muted small">{f}</span> <del>{a?.[f] ?? "(none)"}</del> → <ins>{b?.[f] ?? "(removed)"}</ins></div>)}</td><td className="small muted" data-label="why">{changes.filter((c) => c.step === i + 1).map((c) => c.reason).join("; ")}</td></tr>);
   }
   if (before.success_check !== after.success_check) rows.push(<tr key="sc"><td>success check</td><td><del>{before.success_check}</del> → <ins>{after.success_check}</ins></td><td /></tr>);
-  return rows.length ? <table className="tbl diff"><tbody>{rows}</tbody></table> : <p className="muted small">No step changes.</p>;
+  return rows.length ? <table className="tbl diff cards"><tbody>{rows}</tbody></table> : <p className="muted small">No step changes.</p>;
 }
 
 // ---------------------------------------------------------------- list + record
@@ -122,7 +122,7 @@ export function SkillsPage({ q }: { q: string }) {
     <section>
       <h1>Skills <span className="muted small">show it once, every agent can do it</span></h1>
       <p className="small"><Link to="/skills/metrics">metrics</Link> · <Link to="/skills/reuse">agent reuse</Link></p>
-      <p className="muted">A person records a browser task once. Muse Spark turns the recording into a strict-JSON skill; an executor replays it with new values through Muse Spark's computer tool and Spark verifies the result. Only verified skills are published, as node-signed records in the public log.</p>
+      <p className="muted">Recorded once by a person, written by Muse Spark, verified on replay. <Link to="/docs">How it works →</Link></p>
       <div className="search"><input value={query} placeholder="Search skills…" onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") go(`/skills${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ""}`); }} /></div>
       {r.loading ? <p className="muted">Loading…</p> : r.error ? <p className="err">{r.error}</p> : <SkillList skills={r.data.skills} />}
       <p className="muted small">Agents find skills with <code>GET {API}/v1/skills?q=…</code> and read one with <code>/v1/skills/&lt;cid&gt;</code>.</p>
@@ -422,8 +422,8 @@ find_skill({ query: "${b.skill.name.toLowerCase()}" })
 run_skill({ skill: "${b.slug}", params: ${JSON.stringify(Object.fromEntries(b.skill.params.map((p: any) => [p.name, p.example])))} })`}</pre>
     <p className="small muted">Runs from MCP pause at 🔒 steps with status <code>pending_approval</code> and a link to a page like this one, where a human approves. The agent never approves its own submit, buy, send or delete.</p>
     <h2>Replays of this version, v{version} ({runs.length})</h2>
-    <table className="tbl"><thead><tr><th></th><th>params</th><th>turns</th><th>human input</th>{anyFaster && <th>vs human</th>}<th>cost</th><th>when</th></tr></thead><tbody>
-      {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td>{rb.success ? "✓" : "✗"}{rb.drift?.healed && " 🩹"}</td><td className="small mono">{Object.values(rb.params).join(" · ").slice(0, 80)}{/[?&]v=2/.test(rb.start_url) && " · redesigned site"}</td><td>{rb.turns}</td><td className="small">0 clicks · {plural(rb.actions.filter((a: any) => a.approval === "human").length, "approval")}</td>{anyFaster && <td className="small">{faster(rb) ? `⚡ ${fmtDur(rb.time.run_ms)} vs ${fmtDur(rb.time.recording_ms)}` : ""}</td>}<td>{usd(rb.usage.usd)}</td><td className="small">{ago(x.record.created_at)} · #{x.seq}{rb.evidence.gif && <> · <a href={art(rb.evidence.gif)} target="_blank" rel="noreferrer">GIF</a></>}</td></tr>; })}
+    <table className="tbl cards"><thead><tr><th></th><th>params</th><th>turns</th><th>human input</th>{anyFaster && <th>vs human</th>}<th>cost</th><th>when</th></tr></thead><tbody>
+      {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td data-label="result">{rb.success ? "✓" : "✗"}{rb.drift?.healed && " 🩹"}</td><td className="small mono" data-label="params">{Object.values(rb.params).join(" · ").slice(0, 80)}{/[?&]v=2/.test(rb.start_url) && " · redesigned site"}</td><td data-label="turns">{rb.turns}</td><td className="small" data-label="human input">0 clicks · {plural(rb.actions.filter((a: any) => a.approval === "human").length, "approval")}</td>{anyFaster && <td className="small" data-label="vs human">{faster(rb) ? `⚡ ${fmtDur(rb.time.run_ms)} vs ${fmtDur(rb.time.recording_ms)}` : ""}</td>}<td data-label="cost">{usd(rb.usage.usd)}</td><td className="small" data-label="when">{ago(x.record.created_at)} · #{x.seq}{rb.evidence.gif && <> · <a href={art(rb.evidence.gif)} target="_blank" rel="noreferrer">GIF</a></>}</td></tr>; })}
     </tbody></table>
     <h2>Agent reuse</h2>
     <ReuseTable skill={b.slug} limit={10} compact />
@@ -433,7 +433,7 @@ run_skill({ skill: "${b.slug}", params: ${JSON.stringify(Object.fromEntries(b.sk
     <h2>Signatures</h2>
     <p className="muted small">The skill and every replay are records signed by the node's Ed25519 key, hash-chained into the public log. Evidence files are content-addressed: the signed record holds their sha256.</p>
     <SignatureCheck entries={[skill, ...(heal_run && !runs.some((x: any) => x.record.cid === heal_run.record.cid) ? [heal_run] : []), ...runs]} />
-    <h2>Replay it</h2>
+    <h2 id="replay">Replay it</h2>
     <ReplayPanel target={{ skill_cid: cid }} skill={b.skill} startUrl={heal_run?.record.body.start_url ?? b.source.start_url} />
   </article>;
 }
@@ -471,8 +471,8 @@ export function MetricsPage() {
       <div><b>{m.muse.calls}</b><span>calls</span></div>
       <div><b>${m.muse.usd.toFixed(4)}</b><span>spend (cap ${m.muse.spend_cap_usd})</span></div>
     </div>
-    <table className="tbl"><thead><tr><th>kind</th><th>calls</th><th>spend</th></tr></thead><tbody>
-      {Object.entries(m.muse.by_kind).map(([k, v]: any) => <tr key={k}><td>{k}</td><td>{v.calls}</td><td>{usd(v.usd)}</td></tr>)}
+    <table className="tbl cards"><thead><tr><th>kind</th><th>calls</th><th>spend</th></tr></thead><tbody>
+      {Object.entries(m.muse.by_kind).map(([k, v]: any) => <tr key={k}><td data-label="kind">{k}</td><td data-label="calls">{v.calls}</td><td data-label="spend">{usd(v.usd)}</td></tr>)}
     </tbody></table>
     <p><Link to="/skills/reuse">→ Agent reuse: who ran which skill</Link></p>
   </section>;
@@ -492,13 +492,13 @@ export function ReuseTable({ skill, agent, limit, compact }: { skill?: string; a
   return <>
     {!compact && <p className="small muted">{plural(summary.runs, "run")} · {plural(summary.agents, "distinct agent")} · {summary.verified} verified</p>}
     {toggle}
-    <table className="tbl"><thead><tr><th></th>{!agent && <th>run by</th>}{!skill && <th>skill</th>}<th>human input</th><th>when</th></tr></thead><tbody>
+    <table className="tbl cards"><thead><tr><th></th>{!agent && <th>run by</th>}{!skill && <th>skill</th>}<th>human input</th><th>when</th></tr></thead><tbody>
       {runs.map((x: any) => <tr key={x.run}>
-        <td title={x.evidence ?? ""}>{x.outcome === "verified" ? "✓" : "✗"}{x.healed && " 🩹"}</td>
-        {!agent && <td className="small">{who(x)}</td>}
-        {!skill && <td className="small"><Link to={`/s/${x.skill.cid}`}>{x.skill.name}</Link> <span className="muted">v{x.skill.version}</span></td>}
-        <td className="small">0 clicks · {plural(x.approvals, "approval")}{x.recording_ms != null && x.run_ms != null && x.run_ms < x.recording_ms && <> · ⚡ {fmtDur(x.run_ms)} vs {fmtDur(x.recording_ms)}</>}</td>
-        <td className="small">{ago(x.at)} · log #{x.seq}{x.job && <> · <Link to={`/skills/r/${x.job}`}>run page</Link></>}</td>
+        <td title={x.evidence ?? ""} data-label="result">{x.outcome === "verified" ? "✓" : "✗"}{x.healed && " 🩹"}</td>
+        {!agent && <td className="small" data-label="run by">{who(x)}</td>}
+        {!skill && <td className="small" data-label="skill"><Link to={`/s/${x.skill.cid}`}>{x.skill.name}</Link> <span className="muted">v{x.skill.version}</span></td>}
+        <td className="small" data-label="human input">0 clicks · {plural(x.approvals, "approval")}{x.recording_ms != null && x.run_ms != null && x.run_ms < x.recording_ms && <> · ⚡ {fmtDur(x.run_ms)} vs {fmtDur(x.recording_ms)}</>}</td>
+        <td className="small" data-label="when">{ago(x.at)} · log #{x.seq}{x.job && <> · <Link to={`/skills/r/${x.job}`}>run page</Link></>}</td>
       </tr>)}
     </tbody></table>
   </>;

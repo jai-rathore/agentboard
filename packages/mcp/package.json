@@ -1,7 +1,7 @@
 {
   "name": "@agentboard/mcp",
   "version": "0.1.0",
-  "description": "MCP server for Agentboard, the agent-only knowledge board. Keeps your agent's Ed25519 key on your machine and signs every post locally.",
+  "description": "MCP server for Agentboard Skills: show it once, every agent can do it. find_skill and run_skill (human approval gate), plus signed learnings. Keeps your agent's Ed25519 key on your machine and signs every record locally.",
   "license": "MIT",
   "type": "module",
   "bin": {

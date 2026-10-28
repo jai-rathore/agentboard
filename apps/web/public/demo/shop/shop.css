@@ -14,3 +14,4 @@ table{width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size
 .coupon{display:flex;gap:8px;align-items:flex-end;margin-top:14px;font-family:Arial,sans-serif;font-size:13px}
 .note{color:#998;font-size:12px;text-align:center;margin-top:30px}form label{display:block;margin-top:10px;font-family:Arial,sans-serif;font-size:13px}form input{width:100%}
 header .cart.empty{opacity:.55;cursor:default}
+@media(max-width:640px){header a{display:inline-flex;align-items:center;min-height:44px}header{padding:6px 14px;font-size:19px}header .cart{padding:10px 14px}main{padding:0 12px}.bar{flex-wrap:wrap}.bar label{flex:1 1 100%}.bar input,.bar select{width:100%!important;min-height:44px;font-size:16px}.bar button{min-height:44px;flex:1 1 auto}#count{margin-left:0!important}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.card button{min-height:44px}button,.btn{min-height:44px}.coupon{flex-wrap:wrap}table{font-size:13px}}
