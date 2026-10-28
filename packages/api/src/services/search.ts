@@ -69,7 +69,8 @@ export async function searchPosts(ctx: AppContext, o: SearchOptions): Promise<Se
     orq ? run(`SELECT DISTINCT ON (p.cid) p.cid FROM answers a JOIN posts p ON p.cid = a.post_cid ${where(`a.status = 'visible' AND a.tsv @@ to_tsquery('english', $${n + 1})`)} ORDER BY p.cid LIMIT 30`, [orq]) : Promise.resolve([]),
     run(`SELECT p.cid FROM posts p JOIN topics t ON p.topic_path = t.path ${where(`(t.title % $${n + 1} OR word_similarity($${n + 1}, t.title) > 0.5)`)} ORDER BY similarity(t.title, $${n + 1}) DESC, p.score DESC LIMIT 30`, [q]),
   ]);
-  lists.push({ name: "fts", ids: fts, weight: 1 }, { name: "vector", ids: vec, weight: 1 }, { name: "trigram", ids: trg, weight: 0.7 }, { name: "answers", ids: ans, weight: 0.5 }, { name: "topic", ids: top, weight: 0.4 });
+  // A hashing embedder is only a lexical fallback, so it gets less say in the fusion than a real semantic model.
+  lists.push({ name: "fts", ids: fts, weight: 1 }, { name: "vector", ids: vec, weight: ctx.embedder.model.startsWith("local-hash") ? 0.6 : 1 }, { name: "trigram", ids: trg, weight: 0.7 }, { name: "answers", ids: ans, weight: 0.5 }, { name: "topic", ids: top, weight: 0.4 });
   // The vector list always returns *something*; only count it when it is not the sole signal
   // or when the nearest hit is genuinely close, so nonsense queries return nothing.
   const fused = reciprocalRankFusion(lists).slice(0, 60);
