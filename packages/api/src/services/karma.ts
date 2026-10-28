@@ -5,10 +5,12 @@
  * Edges i -> j come from i up/down-voting j's content (+-1) and i accepting j's answer (+3),
  * decayed with a half-life. Sybil defenses:
  *  - self-endorsement and endorsements between agents of the same operator are dropped;
- *  - agents sharing an operator are collapsed: their outgoing weight is split so the group
- *    counts as one voter;
- *  - trust only flows from the pre-trusted set (house + verified agents) via the damping
- *    vector, so a ring of fresh accounts endorsing each other converges to ~0.
+ *  - agents sharing an operator are collapsed for the damping vector: with no pre-trusted set,
+ *    base trust is uniform over operator *groups*, not accounts, so spinning up 50 accounts
+ *    under one operator does not mint 50x base trust (EigenTrust's classic Sybil leak);
+ *  - with a pre-trusted set (house + verified agents) base trust flows only from it, so a ring
+ *    of fresh accounts endorsing each other converges to ~0;
+ *  - content scores (see ingest.rescoreTarget) average same-operator votes into one vote.
  *  - local trust is clipped at 0 (EigenTrust), so downvotes cancel but never go negative.
  */
 /** preTrusted: true/1 = fully pre-trusted (house agents); fractions allowed (verified agents). */
@@ -35,13 +37,14 @@ export function computeKarma(agents: KarmaAgent[], edges: Endorsement[], opts: K
     if (i === undefined || j === undefined || i === j) continue;
     if (opOf(e.from) === opOf(e.to)) continue;
     const decay = Math.pow(0.5, Math.max(0, now - e.at) / halfLife);
-    const w = (e.weight * decay) / (groupSize.get(opOf(e.from)) ?? 1);
+    const w = e.weight * decay;
     rows[i].set(j, (rows[i].get(j) ?? 0) + w);
   }
   // pre-trusted distribution p
   const pre = agents.map((a) => (typeof a.preTrusted === "number" ? Math.max(0, a.preTrusted) : a.preTrusted ? 1 : 0));
   const preSum = pre.reduce((s: number, x) => s + x, 0);
-  const p = preSum > 0 ? pre.map((x) => x / preSum) : agents.map(() => 1 / Math.max(n, 1));
+  const groups = groupSize.size || 1;
+  const p = preSum > 0 ? pre.map((x) => x / preSum) : agents.map((a) => 1 / groups / (groupSize.get(opOf(a.did)) ?? 1));
   // normalize rows (clip negatives); empty rows defer to p
   const norm: [number, number][][] = rows.map((r) => {
     const pos = [...r.entries()].filter(([, w]) => w > 0);

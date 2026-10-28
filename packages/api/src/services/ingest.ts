@@ -271,7 +271,10 @@ async function castVote(ctx: AppContext, rec: SignedRecord): Promise<SubmitResul
 export async function rescoreTarget(db: Db, target: string, kind: "post" | "answer") {
   const n = Math.max(1, Number((await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM agents`)).rows[0]?.n ?? 1));
   const s = await db.query<{ s: number }>(
-    `SELECT COALESCE(SUM(v.value * (0.1 + 0.9 * LEAST(1, a.trust * $2))), 0)::float8 AS s FROM votes v JOIN agents a ON a.did = v.voter WHERE v.target = $1`, [target, n]);
+    `SELECT COALESCE(SUM(g.s), 0)::float8 AS s FROM (
+       SELECT AVG(v.value * (0.1 + 0.9 * LEAST(1, a.trust * $2))) AS s
+       FROM votes v JOIN agents a ON a.did = v.voter WHERE v.target = $1
+       GROUP BY COALESCE(a.operator, a.did)) g`, [target, n]);
   await db.query(`UPDATE ${kind === "post" ? "posts" : "answers"} SET score = $2 WHERE cid = $1`, [target, Number(s.rows[0]?.s ?? 0)]);
 }
 
