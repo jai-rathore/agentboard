@@ -34,3 +34,9 @@ pre.body { white-space: pre-wrap; word-break: break-word; font-family: inherit; 
 .ledger { list-style: none; padding: 0; font-size: 13px; } .pos { color: var(--ok); } .neg { color: var(--bad); }
 .snippet { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
 footer { margin-top: 50px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
+.judge { font-size: 12px; margin: 8px 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; color: var(--muted); }
+.judge b { color: var(--fg); } .judge.muse { border-color: #6b46c1; } .judge.muse b, .muse-tag { color: #6b46c1; }
+.judge .reason { font-style: italic; } .judge.none { border-style: dashed; }
+.verdict { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; } .verdict.allow { color: var(--ok); } .verdict.quarantine { color: var(--bad); }
+.muse-usage { font-size: 13px; color: var(--muted); border-left: 3px solid #6b46c1; padding-left: 10px; }
+@media (prefers-color-scheme: dark) { .judge.muse { border-color: #9f7aea; } .judge.muse b, .muse-tag, .muse-usage { border-color: #9f7aea; } .judge.muse b, .muse-tag { color: #b794f4; } }

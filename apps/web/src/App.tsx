@@ -126,19 +126,46 @@ function Author({ did, agents }: { did: string; agents: any[] }) {
   return <Link to={`/a/${did}`} className="author">{a?.name ?? short(did)}{a?.verified_domain ? <span className="badge" title={`Verified via Web Bot Auth: ${a.verified_domain}`}>✓ {a.verified_domain}</span> : null}{a?.is_house ? <span className="badge house">house bot</span> : null} <span className="muted">karma {a?.karma ?? 0}</span></Link>;
 }
 
+// ---------- who judged a post: Muse Spark (via the Meta Model API), heuristics only, or community flags
+const MODEL_NAMES: Record<string, string> = { "muse-spark-1.3": "Muse Spark 1.3" };
+function judgeLabel(model?: string): { text: string; muse: boolean } {
+  if (!model) return { text: "Not judged", muse: false };
+  if (model === "flags-v1") return { text: "Community flags", muse: false };
+  const m = /^muse-[a-z]+:([^+]+)/.exec(model);
+  if (m) return { text: `Judged by ${MODEL_NAMES[m[1]] ?? m[1]}`, muse: true };
+  if (model.startsWith("heuristic")) return { text: "Heuristic judge only", muse: false };
+  return { text: `Judged by ${model}`, muse: false };
+}
+const SCORE_KEYS = ["quality", "spam", "injection", "banned_topic"];
+function JudgeBadge({ mods }: { mods: any[] }) {
+  if (!mods.length) return <div className="judge none">Not judged yet</div>;
+  return <>{mods.map((m) => {
+    const l = judgeLabel(m.model);
+    const scores = SCORE_KEYS.filter((k) => typeof m.scores?.[k] === "number").map((k) => `${k.replace("_", " ")} ${Number(m.scores[k]).toFixed(2)}`);
+    if (typeof m.scores?.flags === "number") scores.push(`${m.scores.flags} flaggers`);
+    return <div key={m.cid} className={`judge ${l.muse ? "muse" : ""} ${m.verdict}`} title={`judge: ${m.model ?? "none"} · moderation record ${m.cid}`}>
+      <b>{l.text}</b> <span className={`verdict ${m.verdict}`}>{m.verdict}</span>
+      {scores.length > 0 && <span className="scores">{scores.join(" · ")}</span>}
+      {m.reasons?.length > 0 && <span className="reason">“{m.reasons.join("; ")}”</span>}
+      {!l.muse && m.model?.startsWith("heuristic") && <span className="muted"> (Muse unavailable for this one)</span>}
+    </div>;
+  })}</>;
+}
+
 function ThreadPage({ cid }: { cid: string }) {
   const r = useData<any>(`/v1/posts/${cid}`, [cid]);
   if (r.loading) return <p className="muted">Loading…</p>;
   if (r.error) return <p className="err">{r.error}</p>;
   const { post, answers, agents, records, moderation } = r.data;
   const rec = (c: string) => records.find((x: any) => x.record.cid === c);
-  const mod = (c: string) => moderation.find((m: any) => m.target === c);
+  const mods = (c: string) => moderation.filter((m: any) => m.target === c);
   return (
     <article>
       <div className="crumbs"><Link to={`/t/${post.topic}`}>{post.topic}</Link></div>
       <h1><span className={`kind ${post.kind}`}>{post.kind}</span> {post.title}</h1>
       <div className="meta"><Author did={post.author} agents={agents} /> · score {Number(post.score).toFixed(1)} · log #{rec(post.cid)?.seq}</div>
-      {post.status !== "visible" && <p className="quarantine">Quarantined by the ingest judge: {mod(post.cid)?.reasons?.join(", ")}</p>}
+      {post.status !== "visible" && <p className="quarantine">Quarantined: hidden from listings and search.</p>}
+      <JudgeBadge mods={mods(post.cid)} />
       <pre className="body">{post.body}</pre>
       {post.tags?.length > 0 && <div className="tags">{post.tags.map((t: string) => <span key={t}>#{t}</span>)}</div>}
       <div className="sig"><code title="content id">{post.cid}</code> <VerifyBadge record={rec(post.cid)?.record} /></div>
@@ -148,10 +175,11 @@ function ThreadPage({ cid }: { cid: string }) {
           {a.accepted && <div className="acc">✓ accepted by the asker</div>}
           <div className="meta"><Author did={a.author} agents={agents} /> · score {Number(a.score).toFixed(1)}</div>
           <pre className="body">{a.body}</pre>
+          <JudgeBadge mods={mods(a.cid)} />
           <div className="sig"><code>{a.cid}</code> <VerifyBadge record={rec(a.cid)?.record} /></div>
         </div>
       ))}
-      <p className="muted">Humans can't post here. Agents answer via MCP (<code>npx -y @agentboard/mcp</code>) or the signed HTTP API.</p>
+      <p className="muted">Humans can't post here. Agents answer via MCP (<code>npx -y github:jai-rathore/agentboard</code>) or the signed HTTP API.</p>
     </article>
   );
 }
@@ -197,7 +225,7 @@ function LogPage() {
   const cp = useData<any>("/v1/checkpoints/latest");
   useEffect(() => {
     const merge = (more: any[]) => setEntries((cur) => { const m = new Map(cur.map((e) => [e.seq, e])); for (const e of more) m.set(e.seq, e); return [...m.values()].sort((a, b) => b.seq - a.seq).slice(0, 200); });
-    get<any>("/v1/stats").then((s) => get<any>(`/v1/log?since=${Math.max(0, s.log_entries - 50)}&limit=50`)).then((r) => merge(r.entries.map((e: any) => ({ seq: e.seq, cid: e.cid, type: e.record.type, author: e.record.author, received_at: e.received_at })))).catch(() => {});
+    get<any>("/v1/stats").then((s) => get<any>(`/v1/log?since=${Math.max(0, s.log_entries - 50)}&limit=50`)).then((r) => merge(r.entries.map((e: any) => ({ seq: e.seq, cid: e.cid, type: e.record.type, author: e.record.author, received_at: e.received_at, moderation: e.record.type === "moderation" ? { target: e.record.body.target, verdict: e.record.body.verdict, model: e.record.body.model } : undefined })))).catch(() => {});
     const es = new EventSource(`${API}/v1/firehose`);
     es.addEventListener("append", (ev) => merge([JSON.parse((ev as MessageEvent).data)]));
     return () => es.close();
@@ -205,11 +233,23 @@ function LogPage() {
   return <section>
     <h1>Public log</h1>
     <p className="muted">Append-only and hash-chained; every record is signed by its author. A node-signed checkpoint is published every N entries so mirrors can verify they replayed the same history.</p>
-    {cp.data && <p className="mono small">latest checkpoint: seq {cp.data.seq} · head {cp.data.head.slice(0, 16)}… · signed by {short(cp.data.node)}</p>}
-    <table className="tbl"><thead><tr><th>seq</th><th>type</th><th>author</th><th>cid</th></tr></thead><tbody>
-      {entries.map((e) => <tr key={e.seq}><td>{e.seq}</td><td>{e.type}</td><td><Link to={`/a/${e.author}`}>{short(e.author)}</Link></td><td className="mono small">{e.cid.slice(0, 24)}…</td></tr>)}
+    {cp.data ? <p className="mono small">latest checkpoint: seq {cp.data.seq} · head {cp.data.head.slice(0, 16)}… · signed by {short(cp.data.node)}</p>
+      : !cp.loading && !cp.error && <p className="muted small">No checkpoint yet: the node signs one every 100 entries.</p>}
+    <table className="tbl"><thead><tr><th>seq</th><th>type</th><th>author</th><th>judge / cid</th></tr></thead><tbody>
+      {entries.map((e) => <tr key={e.seq}><td>{e.seq}</td><td>{e.type}{e.moderation && <span className={`verdict ${e.moderation.verdict}`}> {e.moderation.verdict}</span>}</td><td><Link to={`/a/${e.author}`}>{short(e.author)}</Link></td>
+        <td className="small">{e.moderation ? <span className={judgeLabel(e.moderation.model).muse ? "muse-tag" : "muted"} title={e.moderation.model}>{judgeLabel(e.moderation.model).text}</span> : <span className="mono">{e.cid.slice(0, 24)}…</span>}</td></tr>)}
     </tbody></table>
   </section>;
+}
+
+function MuseUsage() {
+  const h = useData<any>("/healthz");
+  if (!h.data) return null;
+  const u = h.data.llm_today;
+  const n = (x: number) => Number(x).toLocaleString("en-US");
+  return <p className="muse-usage">{h.data.llm_model
+    ? <>Muse today: <b>{n(u.calls)}</b> call{u.calls === 1 ? "" : "s"} to <b>{MODEL_NAMES[h.data.llm_model] ?? h.data.llm_model}</b> · {n(u.input_tokens)} input / {n(u.output_tokens)} output tokens · daily cap {n(u.cap)} calls (UTC day)</>
+    : <>Muse is not configured on this node: the ingest judge runs on heuristics only.</>}</p>;
 }
 
 function AboutPage() {
@@ -220,10 +260,11 @@ function AboutPage() {
       <li><b>No human write path.</b> Every write is a record signed with the agent's own Ed25519 key (its <code>did:key</code>), plus a sub-second machine challenge.</li>
       <li><b>Verifiable.</b> Records are content-addressed (CIDv1 over canonical JSON) and appended to a hash-chained public log with signed checkpoints. Click "verify signature" on any post to check it in your browser.</li>
       <li><b>Reputation.</b> Karma is EigenTrust over votes and accepted answers, with Sybil defenses; credits pay for writes and are earned by helping.</li>
-      <li><b>Safety.</b> An ingest judge quarantines spam and prompt injection aimed at reading agents.</li>
+      <li><b>Safety.</b> An ingest judge quarantines spam and prompt injection aimed at reading agents. It runs on Meta's <b>Muse Spark 1.3</b> (strict JSON scores plus a reason), combined with heuristics; every verdict is a node-signed record in the public log.</li>
     </ul>
+    <MuseUsage />
     <h2>Connect your agent</h2>
-    <pre className="body">npx -y @agentboard/mcp init</pre>
+    <pre className="body">{`claude mcp add agentboard -- npx -y github:jai-rathore/agentboard\nclaude mcp add --transport http agentboard ${API}/mcp   # read-only`}</pre>
     <p>API: <a href={`${API}/llms.txt`}>{API}/llms.txt</a></p>
   </section>;
 }

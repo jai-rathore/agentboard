@@ -42,7 +42,7 @@ export function createApp(ctx: AppContext) {
     const day = new Date().toISOString().slice(0, 10);
     const u = (await db.query<any>(`SELECT calls, input_tokens, output_tokens FROM llm_usage WHERE day = $1`, [day])).rows[0];
     const llm_today = { calls: Number(u?.calls ?? 0), input_tokens: Number(u?.input_tokens ?? 0), output_tokens: Number(u?.output_tokens ?? 0), cap: ctx.cfg.llmDailyCallCap };
-    return c.json({ ok: true, llm_today, database: db.kind, schema_version: schema, extensions: Object.fromEntries(ext.map((e) => [e.extname, e.extversion])), offline: ctx.cfg.offline, embedder: ctx.embedder.model });
+    return c.json({ ok: true, llm_today, database: db.kind, schema_version: schema, extensions: Object.fromEntries(ext.map((e) => [e.extname, e.extversion])), offline: ctx.cfg.offline, embedder: ctx.embedder.model, llm_model: ctx.llms.spark?.model ?? null });
   });
 
   app.get("/v1/node", async (c) => {
@@ -185,7 +185,8 @@ export function createApp(ctx: AppContext) {
   });
   app.get("/v1/checkpoints/latest", async (c) => {
     const r = (await db.query<any>(`SELECT checkpoint FROM checkpoints ORDER BY seq DESC LIMIT 1`)).rows[0];
-    if (!r) throw new HttpError(404, "no_checkpoint", `no checkpoint yet (one every ${ctx.cfg.checkpointEvery} entries)`);
+    // Not an error: a young log simply has no checkpoint yet (one every N entries).
+    if (!r) return c.body(null, 204, { "x-checkpoint-every": String(ctx.cfg.checkpointEvery) });
     return c.json(typeof r.checkpoint === "string" ? JSON.parse(r.checkpoint) : r.checkpoint);
   });
 
@@ -210,8 +211,14 @@ export function createApp(ctx: AppContext) {
     ctx.events.addEventListener("append", onAppend);
     stream.onAbort(() => ctx.events.removeEventListener("append", onAppend));
     while (!stream.aborted) {
-      const rows = (await db.query<any>(`SELECT l.seq::int AS seq, l.cid, r.type, r.author, l.received_at FROM log l JOIN records r ON r.cid = l.cid WHERE l.seq > $1 ORDER BY l.seq LIMIT 100`, [last])).rows;
-      for (const r of rows) { await stream.writeSSE({ id: String(r.seq), event: "append", data: JSON.stringify(r) }); last = r.seq; }
+      const rows = (await db.query<any>(`SELECT l.seq::int AS seq, l.cid, r.type, r.author, l.received_at, CASE WHEN r.type = 'moderation' THEN r.body_text END AS mod_text FROM log l JOIN records r ON r.cid = l.cid WHERE l.seq > $1 ORDER BY l.seq LIMIT 100`, [last])).rows;
+      for (const { mod_text, ...r } of rows) {
+        // Node-authored moderation records carry which judge decided (e.g. Muse Spark or heuristics only).
+        const m = mod_text ? JSON.parse(mod_text) : null;
+        const ev = m ? { ...r, moderation: { target: m.target, verdict: m.verdict, model: m.model } } : r;
+        await stream.writeSSE({ id: String(r.seq), event: "append", data: JSON.stringify(ev) });
+        last = r.seq;
+      }
       await new Promise<void>((res) => { wake = res; setTimeout(res, 15_000); });
       wake = null;
       if (!rows.length) await stream.writeSSE({ event: "ping", data: "{}" });

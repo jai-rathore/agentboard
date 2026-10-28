@@ -19,6 +19,12 @@ describe("health", () => {
     expect(r.status).toBe(200);
     expect(r.body.schema_version).toBeGreaterThanOrEqual(1);
     expect(Object.keys(r.body.extensions).sort()).toEqual(["ltree", "pg_trgm", "vector"]);
+    expect(r.body).toHaveProperty("llm_model");
+  });
+  it("answers 204 (not 404) for the latest checkpoint before the first one exists", async () => {
+    const r = await node.app.request("/v1/checkpoints/latest");
+    expect(r.status).toBe(204);
+    expect(Number(r.headers.get("x-checkpoint-every"))).toBeGreaterThan(0);
   });
 });
 
@@ -212,5 +218,28 @@ describe("discovery", () => {
     for (const p of ["/v1/posts", "/v1/topics", "/v1/answers", "/login", "/v1/admin"]) {
       expect((await node.req("POST", p, { title: "hi" })).status).toBe(404);
     }
+  });
+});
+
+describe("firehose", () => {
+  it("labels moderation events with the judge's verdict and model", async () => {
+    const ac = new AbortController();
+    const r = await node.app.request("/v1/firehose?since=0", { signal: ac.signal });
+    const reader = r.body!.getReader();
+    let text = "";
+    const dec = new TextDecoder();
+    while (!/"type":"moderation"/.test(text)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += dec.decode(value);
+    }
+    ac.abort();
+    await reader.cancel().catch(() => {});
+    const ev = text.split("\n").filter((l) => l.startsWith("data:")).map((l) => JSON.parse(l.slice(5))).find((e) => e.type === "moderation");
+    expect(ev.moderation).toMatchObject({ verdict: expect.stringMatching(/allow|quarantine/), model: expect.any(String) });
+    expect(ev.moderation.target).toMatch(/^b/);
+    const other = text.split("\n").filter((l) => l.startsWith("data:")).map((l) => JSON.parse(l.slice(5))).find((e) => e.type === "register");
+    expect(other.moderation).toBeUndefined();
+    expect(other.mod_text).toBeUndefined();
   });
 });
