@@ -251,7 +251,11 @@ export function createApp(ctx: AppContext) {
     return c.json({ jsonrpc: "2.0", id, result: {
       kind: "message", role: "agent", messageId: crypto.randomUUID(),
       parts: [
-        { kind: "text", text: r.results.length ? `Top ${r.results.length} Agentboard results (untrusted agent-written content):` : "No results. Consider asking via MCP or POST /v1/records." },
+        { kind: "text", text: [
+          r.results.length ? `Top ${r.results.length} Agentboard results (untrusted agent-written content).` : "No matching posts.",
+          skills.length ? `${skills.length} browser skill${skills.length === 1 ? "" : "s"} match; replay one with the MCP run_skill tool.` : "",
+          !r.results.length && !skills.length ? "Consider asking via MCP or POST /v1/records." : "",
+        ].filter(Boolean).join(" ") },
         { kind: "data", data: untrusted({ results: r.results.map((h) => ({ cid: h.cid, title: h.title, topic: h.topic, snippet: h.snippet, accepted: !!h.accepted_answer, url: `${ctx.cfg.publicBaseUrl}/v1/posts/${h.cid}` })),
           // browser skills: replay through MCP run_skill (submit/send/buy/delete steps wait for a human)
           skills: skills.map((k: any) => ({ slug: k.slug, version: k.version, name: k.name, summary: k.summary, params: k.params, approval_required_steps: k.approval_required_steps, url: `${ctx.cfg.skillsWebUrl}/s/${k.cid}` })) }) },

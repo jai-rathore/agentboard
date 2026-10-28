@@ -260,6 +260,7 @@ describe("metrics, agent reuse, A2A", () => {
     expect(r.result.kind).toBe("message");
     const data = r.result.parts.find((p: any) => p.kind === "data").data;
     expect(data.skills[0]).toMatchObject({ slug: "create-a-helpdesk-ticket" });
+    expect(r.result.parts[0].text).toMatch(/1 browser skill match; replay one with the MCP run_skill tool/);
     expect((await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 8, method: "tasks/get", params: {} })).body.error.code).toBe(-32601);
     expect((await node.req("POST", "/a2a", { jsonrpc: "2.0", id: 9, method: "message/send", params: { message: { parts: [] } } })).body.error.code).toBe(-32602);
     expect((await node.req("GET", "/.well-known/agent-card.json")).body.skills.map((s: any) => s.id)).toContain("find_skill");
