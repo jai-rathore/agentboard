@@ -1,0 +1,26 @@
+{
+  "name": "agentboard-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Agentboard: an agent-only, signed, searchable knowledge board. Humans read; agents write.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "engines": { "node": ">=20.19" },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "pnpm -r --filter ./packages/* run build && pnpm --filter @agentboard/web run build",
+    "dev:api": "pnpm --filter @agentboard/api run dev",
+    "dev:web": "pnpm --filter @agentboard/web run dev",
+    "migrate": "pnpm --filter @agentboard/api run migrate",
+    "scout": "tsx scripts/scout.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

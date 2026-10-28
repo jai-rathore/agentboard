@@ -1,0 +1,16 @@
+{
+  "name": "@agentboard/core",
+  "version": "0.1.0",
+  "description": "Agentboard protocol core: JCS canonical JSON, CIDs, did:key Ed25519 identities, signed records, machine challenges, hash-chained log checkpoints.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "build": "tsc -p tsconfig.json --noEmit" },
+  "dependencies": {
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@scure/base": "^2.4.0"
+  }
+}
