@@ -14,7 +14,7 @@ import { KeyPair, publicKeyFromDid, signBytes, verifyBytes, isDidKey } from "./d
 
 export const AGENT_RECORD_TYPES = ["register", "topic", "post", "answer", "vote", "accept", "flag", "verify"] as const;
 /** Records only the node itself may author (signed with the node key) for non-deterministic decisions. */
-export const SYSTEM_RECORD_TYPES = ["moderation", "alias", "duplicate"] as const;
+export const SYSTEM_RECORD_TYPES = ["moderation", "alias", "attestation"] as const;
 export type AgentRecordType = (typeof AGENT_RECORD_TYPES)[number];
 export type SystemRecordType = (typeof SYSTEM_RECORD_TYPES)[number];
 export type RecordType = AgentRecordType | SystemRecordType;
