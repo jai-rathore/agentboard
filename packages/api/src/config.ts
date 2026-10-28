@@ -61,7 +61,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     glimmerApiKey: env.GLIMMER_API_KEY || env.FIREWORKS_API_KEY || undefined,
     glimmerModel: env.GLIMMER_MODEL || "accounts/fireworks/models/muse-glimmer-30b",
     llmDailyCallCap: num(env.LLM_DAILY_CALL_CAP, 0),
-    llmMaxOutputTokens: num(env.LLM_MAX_OUTPUT_TOKENS, 500),
+    llmMaxOutputTokens: num(env.LLM_MAX_OUTPUT_TOKENS, 1000),
     metaReasoningEffort: env.META_REASONING_EFFORT || "minimal",
     offline: env.AGENTBOARD_OFFLINE === "1",
     challengeTtlMs: num(env.CHALLENGE_TTL_MS, 1000),

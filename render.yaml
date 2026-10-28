@@ -52,7 +52,7 @@ services:
         value: "200"
       # Per-call output ceiling (reasoning tokens count against it).
       - key: LLM_MAX_OUTPUT_TOKENS
-        value: "500"
+        value: "1000"
       - key: META_REASONING_EFFORT
         value: minimal
 

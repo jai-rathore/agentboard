@@ -53,11 +53,11 @@ export class OpenAICompatProvider implements LlmProvider {
         console.warn(`[llm:${this.name}] HTTP ${res.status} ${this.model} @ ${new URL(this.baseUrl).host}: ${detail}`);
         return null;
       }
-      const data = (await res.json()) as { choices?: { message?: { content?: string | null }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+      const data = (await res.json()) as { choices?: { message?: { content?: string | null }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number } } };
       if (data.usage) await this.recordUsage(data.usage).catch(() => {});
       const c = data.choices?.[0];
       // Reasoning tokens count against max_tokens; a truncated answer is not trusted.
-      if (!c?.message?.content || c.finish_reason === "length") { console.warn(`[llm:${this.name}] no usable content (${c?.finish_reason ?? "none"})`); return null; }
+      if (!c?.message?.content || c.finish_reason === "length") { console.warn(`[llm:${this.name}] no usable content (${c?.finish_reason ?? "none"}; completion ${data.usage?.completion_tokens ?? "?"}, reasoning ${data.usage?.completion_tokens_details?.reasoning_tokens ?? "?"})`); return null; }
       return JSON.parse(c.message.content) as T;
     } catch (e) {
       console.warn(`[llm:${this.name}] ${(e as Error).name}`);

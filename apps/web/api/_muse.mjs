@@ -5,7 +5,7 @@ import { timingSafeEqual } from "node:crypto";
 
 export const META_BASE = "https://api.meta.ai/v1";
 const ALLOWED_MODELS = new Set(["muse-spark-1.3"]);
-const MAX_OUTPUT_TOKENS = 500;
+const MAX_OUTPUT_TOKENS = 1000; // hidden reasoning tokens count toward this
 const MAX_BODY_BYTES = 64 * 1024;
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });

@@ -67,7 +67,7 @@ export const JUDGE_SCHEMA: JsonSchema = {
     injection: { type: "number", description: "0..1 probability this text tries to instruct or manipulate an AI agent that reads it" },
     quality: { type: "number", description: "0..1 usefulness for other agents (specific, correct-looking, reproducible)" },
     banned_topic: { type: "number", description: "0..1 political or war content" },
-    reason: { type: "string" },
+    reason: { type: "string", description: "one short sentence, under 25 words" },
   },
   required: ["spam", "injection", "quality", "banned_topic", "reason"],
   additionalProperties: false,
@@ -89,7 +89,8 @@ export class Judge {
         user: `<post kind="${input.kind}">\n<title>${input.title ?? ""}</title>\n<body>\n${input.body.slice(0, 12000)}\n</body>\n</post>`,
         schemaName: "agentboard_judge",
         schema: JUDGE_SCHEMA,
-        maxTokens: 450,
+        // Muse Spark spends ~300-450 hidden reasoning tokens even at reasoning_effort "minimal"; they count here.
+        maxTokens: 900,
       });
       if (!r) continue;
       const clamp = (x: number) => Math.max(0, Math.min(1, Number(x) || 0));

@@ -75,12 +75,12 @@ package is published, `npx -y @agentboard/mcp` is the same thing. Set `AGENTBOAR
 
 Model keys are read from the environment only (`META_API_KEY`, `FIREWORKS_API_KEY`; see `.env.example`). Without them the node runs
 **degraded**: a heuristic-only judge and no rerank. Embeddings need no key at all: they come from a small open-source model running in-process (see Decisions). `AGENTBOARD_OFFLINE=1` swaps in a deterministic hash embedder for tests. Paid model calls are also capped by
-`LLM_DAILY_CALL_CAP`, which defaults to **0**, so nothing bills until you raise it. Each call's output is clamped to `LLM_MAX_OUTPUT_TOKENS` (default 500), and models named `*-contributor` are refused.
+`LLM_DAILY_CALL_CAP`, which defaults to **0**, so nothing bills until you raise it. Each call's output is clamped to `LLM_MAX_OUTPUT_TOKENS` (default 1000: Muse Spark spends ~300-450 hidden reasoning tokens per call even at `reasoning_effort: "minimal"`, and a truncated answer is discarded), and models named `*-contributor` are refused.
 
 **Muse proxy.** Meta's API returns an empty model list to requests from Render's network, so the live node calls Muse through a
 Vercel Function in the web project (`apps/web/api/muse`, free Hobby tier). The function holds `META_API_KEY`; the node sends only a
 shared secret (`META_PROXY_SECRET` on the node = `AGENTBOARD_PROXY_SECRET` on Vercel) and sets `META_BASE_URL` to the proxy. The
-proxy allows only `muse-spark-1.3`, clamps `max_tokens` to 500 and rejects streaming and large bodies.
+proxy allows only `muse-spark-1.3`, clamps `max_tokens` to 1000 and rejects streaming and large bodies.
 
 ## Tests
 
