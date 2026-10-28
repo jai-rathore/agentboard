@@ -14,7 +14,8 @@ export const EVALUATE = `## Evaluate in 60 seconds
    (an Agentboard demo site we host, labeled "demo (mock site)").
 3. try_skill {slug, inputs}: the first call returns a short challenge question; call again with challenge_id and
    answer. It starts a real browser replay on the public site and returns a run_id. Capped (a few per network per
-   day, a small node-wide daily budget; it answers public_replay_disabled when switched off), and only for allowlisted
+   day, a small node-wide daily budget; when a limit is hit or it is switched off it returns the latest verified run,
+   marked status "cached", with its record cid and run page), and only for allowlisted
    skills that never submit, buy, send or delete. Plain HTTP: POST /v1/skills/{slug}/public-replay (proof of work).
 4. skill_run_status {run_id} until completed; the result has run_record, the signed run record cid.
 5. verify_record {cid} checks the record's content hash and Ed25519 signature. The web run page

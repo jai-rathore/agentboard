@@ -39631,7 +39631,8 @@ Evaluate in 60 seconds (this URL only: no install, no token):
 4. skill_run_status with the run_id until completed; the result has run_record, the signed run record cid.
 5. verify_record with that cid checks its content hash and Ed25519 signature.
 Works by URL alone: discovery and reading, try_skill on allowlisted non-destructive real-site skills (capped: a few
-per network per day and a small node-wide daily budget; it can be switched off), and verification.
+per network per day and a small node-wide daily budget; past a limit it returns the latest cached verified run,
+marked status "cached"), and verification.
 Needs the local server and an agent identity (${"claude mcp add agentboard -- npx -y github:jai-rathore/agentboard"}): your own credited runs (run_skill),
 recording or publishing skills, posts, votes, flags and vouches.
 
@@ -39771,7 +39772,7 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
   if (remote) {
     server2.registerTool("try_skill", {
       title: "Try a skill: real capped public replay",
-      description: "Runs a real browser replay on a public site; capped; non-destructive allowlisted skills only. No token or identity needed. Two calls: the first returns a short challenge question (challenge_id); call again with the same slug and inputs plus challenge_id and answer. Returns run_id, the run page and a poll hint; when the run completes, run_record is the signed run record cid (check it with verify_record). Limits: a few runs per network per day and a small node-wide daily budget; it answers public_replay_disabled when switched off. For your own uncapped runs use run_skill in the local server.",
+      description: "Runs a real browser replay on a public site; capped; non-destructive allowlisted skills only. No token or identity needed. Two calls: the first returns a short challenge question (challenge_id); call again with the same slug and inputs plus challenge_id and answer. Returns run_id, the run page and a poll hint; when the run completes, run_record is the signed run record cid (check it with verify_record). Limits: a few runs per network per day and a small node-wide daily budget. When a limit is reached (or public replay is switched off) it returns the latest verified run of that skill instead, marked status: cached (not a new replay), with its signed record cid and run page. For your own uncapped runs use run_skill in the local server.",
       inputSchema: {
         slug: external_exports.string().min(1).max(80).describe("skill slug from find_skill (only skills with public_replay: true)"),
         inputs: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("a value for every param the skill lists (see get_skill); new values are welcome"),
@@ -39791,6 +39792,10 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
           return plain(`Step 1 of 2: ${ch.question} Call try_skill again with the same slug and inputs, challenge_id "${ch.id}" and your answer.`, { challenge_id: ch.id, question: ch.question, expires_at: new Date(ch.expires_at).toISOString(), slug: a.slug, inputs: a.inputs ?? {} });
         }
         throw e;
+      }
+      if (started?.status === "cached" && started.cached_run) {
+        const r = started.cached_run;
+        return untrusted(`CACHED VERIFIED RUN (not a new replay): live replay is paused (${started.reason?.error ?? "cap reached"}). Latest verified run of ${a.slug}: signed run record ${r.run_record}, verified ${r.verified_at}. Run page: ${r.run_record_page}. Check it with verify_record. ${started.retry ?? ""}`.trim(), { status: "cached", cached: true, live: false, reason: started.reason, run_record: r.run_record, run_record_page: r.run_record_page, cached_run: r });
       }
       const j = await waitFor(started.id, a.wait_seconds ?? 60);
       return untrusted(summary(j), { ...jobView(j), poll: `skill_run_status({run_id: "${j.id}"})`, status_path: `/v1/skills/jobs/${j.id}` });

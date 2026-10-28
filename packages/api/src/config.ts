@@ -41,6 +41,11 @@ export interface Config {
   /** Muse Responses API (Skills) guard: calls per UTC day (0 = off) and a lifetime spend ceiling in USD. */
   museDailyCallCap: number;
   museSpendCapUsd: number;
+  /**
+   * Calls of the daily cap held back for public replays (remote MCP try_skill / POST /v1/skills/:slug/public-replay).
+   * Other jobs (seeding, pipelines, operator, agent and benchmark runs) cannot use them. 0 = no reserve.
+   */
+  musePublicReservedCalls: number;
   /** Executor service that runs API-requested replays (MCP run_skill), and the web app for approval links. */
   skillsExecutorUrl: string;
   skillsWebUrl: string;
@@ -124,6 +129,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     skillsInternalSecret: env.SKILLS_INTERNAL_SECRET?.trim() || undefined,
     museDailyCallCap: num(env.MUSE_DAILY_CALL_CAP, 0),
     museSpendCapUsd: num(env.MUSE_SPEND_CAP_USD, 2),
+    musePublicReservedCalls: num(env.MUSE_PUBLIC_RESERVED_CALLS, 0),
     skillsExecutorUrl: (env.SKILLS_EXECUTOR_URL || "https://agentboard-executor.onrender.com").replace(/\/$/, ""),
     skillsWebUrl: (env.SKILLS_WEB_URL || "https://agentboard-olive-pi.vercel.app").replace(/\/$/, ""),
     skillsAgentRunCredits: num(env.SKILLS_AGENT_RUN_CREDITS, 5),
@@ -198,6 +204,6 @@ export function publicConfigSummary(c: Config) {
     challenge: { ttl_ms: c.challengeTtlMs, difficulty_bits: c.challengeDifficulty },
     register_pow_bits: c.registerPowBits,
     checkpoint_every: c.checkpointEvery,
-    skills: { enabled: Boolean(c.skillsOperatorToken) && c.museDailyCallCap > 0 && !c.offline, executor: Boolean(c.skillsInternalSecret), muse_daily_call_cap: c.museDailyCallCap, muse_spend_cap_usd: c.museSpendCapUsd, agent_runs: { credits: c.skillsAgentRunCredits, per_agent_day: c.skillsAgentRunsPerAgentDay, per_day: c.skillsAgentRunsPerDay }, public_replay: { enabled: c.publicReplayDailyCap > 0 && c.publicReplaySkills.length > 0, daily_cap: c.publicReplayDailyCap, per_ip_per_day: c.publicReplayPerIpPerDay, skills: c.publicReplaySkills } },
+    skills: { enabled: Boolean(c.skillsOperatorToken) && c.museDailyCallCap > 0 && !c.offline, executor: Boolean(c.skillsInternalSecret), muse_daily_call_cap: c.museDailyCallCap, muse_public_reserved_calls: c.musePublicReservedCalls, muse_spend_cap_usd: c.museSpendCapUsd, agent_runs: { credits: c.skillsAgentRunCredits, per_agent_day: c.skillsAgentRunsPerAgentDay, per_day: c.skillsAgentRunsPerDay }, public_replay: { enabled: c.publicReplayDailyCap > 0 && c.publicReplaySkills.length > 0, daily_cap: c.publicReplayDailyCap, per_ip_per_day: c.publicReplayPerIpPerDay, skills: c.publicReplaySkills } },
   };
 }
