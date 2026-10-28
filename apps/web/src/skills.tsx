@@ -88,6 +88,33 @@ function StepDiff({ before, after, changes }: { before: any; after: any; changes
 
 // ---------------------------------------------------------------- list + record
 
+/** "✓ 5 verified replays · all versions": the same count on the list, the home page and the skill page header. */
+export const ReplaysBadge = ({ verified, big }: { verified: number; big?: boolean }) =>
+  verified > 0 ? <span className={`badge${big ? " big" : ""}`} title="verified replays across every version of this skill">✓ {plural(verified, "verified replay")} · all versions</span> : null;
+
+export function SkillList({ skills }: { skills: any[] }) {
+  if (!skills.length) return <p className="muted">No verified skills yet.</p>;
+  return <ul className="posts">{skills.map((s: any) => <li key={s.cid}>
+    <Link to={`/s/${s.cid}`}>{s.name}</Link> <ReplaysBadge verified={s.verified_runs} />
+    <div className="meta">v{s.version} · {s.slug} · {ago(s.created_at)}</div><p className="snippet">{s.summary}</p></li>)}</ul>;
+}
+
+/** One-line live metrics for the home page (same numbers as /skills/metrics). */
+export function MetricsStrip() {
+  const r = useData<any>("/v1/skills/metrics");
+  if (!r.data) return null;
+  const m = r.data;
+  return <div className="stats metrics strip">
+    <div><b>{m.skills}</b><span>skills</span></div>
+    <div><b>{m.runs.verified}</b><span>verified replays</span></div>
+    <div><b>{m.heals}</b><span>self-heals</span></div>
+    <div><b>0</b><span>human clicks per run</span></div>
+    <div><b>{m.human.approvals}</b><span>human approvals</span></div>
+    <div><b>{m.human.clicks_saved}</b><span>clicks &amp; fields done by agents</span></div>
+    <div><b>${m.muse.usd.toFixed(2)}</b><span>Muse spend, all time</span></div>
+  </div>;
+}
+
 export function SkillsPage({ q }: { q: string }) {
   const r = useData<any>(`/v1/skills${q ? `?q=${encodeURIComponent(q)}` : ""}`, [q]);
   const [query, setQuery] = useState(q);
@@ -97,10 +124,7 @@ export function SkillsPage({ q }: { q: string }) {
       <p className="small"><Link to="/skills/metrics">metrics</Link> · <Link to="/skills/reuse">agent reuse</Link></p>
       <p className="muted">A person records a browser task once. Muse Spark turns the recording into a strict-JSON skill; an executor replays it with new values through Muse Spark's computer tool and Spark verifies the result. Only verified skills are published, as node-signed records in the public log.</p>
       <div className="search"><input value={query} placeholder="Search skills…" onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") go(`/skills${query.trim() ? `?q=${encodeURIComponent(query.trim())}` : ""}`); }} /></div>
-      {r.loading ? <p className="muted">Loading…</p> : r.error ? <p className="err">{r.error}</p> : !r.data.skills.length ? <p className="muted">No verified skills yet.</p> :
-        <ul className="posts">{r.data.skills.map((s: any) => <li key={s.cid}>
-          <Link to={`/s/${s.cid}`}>{s.name}</Link> {s.verified_runs > 0 && <span className="badge">✓ verified, replayed {s.runs}×</span>}
-          <div className="meta">v{s.version} · {s.slug} · {ago(s.created_at)}</div><p className="snippet">{s.summary}</p></li>)}</ul>}
+      {r.loading ? <p className="muted">Loading…</p> : r.error ? <p className="err">{r.error}</p> : <SkillList skills={r.data.skills} />}
       <p className="muted small">Agents find skills with <code>GET {API}/v1/skills?q=…</code> and read one with <code>/v1/skills/&lt;cid&gt;</code>.</p>
     </section>
     <aside><RecordPanel /></aside>
@@ -208,6 +232,7 @@ function Frames({ shas }: { shas: string[] }) {
   return <div><img className="media" src={art(shas[i])} alt={`frame ${i + 1}`} /><div className="muted small">frame {i + 1}/{shas.length}</div></div>;
 }
 
+const fmtClock = (ms: number) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 type Turn = { turn: number; say: string; actions: any[]; fn: any; ms: number; usage: any; model: string; capability: string };
 function ReplayPanel({ target, skill, startUrl }: { target: { draft_id?: string; skill_cid?: string }; skill: any; startUrl: string }) {
   const [token, setToken] = useToken();
@@ -218,15 +243,19 @@ function ReplayPanel({ target, skill, startUrl }: { target: { draft_id?: string;
   const [approval, setApproval] = useState<any>(null), [verdict, setVerdict] = useState<any>(null), [result, setResult] = useState<any>(null);
   const ws = useRef<WebSocket | null>(null);
   useEffect(() => () => ws.current?.close(), []);
+  // step counter + elapsed clock for the live run (max turns comes from the executor's /healthz)
+  const [maxTurns, setMaxTurns] = useState(15), [t0, setT0] = useState(0), [t1, setT1] = useState(0), [running, setRunning] = useState(false);
+  useEffect(() => { if (!running) return; const i = setInterval(() => setT1(Date.now()), 250); return () => clearInterval(i); }, [running]);
   const start = async () => {
     setErr(""); setTurns([]); setVerdict(null); setResult(null); setFrame(""); setUsage(null);
+    setT0(Date.now()); setT1(Date.now()); setRunning(true);
     setStatus("Waking the executor (a free Render service; up to a minute)…");
-    try { await fetch(EXECUTOR_WS.replace(/^ws/, "http") + "/healthz", { cache: "no-store" }); } catch { /* the socket attempt reports errors */ }
+    try { const h = await (await fetch(EXECUTOR_WS.replace(/^ws/, "http") + "/healthz", { cache: "no-store" })).json(); if (h?.max_turns) setMaxTurns(Number(h.max_turns)); } catch { /* the socket attempt reports errors */ }
     const s = new WebSocket(`${EXECUTOR_WS}/run`);
     ws.current = s;
     s.onopen = () => { setStatus("Connected. Starting Chromium…"); s.send(JSON.stringify({ type: "start", token, ...target, start_url: url, params })); };
-    s.onerror = () => setErr("Could not reach the executor.");
-    s.onclose = () => { setApproval(null); setStatus((x) => (x.startsWith("Done") ? x : x ? `${x} (connection closed)` : "")); };
+    s.onerror = () => { setErr("Could not reach the executor."); setRunning(false); };
+    s.onclose = () => { setRunning(false); setApproval(null); setStatus((x) => (x.startsWith("Done") ? x : x ? `${x} (connection closed)` : "")); };
     s.onmessage = (ev) => {
       const m = JSON.parse(ev.data);
       if (m.type === "done" || m.type === "error" || m.type === "turn") setApproval(null);
@@ -237,8 +266,8 @@ function ReplayPanel({ target, skill, startUrl }: { target: { draft_id?: string;
       else if (m.type === "approval_request") { setApproval(m); setStatus("Waiting for your approval…"); }
       else if (m.type === "verdict") setVerdict(m);
       else if (m.type === "healing") setStatus(m.message);
-      else if (m.type === "done") { setResult(m.result); setStatus(`Done: ${m.result.status.replace(/_/g, " ")}`); }
-      else if (m.type === "error") setErr(`${m.error}: ${m.message}`);
+      else if (m.type === "done") { setRunning(false); setResult(m.result); setStatus(`Done: ${m.result.status.replace(/_/g, " ")}`); }
+      else if (m.type === "error") { setRunning(false); setErr(`${m.error}: ${m.message}`); }
     };
   };
   const answer = (ok: boolean) => { ws.current?.send(JSON.stringify({ type: "approval", id: approval.id, approve: ok })); setApproval(null); setStatus(ok ? "Approved, continuing…" : "Declined."); };
@@ -250,6 +279,7 @@ function ReplayPanel({ target, skill, startUrl }: { target: { draft_id?: string;
       <label>Operator token<input type="password" value={token} onChange={(e) => setToken(e.target.value)} /></label>
       <button disabled={!token} onClick={start}>Replay &amp; verify</button>
     </div>}
+    {t0 > 0 && <div className="run-clock"><span>Step <b>{turns.length}</b> / {maxTurns}</span><span>⏱ <b>{fmtClock(t1 - t0)}</b>{running ? "" : " total"}</span>{approval && <span className="paused">⏸ waiting for approval</span>}</div>}
     {frame && <img className="media live" src={frame} alt="live browser" />}
     {status && <p className="muted small">{status}{usage && <> · {usage.calls} Muse calls · {usd(usage.usd)}</>}</p>}
     {err && <p className="err small">{err}</p>}
@@ -362,7 +392,8 @@ export function SkillPage({ cid }: { cid: string }) {
   const anyFaster = runs.some((x: any) => faster(x.record.body));
   return <article>
     <div className="crumbs"><Link to="/skills">skills</Link> / {b.slug}</div>
-    <h1>{b.skill.name} {badge.verified && <span className="badge big">✓ verified, replayed {badge.replayed}×</span>}{hf && <span className="badge big heal">🩹 self-healed</span>}</h1>
+    <h1>{b.skill.name} <ReplaysBadge big verified={badge.verified_runs_all_versions ?? 0} />{hf && <span className="badge big heal">🩹 self-healed</span>}</h1>
+    <p className="small replay-counts"><b>Replays</b> · this version (v{version}): {badge.verified_runs_this_version} verified of {badge.runs_this_version ?? badge.replayed}{heal_run && !runs.some((x: any) => x.record.cid === heal_run.record.cid) && <> (+ the v{prev_skill?.version} run that healed it)</>} · all versions{badge.versions > 1 ? ` (v1–v${latest_version})` : ""}: {badge.verified_runs_all_versions} verified of {badge.runs_all_versions ?? badge.verified_runs_all_versions}</p>
     {version !== latest_version && <div className="superseded">This is v{version}. <Link to={`/s/${latest_cid}`}>v{latest_version} is the current version →</Link></div>}
     <div className="meta">v{version} · published {ago(skill.record.created_at)} · log #{skill.seq} · signed by node <span className="mono">{short(node)}</span></div>
     <div className="calls">
@@ -390,7 +421,7 @@ export function SkillPage({ cid }: { cid: string }) {
 find_skill({ query: "${b.skill.name.toLowerCase()}" })
 run_skill({ skill: "${b.slug}", params: ${JSON.stringify(Object.fromEntries(b.skill.params.map((p: any) => [p.name, p.example])))} })`}</pre>
     <p className="small muted">Runs from MCP pause at 🔒 steps with status <code>pending_approval</code> and a link to a page like this one, where a human approves. The agent never approves its own submit, buy, send or delete.</p>
-    <h2>Replays ({runs.length})</h2>
+    <h2>Replays of this version, v{version} ({runs.length})</h2>
     <table className="tbl"><thead><tr><th></th><th>params</th><th>turns</th><th>human input</th>{anyFaster && <th>vs human</th>}<th>cost</th><th>when</th></tr></thead><tbody>
       {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td>{rb.success ? "✓" : "✗"}{rb.drift?.healed && " 🩹"}</td><td className="small mono">{Object.values(rb.params).join(" · ").slice(0, 80)}{/[?&]v=2/.test(rb.start_url) && " · redesigned site"}</td><td>{rb.turns}</td><td className="small">0 clicks · {plural(rb.actions.filter((a: any) => a.approval === "human").length, "approval")}</td>{anyFaster && <td className="small">{faster(rb) ? `⚡ ${fmtDur(rb.time.run_ms)} vs ${fmtDur(rb.time.recording_ms)}` : ""}</td>}<td>{usd(rb.usage.usd)}</td><td className="small">{ago(x.record.created_at)} · #{x.seq}{rb.evidence.gif && <> · <a href={art(rb.evidence.gif)} target="_blank" rel="noreferrer">GIF</a></>}</td></tr>; })}
     </tbody></table>
@@ -448,15 +479,19 @@ export function MetricsPage() {
 }
 
 export function ReuseTable({ skill, agent, limit, compact }: { skill?: string; agent?: string; limit?: number; compact?: boolean }) {
-  const qs = new URLSearchParams({ ...(skill ? { skill } : {}), ...(agent ? { agent } : {}), ...(limit ? { limit: String(limit) } : {}) }).toString();
+  // Runs by hidden or self-retracted agents (old test identities) are left out unless asked for; an agent's own page shows all of its runs.
+  const [showHidden, setShowHidden] = useState(false);
+  const qs = new URLSearchParams({ ...(skill ? { skill } : {}), ...(agent ? { agent } : {}), ...(limit ? { limit: String(limit) } : {}), ...(showHidden ? { include_hidden: "1" } : {}) }).toString();
   const r = useData<any>(`/v1/skills/reuse${qs ? `?${qs}` : ""}`, [qs]);
   if (r.loading) return <p className="muted small">Loading…</p>;
   if (r.error) return <p className="err small">{r.error}</p>;
   const { runs, summary } = r.data;
-  if (!runs.length) return <p className="muted small">No runs yet.</p>;
+  const toggle = !agent && (summary.hidden_runs > 0 || showHidden) && <label className="small muted toggle"><input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> show hidden{!showHidden && ` (${plural(summary.hidden_runs, "run")} by hidden or retracted agents)`}</label>;
+  if (!runs.length) return <>{toggle}<p className="muted small">No runs yet.</p></>;
   const who = (x: any) => x.agent ? <><Link to={`/a/${x.agent.did}`}>{x.agent.name ?? short(x.agent.did)}</Link>{x.agent.status && x.agent.status !== "active" && <span className="muted"> ({x.agent.status})</span>}</> : <span className="muted">{x.via === "operator" ? "operator via MCP" : "operator (web)"}</span>;
   return <>
     {!compact && <p className="small muted">{plural(summary.runs, "run")} · {plural(summary.agents, "distinct agent")} · {summary.verified} verified</p>}
+    {toggle}
     <table className="tbl"><thead><tr><th></th>{!agent && <th>run by</th>}{!skill && <th>skill</th>}<th>human input</th><th>when</th></tr></thead><tbody>
       {runs.map((x: any) => <tr key={x.run}>
         <td title={x.evidence ?? ""}>{x.outcome === "verified" ? "✓" : "✗"}{x.healed && " 🩹"}</td>

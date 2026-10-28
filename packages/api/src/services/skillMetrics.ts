@@ -73,7 +73,12 @@ export async function skillMetrics(ctx: AppContext) {
 }
 
 /** Agent reuse: which agent ran which skill, when, and what happened. Filter by skill (slug or cid) or agent DID. */
-export async function skillReuse(ctx: AppContext, o: { skill?: string; agent?: string; limit?: number }) {
+/**
+ * Who ran which skill. Runs requested by agents that are no longer active (hidden by the operator or
+ * self-retracted test identities) are left out by default; include_hidden brings them back (they stay
+ * in the signed log either way). Asking for one agent explicitly always shows its runs.
+ */
+export async function skillReuse(ctx: AppContext, o: { skill?: string; agent?: string; limit?: number; includeHidden?: boolean }) {
   const where: string[] = [], params: unknown[] = [];
   if (o.skill) { params.push(o.skill); where.push(`(s.slug = $${params.length} OR s.cid = $${params.length})`); }
   let rows = await runRows(ctx, where.length ? `WHERE ${where.join(" AND ")}` : "", params, o.agent ? 5000 : (o.limit ?? 100));
@@ -89,12 +94,17 @@ export async function skillReuse(ctx: AppContext, o: { skill?: string; agent?: s
       evidence: b.verdict?.evidence ?? null,
     };
   });
-  const filtered = o.agent ? out.filter((r) => r.agent === o.agent).slice(0, o.limit ?? 100) : out;
+  const mine = o.agent ? out.filter((r) => r.agent === o.agent).slice(0, o.limit ?? 100) : out;
+  const allDids = [...new Set(mine.map((r) => r.agent).filter(Boolean))] as string[];
+  const names = new Map((allDids.length ? (await ctx.db.query<any>(`SELECT did, name, status FROM agents WHERE did = ANY($1)`, [allDids])).rows : []).map((a) => [a.did, a]));
+  const inactive = (r: { agent: string | null }) => Boolean(r.agent) && names.get(r.agent!)?.status !== "active";
+  const showHidden = Boolean(o.includeHidden || o.agent);
+  const filtered = showHidden ? mine : mine.filter((r) => !inactive(r));
+  const hiddenRuns = showHidden ? 0 : mine.length - filtered.length;
   const dids = [...new Set(filtered.map((r) => r.agent).filter(Boolean))] as string[];
-  const names = new Map((dids.length ? (await ctx.db.query<any>(`SELECT did, name, status FROM agents WHERE did = ANY($1)`, [dids])).rows : []).map((a) => [a.did, a]));
   if (o.skill && !filtered.length && !(await ctx.db.query(`SELECT 1 FROM skills WHERE slug = $1 OR cid = $1`, [o.skill])).rows[0]) throw new HttpError(404, "skill_not_found", "no such skill");
   return {
     runs: filtered.map((r) => ({ ...r, agent: r.agent ? { did: r.agent, name: names.get(r.agent)?.name ?? null, status: names.get(r.agent)?.status ?? null } : null })),
-    summary: { runs: filtered.length, agents: dids.length, verified: filtered.filter((r) => r.outcome === "verified").length },
+    summary: { runs: filtered.length, agents: dids.length, verified: filtered.filter((r) => r.outcome === "verified").length, hidden_runs: hiddenRuns, include_hidden: showHidden },
   };
 }

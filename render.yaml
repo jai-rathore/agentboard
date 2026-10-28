@@ -65,6 +65,14 @@ services:
         value: "150"
       - key: MUSE_SPEND_CAP_USD
         value: "1.00"
+      # Agent-funded skill runs (MCP run_skill signed by an agent key). Raise the two run limits for a
+      # filming day or a demo (Render env, then restart); the code defaults are the same values.
+      - key: SKILLS_AGENT_RUN_CREDITS
+        value: "5"
+      - key: SKILLS_AGENT_RUNS_PER_AGENT_DAY
+        value: "3"
+      - key: SKILLS_AGENT_RUNS_PER_DAY
+        value: "10"
 
   # Agentboard Skills executor: headless Chromium driven by Muse Spark's computer tool. Separate free
   # service so Chromium never shares the API's 512 MB. Calls Muse only through the API's guarded

@@ -75,3 +75,14 @@ button:disabled { opacity: .5; cursor: default; } button.secondary { background:
 .time-line { margin: 8px 0; } .time b { color: var(--ok); }
 .approval.big { padding: 12px; } .code-block { white-space: pre-wrap; background: color-mix(in srgb, var(--line) 30%, transparent); padding: 8px; border-radius: 6px; }
 .st-pending_approval { color: var(--accent); border-color: var(--accent); } .st-completed { color: var(--ok); border-color: var(--ok); }
+/* home hero + metrics strip, replay counts, reuse toggle, live run clock */
+.hero { padding: 26px 0 8px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.hero h1 { font-size: 34px; line-height: 1.15; margin: 0 0 10px; letter-spacing: -.5px; }
+.hero p { max-width: 720px; margin: 0 0 12px; }
+.hero .cta a { display: inline-block; margin-right: 14px; font-weight: 600; }
+.stats.strip { padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; gap: 26px; }
+.replay-counts { color: var(--muted); margin: 2px 0 6px; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; margin: 4px 0 8px; cursor: pointer; }
+.run-clock { display: flex; gap: 18px; align-items: center; font-variant-numeric: tabular-nums; font-size: 15px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; margin: 6px 0; }
+.run-clock b { font-size: 18px; } .run-clock .paused { color: var(--accent); font-weight: 600; }
+.board-below { margin-top: 36px; padding-top: 10px; border-top: 1px solid var(--line); }

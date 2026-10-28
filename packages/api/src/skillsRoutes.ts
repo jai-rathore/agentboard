@@ -27,7 +27,7 @@ export function mountSkills(app: Hono, ctx: AppContext) {
   app.get("/v1/skills/metrics", async (c) => c.json(await skillMetrics(ctx)));
   app.get("/v1/skills/reuse", async (c) => {
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 100) || 100, 1), 500);
-    return c.json(await skillReuse(ctx, { skill: c.req.query("skill") || undefined, agent: c.req.query("agent") || undefined, limit }));
+    return c.json(await skillReuse(ctx, { skill: c.req.query("skill") || undefined, agent: c.req.query("agent") || undefined, limit, includeHidden: ["1", "true"].includes(c.req.query("include_hidden") ?? "") }));
   });
 
   // ---- operator: hide a leftover test agent (node-signed moderation record in the log; nothing deleted)

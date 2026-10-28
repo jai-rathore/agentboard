@@ -414,7 +414,8 @@ export async function getSkill(ctx: AppContext, cid: string) {
   const runCids = (await ctx.db.query<any>(`SELECT cid FROM skill_runs WHERE skill_cid = $1 ORDER BY created_at DESC LIMIT 50`, [cid])).rows.map((r) => r.cid);
   const runs = [];
   for (const c of runCids) runs.push(toRecord(await rec(c)));
-  const allVerified = Number((await ctx.db.query<any>(`SELECT count(*)::int AS n FROM skill_runs r JOIN skills v ON v.cid = r.skill_cid WHERE v.slug = $1 AND r.success`, [s.slug])).rows[0]?.n ?? 0);
+  const all = (await ctx.db.query<any>(`SELECT count(*)::int AS n, count(*) FILTER (WHERE r.success)::int AS v FROM skill_runs r JOIN skills v ON v.cid = r.skill_cid WHERE v.slug = $1`, [s.slug])).rows[0];
+  const allVerified = Number(all?.v ?? 0), allRuns = Number(all?.n ?? 0);
   const skill = toRecord(await rec(cid));
   const body = skill.record.body;
   const prev = s.prev_cid ? (await rec(s.prev_cid)) : null;
@@ -432,7 +433,7 @@ export async function getSkill(ctx: AppContext, cid: string) {
     heal_run: healRun ? toRecord(healRun) : null,
     safety: { risk_flags: effectiveRiskFlags(body.skill), declared_flags: body.skill.risk_flags, approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, flags: g.flags })), gated_flags: GATED_FLAGS },
     time: { human_clicks: 0, approvals_per_run: gatedSteps(body.skill).length, recording_ms: recording, fastest_run_ms: fastest, agent_faster: recording != null && fastest != null && fastest < recording, approval_human_ms: APPROVAL_HUMAN_MS, verified_runs: verifiedRuns.length, saved_total_ms: savedTotal },
-    badge: { verified: verifiedRuns.length > 0 || Boolean(healRun && JSON.parse(healRun.body_text).success), replayed: runs.length, verified_runs_this_version: verifiedRuns.length, verified_runs_all_versions: allVerified, healed: Boolean(body.healed_from) },
+    badge: { verified: verifiedRuns.length > 0 || Boolean(healRun && JSON.parse(healRun.body_text).success), replayed: runs.length, runs_this_version: runs.length, verified_runs_this_version: verifiedRuns.length, runs_all_versions: allRuns, verified_runs_all_versions: allVerified, versions: versions.length, healed: Boolean(body.healed_from) },
     node: ctx.node.did,
   };
 }

@@ -119,7 +119,11 @@ describe("self-healing", () => {
     expect(b.skill.risk_flags).toEqual(["personal_data"]); // healing never touches params or flags
     expect(b.skill.steps[1].target).toBe("green Submit request button at the top right");
     expect(s2.prev_skill.skill.steps[1].target).toBe("blue Create ticket button");
-    expect(s2.badge).toMatchObject({ verified: true, healed: true });
+    expect(s2.badge).toMatchObject({ verified: true, healed: true, versions: 2, runs_this_version: 0, verified_runs_this_version: 0 });
+    // the list and the skill page header use the same all-versions count
+    const listed = (await node.req("GET", "/v1/skills")).body.skills.find((x: any) => x.cid === s2.skill.record.cid);
+    expect(listed.verified_runs).toBe(s2.badge.verified_runs_all_versions);
+    expect(s2.badge.runs_all_versions).toBeGreaterThanOrEqual(s2.badge.verified_runs_all_versions);
     expect(s2.heal_run.record.cid).toBe(r.body.run_cid);
     const old = (await node.req("GET", `/v1/skills/${skill1}`)).body;
     expect(old.latest_version).toBe(2);
@@ -300,6 +304,12 @@ describe("hiding test agents (signed, nothing deleted)", () => {
     const client = new AgentboardClient({ baseUrl: "http://agentboard.test", keyPair: agentJob.agent.kp, fetchImpl });
     await expect(client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "x@y.z" } })).rejects.toThrow(/not active|quota/);
     expect((await node.req("GET", `/v1/skills/reuse?agent=${encodeURIComponent(agentJob.did)}`)).body.runs[0].agent.status).toBe("hidden");
+    const dflt = (await node.req("GET", "/v1/skills/reuse")).body;
+    expect(dflt.runs.map((x: any) => x.agent?.did)).not.toContain(agentJob.did);
+    expect(dflt.summary.hidden_runs).toBeGreaterThan(0);
+    const all = (await node.req("GET", "/v1/skills/reuse?include_hidden=1")).body;
+    expect(all.runs.map((x: any) => x.agent?.did)).toContain(agentJob.did);
+    expect(all.runs.length).toBe(dflt.runs.length + dflt.summary.hidden_runs);
     const chain = (await node.req("GET", "/v1/log?limit=1000")).body.entries;
     expect(verifyChain(chain).ok).toBe(true);
   });
