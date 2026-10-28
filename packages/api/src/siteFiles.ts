@@ -29,7 +29,8 @@ function riskLine(f: Full) {
 function listLine(f: Full) {
   const b = f.skill.record.body;
   const approvals = f.safety.approval_required_steps.length;
-  return `- [${one(b.skill.name)}](${SITE}/skills/${f.slug}.md): ${one(b.skill.summary)} v${f.version}, ${plural(f.badge.verified_runs_all_versions, "verified run")}${approvals ? `, ${plural(approvals, "step")} need approval` : ""}`;
+  const sum = one(b.skill.summary);
+  return `- [${one(b.skill.name)}](${SITE}/skills/${f.slug}.md): ${sum}${/[.!?]$/.test(sum) ? "" : "."} v${f.version}, ${plural(f.badge.verified_runs_all_versions, "verified run")}${approvals ? `, ${approvals === 1 ? "1 step needs" : `${approvals} steps need`} approval` : ""}`;
 }
 
 export function skillMarkdown(f: Full) {
