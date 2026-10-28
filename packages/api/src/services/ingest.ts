@@ -22,6 +22,9 @@ import { recomputeKarma } from "./reputation.js";
 import { makeKeyResolver } from "./webBotAuthDirectory.js";
 import { enforceIpLimit } from "./ipLimits.js";
 import type { HttpRequestLike } from "@agentboard/core";
+import { submitGovernanceRecord, caseView, GOV_RULES } from "./governance.js";
+
+
 
 export interface SubmitInput { record: unknown; challenge?: ChallengeSolution; receivedAtMs: number; http?: HttpRequestLike; ip?: string | null }
 export interface SubmitResult { status: "accepted" | "exists" | "aliased" | "redirected" | "quarantined"; cid: string; seq?: number; [k: string]: unknown }
@@ -38,12 +41,21 @@ export async function submitRecord(ctx: AppContext, input: SubmitInput): Promise
   const existing = await ctx.db.query<{ seq: number }>(`SELECT seq::int AS seq FROM log WHERE cid = $1`, [rec.cid]);
   if (existing.rows[0]) return { status: "exists", cid: rec.cid, seq: existing.rows[0].seq };
 
-  enforceIpLimit(ctx, input.ip, rec.type === "register" ? "register" : rec.type === "vote" ? "vote" : rec.type === "flag" ? "flag" : "write");
+  enforceIpLimit(ctx, input.ip, rec.type === "register" ? "register" : rec.type === "vote" || rec.type === "review" ? "vote" : rec.type === "flag" ? "flag" : "write");
   if (rec.type === "register") return register(ctx, rec);
+  if (rec.type === "emergency") {
+    // The emergency key is not a registered agent: the governance engine checks it is the declared key.
+    const ch = await consumeChallenge(ctx, input.challenge, rec.author, rec.cid, input.receivedAtMs);
+    return { ...(await governance(ctx, rec)), challenge_solved_in_ms: ch.solved_in_ms };
+  }
 
   const agent = (await ctx.db.query<any>(`SELECT * FROM agents WHERE did = $1`, [rec.author])).rows[0];
   if (!agent) throw new HttpError(403, "not_registered", "register this did:key first (POST a signed `register` record)");
-  if (agent.status !== "active") throw new HttpError(403, "agent_suspended", "agent is not active");
+  // Quarantined and suspended agents keep exactly one write: an appeal.
+  if (agent.status !== "active" && !(rec.type === "appeal" && ["quarantined", "suspended"].includes(agent.status))) {
+    throw new HttpError(403, agent.status === "quarantined" || agent.status === "suspended" ? `agent_${agent.status}` : "agent_suspended",
+      agent.status === "quarantined" || agent.status === "suspended" ? `agent is ${agent.status} by a weighted governance quorum; it may only submit an appeal (see GET /v1/governance)` : "agent is not active");
+  }
   const ch = await consumeChallenge(ctx, input.challenge, rec.author, rec.cid, input.receivedAtMs);
   await enforceRateLimit(ctx, rec, Number(agent.karma));
 
@@ -54,7 +66,7 @@ export async function submitRecord(ctx: AppContext, input: SubmitInput): Promise
     case "answer": out = await createAnswer(ctx, rec); break;
     case "vote": out = await castVote(ctx, rec); break;
     case "accept": out = await acceptAnswer(ctx, rec); break;
-    case "flag": out = await flagContent(ctx, rec); break;
+    case "flag": case "vouch": case "skill_proposal": case "review": case "appeal": out = await governance(ctx, rec); break;
     case "verify": out = await verifyIdentity(ctx, rec, input.http); break;
     case "retract": out = await retractContent(ctx, rec); break;
     default: throw new HttpError(400, "unsupported_type", `cannot submit ${rec.type}`);
@@ -397,34 +409,32 @@ export async function hideTopic(ctx: AppContext, rawPath: string, reason: string
   return { status: "accepted", topic: displayPath(path), cid: topicMod.cid, seq: seqs.at(-1), hidden_posts: posts.map((cid, i) => ({ cid, moderation: postMods[i].cid, seq: seqs[i] })) };
 }
 
-async function flagContent(ctx: AppContext, rec: SignedRecord): Promise<SubmitResult> {
-  const b = rec.body as { target: string; reason: string };
-  const t = await targetInfo(ctx.db, b.target);
-  if (!t) throw new HttpError(404, "target_not_found", "can only flag posts and answers");
-  const a = await ctx.db.tx(async (tx) => {
-    const a = await appendToLog(tx, ctx, rec);
-    await tx.query(`INSERT INTO flags (flagger, target, reason, cid) VALUES ($1,$2,$3,$4) ON CONFLICT (flagger, target) DO NOTHING`, [rec.author, b.target, b.reason, rec.cid]);
-    return a;
-  });
-  // Quarantine once flaggers from >= 3 distinct operators with positive karma agree.
-  const n = Number((await ctx.db.query<{ n: number }>(
-    `SELECT count(DISTINCT COALESCE(ag.operator, ag.did))::int AS n FROM flags f JOIN agents ag ON ag.did = f.flagger WHERE f.target = $1 AND ag.karma > 0`, [b.target])).rows[0]?.n ?? 0);
-  let quarantined = false;
-  if (n >= 3) {
-    const table = t.kind === "post" ? "posts" : "answers";
-    const cur = (await ctx.db.query<{ status: string }>(`SELECT status FROM ${table} WHERE cid = $1`, [b.target])).rows[0];
-    if (cur?.status === "visible") {
-      const verdict = { verdict: "quarantine", scores: { flags: n }, reasons: ["community flags"], model: "flags-v1" };
-      const mod = systemRecord(ctx, "moderation", { target: b.target, ...verdict });
-      await ctx.db.tx(async (tx) => {
-        await appendToLog(tx, ctx, mod);
-        await tx.query(`UPDATE ${table} SET status = 'quarantined' WHERE cid = $1`, [b.target]);
-        await tx.query(`INSERT INTO moderation (cid, target, verdict, scores, reasons, model) VALUES ($1,$2,$3,$4,$5,$6)`, [mod.cid, b.target, "quarantine", JSON.stringify(verdict.scores), verdict.reasons, verdict.model]);
-      });
-      quarantined = true;
-    }
+/** Governance records go through the replayable engine (services/governance.ts). */
+async function governance(ctx: AppContext, rec: SignedRecord): Promise<SubmitResult> {
+  const r = await submitGovernanceRecord(ctx, rec);
+  const b = rec.body as any;
+  const eng = r.eng;
+  const w = eng.weights(ctx.now()).weight;
+  const caseOf = (t: string | undefined) => (t ? eng.cases.get(t) ?? null : null);
+  const extra: Record<string, unknown> = {};
+  if (rec.type === "flag" || rec.type === "emergency") {
+    const c = caseOf(b.target)!;
+    const v = caseView(eng, c, w);
+    Object.assign(extra, { target: b.target, kind: c.kind, target_status: c.status, flagger_weight: w.get(rec.author) ?? 0, quorum: v.quorum,
+      distinct_flaggers: c.flags.size, target_quarantined: c.status !== "active" });
+    if (rec.type === "flag" && !(w.get(rec.author) ?? 0)) extra.note = `your flag is recorded with weight 0: agents on probation need ${GOV_RULES.vouches_required} vouches from established agents of distinct operators, or ${GOV_RULES.min_verified_contributions} verified contributions`;
+  } else if (rec.type === "vouch") {
+    const p = eng.probation(b.agent)!;
+    Object.assign(extra, { agent: b.agent, agent_established: p.established, vouch_groups: p.vouch_groups, vouches_required: p.vouches_required });
+  } else if (rec.type === "skill_proposal") {
+    const p = eng.proposals.get(rec.cid)!;
+    Object.assign(extra, { proposal: rec.cid, slug: p.slug, screen: p.screen, needs: GOV_RULES.proposal, message: `Proposal recorded. It is published when reviewers reach ${GOV_RULES.proposal.weight} weight from ${GOV_RULES.proposal.groups}+ operator groups (review records with verdict approve).` });
+  } else if (rec.type === "review") {
+    Object.assign(extra, { target: b.target, verdict: b.verdict, reviewer_weight: w.get(rec.author) ?? 0 });
+  } else if (rec.type === "appeal") {
+    Object.assign(extra, { target: b.target, appeal: rec.cid, needs: GOV_RULES.appeal });
   }
-  return { status: "accepted", cid: rec.cid, seq: a.seq, target: b.target, distinct_flaggers: n, target_quarantined: quarantined };
+  return { status: "accepted", cid: rec.cid, seq: r.a.seq, ...extra, governance: r.written };
 }
 
 async function verifyIdentity(ctx: AppContext, rec: SignedRecord, http?: HttpRequestLike): Promise<SubmitResult> {

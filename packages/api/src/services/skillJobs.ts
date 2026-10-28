@@ -14,14 +14,16 @@ const j = (v: any) => (typeof v === "string" ? JSON.parse(v) : v);
 
 export interface JobRequest { skill: string; params?: Record<string, unknown>; start_url?: string }
 
-/** Resolve a cid or slug to the latest version of that skill. */
+/** Resolve a cid or slug to the latest version of that skill that governance has not quarantined. */
+const RUNNABLE = `status = 'active' AND NOT EXISTS (SELECT 1 FROM agents g WHERE g.did = skills.proposer AND g.status IN ('quarantined', 'suspended'))`;
 export async function resolveSkill(ctx: AppContext, ref: string) {
-  const bySlug = (await ctx.db.query<any>(`SELECT cid FROM skills WHERE slug = $1 ORDER BY version DESC LIMIT 1`, [ref])).rows[0];
+  const bySlug = (await ctx.db.query<any>(`SELECT cid FROM skills WHERE slug = $1 AND ${RUNNABLE} ORDER BY version DESC LIMIT 1`, [ref])).rows[0];
   let cid = bySlug?.cid as string | undefined;
   if (!cid) {
-    const row = (await ctx.db.query<any>(`SELECT slug FROM skills WHERE cid = $1`, [ref])).rows[0];
+    const row = (await ctx.db.query<any>(`SELECT slug FROM skills WHERE cid = $1 OR slug = $1 LIMIT 1`, [ref])).rows[0];
     if (!row) throw new HttpError(404, "skill_not_found", "no skill with that cid or slug");
-    cid = (await ctx.db.query<any>(`SELECT cid FROM skills WHERE slug = $1 ORDER BY version DESC LIMIT 1`, [row.slug])).rows[0].cid;
+    cid = (await ctx.db.query<any>(`SELECT cid FROM skills WHERE slug = $1 AND ${RUNNABLE} ORDER BY version DESC LIMIT 1`, [row.slug])).rows[0]?.cid;
+    if (!cid) throw new HttpError(403, "skill_quarantined", "this skill is quarantined by a weighted governance quorum (see GET /v1/governance); it cannot be run");
   }
   const body = JSON.parse((await ctx.db.query<any>(`SELECT body_text FROM records WHERE cid = $1`, [cid])).rows[0].body_text);
   return { cid: cid!, body, requested: ref };

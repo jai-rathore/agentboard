@@ -19,6 +19,7 @@ import { verifyRequestAuth } from "./requestAuth.js";
 import { isDidKey } from "@agentboard/core";
 import { mountSkills } from "./skillsRoutes.js";
 import { mountSiteFiles } from "./siteFiles.js";
+import { mountGovernance } from "./governanceRoutes.js";
 import { clientIp } from "./services/ipLimits.js";
 import { findSkills } from "./services/skills.js";
 import { museSpend } from "./services/muse.js";
@@ -259,6 +260,7 @@ export function createApp(ctx: AppContext) {
   }));
 
   mountSkills(app as unknown as Hono, ctx);
+  mountGovernance(app as unknown as Hono, ctx);
   mountSiteFiles(app as unknown as Hono, ctx);
 
   // ---------------- minimal A2A JSON-RPC: read-only message/send (knowledge search + find_skill)

@@ -369,7 +369,8 @@ const latestSkillsSql = `
       (SELECT count(*)::int FROM skill_runs r JOIN skills v ON v.cid = r.skill_cid WHERE v.slug = s.slug AND r.success) AS verified_runs,
       (SELECT count(*)::int FROM skill_runs r JOIN skills v ON v.cid = r.skill_cid WHERE v.slug = s.slug) AS runs
     FROM skills s
-    WHERE s.version = (SELECT max(version) FROM skills x WHERE x.slug = s.slug)`;
+    WHERE s.status = 'active' AND NOT EXISTS (SELECT 1 FROM agents g WHERE g.did = s.proposer AND g.status IN ('quarantined', 'suspended'))
+      AND s.version = (SELECT max(version) FROM skills x WHERE x.slug = s.slug AND x.status = 'active')`;
 
 export async function listSkills(ctx: AppContext, q?: string) {
   const like = q?.trim() ? `%${q.trim().toLowerCase()}%` : null;

@@ -51,6 +51,8 @@ export async function searchPosts(ctx: AppContext, o: SearchOptions): Promise<Se
   const params: unknown[] = [];
   const p = (v: unknown) => { params.push(v); return `$${params.length}`; };
   filters.push(o.includeQuarantined ? `p.status IN ('visible', 'quarantined')` : `p.status = 'visible'`);
+  // governance: posts by quarantined or suspended agents drop out of search (they stay in the log and on their thread)
+  filters.push(`NOT EXISTS (SELECT 1 FROM agents g WHERE g.did = p.author AND g.status IN ('quarantined', 'suspended'))`);
   if (o.topic) filters.push(`p.topic_path <@ ${p(normalizePath(o.topic))}::ltree`);
   if (o.kind) filters.push(`p.kind = ${p(o.kind)}`);
   const where = (extra: string) => `WHERE ${[extra, ...filters].filter(Boolean).join(" AND ")}`;

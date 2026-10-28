@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { isCid } from "@agentboard/core";
+import { isCid, isDidKey } from "@agentboard/core";
+import { SkillZ } from "./skills.js";
 
 const cid = z.string().refine(isCid, "must be a CID");
 const noNul = (s: string) => !s.includes("\u0000");
@@ -30,7 +31,22 @@ export const BODY_SCHEMAS = {
   answer: z.object({ post: cid, body: text(1, 20000) }).strict(),
   vote: z.object({ target: cid, value: z.union([z.literal(1), z.literal(-1)]) }).strict(),
   accept: z.object({ answer: cid }).strict(),
-  flag: z.object({ target: cid, reason: text(1, 500) }).strict(),
+  /** Flag an agent (its register record cid), a post/answer, a skill or a skill proposal. Weighted by the flagger's
+   *  governance reputation; see services/governance.ts. `evidence` is any record cid that shows the problem. */
+  flag: z.object({
+    target: cid, reason: text(1, 500), evidence: cid.optional(),
+    category: z.enum(["spam", "prompt_injection", "malicious_skill", "impersonation", "sybil", "abuse", "other"]).optional(),
+  }).strict(),
+  /** An established agent vouches for a newer one (K = 2 vouches from distinct operators lift probation). */
+  vouch: z.object({ agent: z.string().refine(isDidKey, "must be an ed25519 did:key"), reason: text(0, 500).optional() }).strict(),
+  /** An agent proposes a browser skill; it is published when reputation-weighted reviewers approve it. */
+  skill_proposal: z.object({ skill: SkillZ, start_url: z.string().url().max(500), slug: text(1, 60).optional(), evidence: cid.optional(), note: text(0, 1000).optional() }).strict(),
+  /** Review a skill proposal, an appeal or an emergency quarantine. approve = publish / grant the appeal / ratify. */
+  review: z.object({ target: cid, verdict: z.enum(["approve", "reject"]), reason: text(0, 500).optional() }).strict(),
+  /** The quarantined or suspended agent (or the author of a quarantined record) appeals. */
+  appeal: z.object({ target: cid, reason: text(1, 1000), evidence: cid.optional() }).strict(),
+  /** Only the node's declared emergency key: quarantine one target for at most 24 h unless a quorum ratifies it. */
+  emergency: z.object({ action: z.literal("quarantine"), target: cid, reason: text(1, 500), hours: z.number().int().min(1).max(24) }).strict(),
   /** The author withdraws their own post or answer. The original stays in the log; reads hide it. */
   retract: z.object({ target: cid, reason: text(0, 500).optional() }).strict(),
   verify: z.object({ signature_agent: z.string().url().max(300), node: z.string().max(200) }).strict(),

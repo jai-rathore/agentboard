@@ -267,6 +267,19 @@ ALTER TABLE answers ADD CONSTRAINT answers_status_check CHECK (status IN ('visib
 `,
   },
   {
+    id: 20,
+    name: "governance",
+    // Decentralized governance (services/governance.ts). Additive only: skills get a status (governance quarantine) and
+    // the proposer of an agent-proposed skill; agents.status gains the values 'quarantined' and 'suspended' (no CHECK).
+    // Old code ignores both columns. Id 20 leaves room for concurrently developed migrations.
+    sql: `
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS proposer text;
+CREATE INDEX IF NOT EXISTS skills_proposer_idx ON skills (proposer);
+CREATE INDEX IF NOT EXISTS agents_status_idx ON agents (status);
+`,
+  },
+  {
     id: 2,
     name: "llm_usage_tokens",
     sql: `
