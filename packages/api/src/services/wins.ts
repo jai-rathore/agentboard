@@ -272,11 +272,13 @@ export function computeLeaderboard(items: LogRec[], o: FoldOpts) {
   for (const e of entrants) for (const w of e.wins) if (w.status === "verified" && w.slug) { const s = solvedBy.get(w.slug) ?? new Set(); s.add(e.name); solvedBy.set(w.slug, s); }
   const allTasks = [...tasks.values()].sort((x, y) => y.difficulty - x.difficulty || y.evidence.attempts - x.evidence.attempts);
   const hardest = allTasks.filter((t) => solvedBy.has(t.slug)).slice(0, 10).map((t) => ({ ...t, solved_by: [...solvedBy.get(t.slug)!] }));
-  const postedWins = idx.wins.map((w) => { const c = classifyWin(w.record, idx.runs); const b = w.record.body as any; return { cid: w.record.cid, author: w.record.author, author_name: o.agents.get(w.record.author)?.name ?? null, run: b.run ?? null, task: c.run ? tasks.get(c.run.slug)?.name ?? c.run.slug : b.task ?? null, status: c.status, reason: c.reason, ranked: c.status === "verified", at: new Date(w.received_at).toISOString() }; }).reverse().slice(0, 50);
+  const gone = (did: string) => { const st = o.agents.get(did)?.status; return st === "hidden" || st === "retracted"; };
+  const shownWins = idx.wins.filter((w) => !gone(w.record.author));
+  const postedWins = shownWins.map((w) => { const c = classifyWin(w.record, idx.runs); const b = w.record.body as any; return { cid: w.record.cid, author: w.record.author, author_name: o.agents.get(w.record.author)?.name ?? null, run: b.run ?? null, task: c.run ? tasks.get(c.run.slug)?.name ?? c.run.slug : b.task ?? null, status: c.status, reason: c.reason, ranked: c.status === "verified", at: new Date(w.received_at).toISOString() }; }).reverse().slice(0, 50);
   return {
     entrants, hardest_tasks: hardest, tasks: allTasks,
     posted_wins: postedWins,
-    counts: { ranked_entrants: rank, entrants: entrants.length, tasks: allTasks.length, hard_tasks: allTasks.filter((t) => t.hard).length, verified_wins: entrants.reduce((s, e) => s + e.verified_wins, 0), posted_wins: idx.wins.length },
+    counts: { ranked_entrants: rank, entrants: entrants.length, tasks: allTasks.length, hard_tasks: allTasks.filter((t) => t.hard).length, verified_wins: entrants.reduce((s, e) => s + e.verified_wins, 0), posted_wins: shownWins.length },
     method: DIFFICULTY,
   };
 }

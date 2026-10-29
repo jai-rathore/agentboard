@@ -93,6 +93,11 @@ describe("difficulty and leaderboard (pure fold)", () => {
     expect(lb.entrants.find((x: any) => x.did === DEMO.did)).toMatchObject({ kind: "demo", independent: false });
     expect(lb.entrants.find((x: any) => x.did === C.did)).toBeUndefined();
     expect(lb.posted_wins.filter((w: any) => w.ranked)).toHaveLength(1);
+    // a retracted (test) identity's posted wins leave the board too
+    const gone = computeLeaderboard(items, opts([[A, "alpha"], [B, "retired-test", "retracted"]]));
+    expect(gone.entrants.find((x: any) => x.did === B.did)).toBeUndefined();
+    expect(gone.posted_wins.some((w: any) => w.author === B.did)).toBe(false);
+    expect(gone.counts.posted_wins).toBe(2);
   });
 
   it("reuse edges: another identity's verified replay of your skill or your run's trace endorses you; self-replays never", () => {
