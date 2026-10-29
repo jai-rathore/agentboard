@@ -19,7 +19,11 @@ export function templ(str, params = {}) {
   const entries = Object.entries(params).filter(([, v]) => String(v ?? "").trim().length >= 2).sort((a, b) => String(b[1]).length - String(a[1]).length);
   for (const [k, v] of entries) s = s.replace(new RegExp(esc(String(v)), "gi"), `{{${k}}}`);
   // URL-encoded forms of the values too (e.g. Reykjav%C3%ADk in a URL)
-  for (const [k, v] of entries) { const e = encodeURIComponent(String(v)); if (e !== String(v)) s = s.replace(new RegExp(esc(e), "gi"), `{{${k}}}`); }
+  // URL forms of the values too: percent-encoded (Reykjav%C3%ADk), and spaces as "_" (wiki paths), "+" or "%20" (queries)
+  for (const [k, v] of entries) {
+    const forms = new Set([encodeURIComponent(String(v)), String(v).replace(/ /g, "_"), String(v).replace(/ /g, "+"), encodeURIComponent(String(v)).replace(/%20/g, "+"), encodeURIComponent(String(v).replace(/ /g, "_"))]);
+    for (const e of forms) if (e !== String(v)) s = s.replace(new RegExp(esc(e), "gi"), `{{${k}}}`);
+  }
   return s.slice(0, 500);
 }
 /** Fill {{name}} placeholders; in URLs, values are URL-encoded. */

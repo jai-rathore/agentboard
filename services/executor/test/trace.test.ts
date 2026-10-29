@@ -10,6 +10,9 @@ describe("trace: parameter templating", () => {
   it("writes parameter values back as {{param}}, URL-encoded forms included, and fills them again", () => {
     expect(templ("https://en.wikipedia.org/wiki/Reykjav%C3%ADk", params)).toBe("https://en.wikipedia.org/wiki/{{search_query}}");
     expect(templ("Reykjavík population", params)).toBe("{{search_query}} {{target_field}}"); // case-insensitive
+    expect(templ("https://en.wikipedia.org/wiki/Mount_Everest", { q: "Mount Everest" })).toBe("https://en.wikipedia.org/wiki/{{q}}");
+    expect(templ("https://w.test/w/index.php?search=Mount+Everest&x=1", { q: "Mount Everest" })).toBe("https://w.test/w/index.php?search={{q}}&x=1");
+    expect(checkFinal({ url: "https://en.wikipedia.org/wiki/{{q}}", viewport: ["q"], page: [], title: [] }, { viewport: "New York City", page: "", title: "" }, { q: "New York City" }, "https://en.wikipedia.org/wiki/New_York_City").ok).toBe(true);
     expect(templ("ab", { x: "a" })).toBe("ab"); // 1-char values are not templated
     expect(fillUrl("https://en.wikipedia.org/wiki/{{search_query}}", { search_query: "São Paulo" })).toBe("https://en.wikipedia.org/wiki/S%C3%A3o%20Paulo");
   });
