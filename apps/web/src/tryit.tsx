@@ -43,6 +43,7 @@ export function TryItNow({ slug: want, params: wantParams, title = true }: { slu
   const [st, setSt] = useState<Status | null>(null);
   const [phase, setPhase] = useState<Phase>({ k: "idle" });
   const [vals, setVals] = useState<Record<string, string>>({});
+  const [latest, setLatest] = useState<Omit<Cached, "reason"> | null>(null);
   // re-read the caps after a run starts or falls back, so "left today" stays current
   useEffect(() => { if (phase.k !== "work") get<Status>("/v1/skills/public-replay").then(setSt, () => {}); }, [phase.k]);
   const sk = st?.skills.find((s) => (want ? s.slug === want : s.eligible)) ?? (want ? { slug: want, eligible: true, params: wantParams } : undefined);
@@ -89,13 +90,14 @@ export function TryItNow({ slug: want, params: wantParams, title = true }: { slu
     {(phase.k === "idle" || phase.k === "error" || phase.k === "work") && <button className="btn primary try-btn" disabled={busy || params.some((x: any) => !(vals[x.name] ?? "").trim())} onClick={start}>{phase.k === "work" ? "Working…" : "▶ Try it now"}</button>}
     {phase.k === "work" && <p className="small muted">{phase.msg}</p>}
     {phase.k === "error" && <p className="err small">{phase.msg}</p>}
-    {phase.k === "live" && <LiveJob id={phase.id} onStalled={(why) => fallback(why)} />}
+    {phase.k === "live" && <LiveJob id={phase.id} onStalled={(why) => fallback(why)} onUnverified={() => { latestVerified(sk.slug).then((l) => l && setLatest(l), () => {}); }} />}
+    {phase.k === "live" && latest && <div className="try-cached"><p className="small"><b>This run did not verify</b> (live sites can rate-limit or change; the signed record above says so honestly). The latest verified run of this skill:</p><CachedBody c={{ reason: "", ...latest }} /></div>}
     {phase.k === "cached" && <CachedRun c={phase.c} />}
     <p className="small muted try-caps">Capped: {st ? <>{st.per_ip_per_day} per network per day, {st.remaining_today} of {st.daily_cap} left on the node today (resets {resetAt()})</> : "a few per network per day"}. Only allowlisted skills that never submit, buy, send or delete. The same thing over MCP is <code>try_skill</code>.</p>
   </section>;
 }
 
-function LiveJob({ id, onStalled }: { id: string; onStalled: (why: string) => void }) {
+function LiveJob({ id, onStalled, onUnverified }: { id: string; onStalled: (why: string) => void; onUnverified: () => void }) {
   const [job, setJob] = useState<any>(null), [err, setErr] = useState("");
   const t0 = useRef(Date.now());
   const [, tick] = useState(0);
@@ -112,6 +114,7 @@ function LiveJob({ id, onStalled }: { id: string; onStalled: (why: string) => vo
         if (DONE.includes(j.status)) {
           // never reached the executor (busy or down): show the latest verified run instead of a bare failure
           if (j.status === "failed" && !(j.turns?.length) && !j.verdict) onStalled(j.message ?? "the executor could not start this run");
+          else if (!j.verdict?.success) onUnverified();
           return;
         }
       } catch (e) { if (!stop) setErr((e as Error).message); }
@@ -141,11 +144,17 @@ function LiveJob({ id, onStalled }: { id: string; onStalled: (why: string) => vo
 function CachedRun({ c }: { c: Cached }) {
   return <div className="try-cached">
     <p className="small"><b>Live replay is paused right now</b> <span className="muted">({c.reason})</span>. Caps reset at {resetAt()}.</p>
+    <CachedBody c={c} />
+  </div>;
+}
+
+function CachedBody({ c }: { c: Cached }) {
+  return <>
     {c.run ? <>
       <p className="small">Here is the <b>latest verified run</b> of this skill instead, {c.kind === "publish" ? "the run that verified the recording when the skill was published" : "a signed replay"}{c.at ? <>, from {new Date(c.at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</> : null}. It is a cached run, not a new replay.</p>
       {(c.gif || c.shot) && <img className="media try-frame" src={c.gif ?? c.shot!} alt="steps of the latest verified run" />}
       {c.evidence && <div className="verdict-box good"><p><b>✓ Verified</b>{c.model ? <> by {modelName(c.model)}</> : null}: {c.evidence}</p></div>}
       <p className="small"><Link to={c.page!}><b>→ Signed run record</b></Link> (check its signature in your browser)</p>
     </> : <p className="small muted">No verified run of this skill is stored yet.</p>}
-  </div>;
+  </>;
 }
