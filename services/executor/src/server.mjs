@@ -124,21 +124,6 @@ async function runJob(id) {
   await chain;
 }
 
-// ---- warm browser: one Chromium kept between runs (each run gets its own fresh context); recycled every 25 runs
-// or when it dies, and only when no run is using it.
-const warm = { browser: null, uses: 0, active: 0, launching: null };
-async function acquireBrowser() {
-  if (warm.browser && (!warm.browser.isConnected() || (warm.uses >= 25 && warm.active === 0))) { const old = warm.browser; warm.browser = null; if (old.isConnected()) old.close().catch(() => {}); }
-  if (!warm.browser) {
-    warm.launching ??= chromium.launch({ args: CHROMIUM_ARGS }).then((b) => { warm.browser = b; warm.uses = 0; b.on("disconnected", () => { if (warm.browser === b) warm.browser = null; }); return b; }).finally(() => { warm.launching = null; });
-    await warm.launching;
-  }
-  warm.uses++; warm.active++;
-  return warm.browser;
-}
-const releaseBrowser = () => { warm.active = Math.max(0, warm.active - 1); };
-if (process.env.EXECUTOR_PREWARM !== "0") setTimeout(() => acquireBrowser().then(releaseBrowser, (e) => console.warn(`[executor] prewarm failed: ${e.message}`)), 1000);
-
 async function loadTarget(m) {
   if (m.draft_id) { const d = await api(`/v1/skills/drafts/${encodeURIComponent(m.draft_id)}`); return { skill: d.skill, start_url: m.start_url || d.source.start_url || d.skill.start_url_hint, target: { draft_id: d.id } }; }
   if (m.skill_cid) { const s = await api(`/v1/skills/${encodeURIComponent(m.skill_cid)}`); const b = s.skill.record.body; return { skill: b.skill, start_url: m.start_url || b.source.start_url, target: { skill_cid: m.skill_cid }, trace: m.no_trace ? null : s.trace ?? null }; }
@@ -158,8 +143,12 @@ async function replay(m, send, ask, isAborted) {
   let humanMs = 0;
   const origin = new URL(start_url).origin;
   stats.runs++;
-  send({ type: "status", message: `${warm.browser?.isConnected() ? "Opening a fresh browser context" : "Launching Chromium"} for "${skill.name}"`, params, start_url });
-  const browser = await acquireBrowser();
+  // a fresh Chromium per run: the executor runs it with --single-process (memory), where closing a context ends the
+  // browser, so a warm browser cannot be shared between runs
+  send({ type: "status", message: `Launching Chromium for "${skill.name}"`, params, start_url });
+  const tLaunch = Date.now();
+  const browser = await chromium.launch({ args: CHROMIUM_ARGS });
+  const launchMs = Date.now() - tLaunch;
   let context = null;
   try {
     context = await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
@@ -198,16 +187,18 @@ async function replay(m, send, ask, isAborted) {
     if (usableTrace(trace)) {
       replayInfo.mode = "trace"; replayInfo.trace_steps = trace.steps.length;
       send({ type: "status", message: `Replaying the recorded trace (${trace.steps.length} steps, no model calls)` });
+      const tTrace = Date.now(), stepMs = [];
       for (let i = 0; i < trace.steps.length; i++) {
-        const s = trace.steps[i];
+        const s = trace.steps[i], tStep = Date.now();
         if (isAborted()) throw Object.assign(new Error("viewer disconnected"), { code: "aborted" });
         const r = await runTraceStep(page, s, params, { origin, skill, ask, send, actions, history, index: i, W, H, selectOption, inspect, execute, onHuman: (ms) => { humanMs += ms; } });
         if (!r.ok) { replayInfo.mode = "trace+recovery"; replayInfo.failed_step = i + 1; replayInfo.failed_reason = r.reason.slice(0, 300); break; }
         rec({ ...structuredClone(s), changes_url: undefined });
         recorded[recorded.length - 1]._before = r.before; recorded[recorded.length - 1].changes_url = r.changed;
-        replayInfo.trace_steps_done = i + 1;
+        replayInfo.trace_steps_done = i + 1; stepMs.push(Date.now() - tStep);
         // no mid-trace screenshots: the run's evidence is the final screenshot (and the signed action log)
       }
+      send({ type: "status", message: `Trace replayed in ${Date.now() - tTrace} ms (steps ${stepMs.join(", ")} ms; page open ${tTrace - t0} ms after the run started, Chromium launch ${launchMs} ms)` });
       if (replayInfo.mode === "trace+recovery") {
         history.push(`Recorded trace: steps 1-${replayInfo.trace_steps_done} were done without the model; step ${replayInfo.failed_step} (${describeTraceStep(trace.steps[replayInfo.failed_step - 1])}) failed: ${replayInfo.failed_reason}. Continue the task from the current screen.`);
         send({ type: "status", message: `Trace step ${replayInfo.failed_step} failed (${replayInfo.failed_reason.slice(0, 120)}); recovering with the model` });
@@ -367,8 +358,7 @@ async function replay(m, send, ask, isAborted) {
     stats.failed++;
     throw e;
   } finally {
-    await context?.close().catch(() => {});
-    releaseBrowser();
+    await browser.close().catch(() => {});
   }
 }
 
