@@ -7,6 +7,7 @@
  * locator or post-condition fails, the executor falls back to the model loop from that step (the self-heal).
  */
 import { fill, approvalFor, nameOf } from "./policy.mjs";
+import { scrollToTextInPage } from "./click.mjs";
 
 export const TRACE_VERSION = 1;
 export const MAX_TRACE_STEPS = 60;

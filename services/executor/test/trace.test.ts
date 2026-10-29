@@ -106,6 +106,8 @@ describe.skipIf(!chromium)("trace: replay in headless Chromium with no model", (
     const c = ctx();
     for (const [i, s] of steps.entries()) expect(await runTraceStep(r, s, P2, { ...c, index: i })).toMatchObject({ ok: true });
     expect(new URL(r.url()).pathname).toBe("/wiki/Oslo");
+    expect(await runTraceStep(r, { url: "x", action: "scroll_to_text", text: "{{f}}", changes_url: false }, { ...P2, f: "Population" }, c)).toMatchObject({ ok: true });
+    expect(await runTraceStep(r, { url: "x", action: "scroll_to_text", text: "Elevation", changes_url: false }, P2, c)).toMatchObject({ ok: false });
     expect(checkFinal(final, await r.evaluate(pageTextInPage), { ...P2, target_field: "Population" }, r.url())).toMatchObject({ ok: true });
     expect(c.actions.every((a: any) => a.turn === 0)).toBe(true);
     expect(await locate(r, { tag: "a", role: "link", name: "Nope", text: "Nope", css: "#nope", attrs: {} }, P2, 300)).toBeNull();
