@@ -322,7 +322,7 @@ async function replay(m, send, ask, isAborted) {
       const got = await extractWith(stored);
       if (stored && got != null) { recipe = stored; value = got; }
     }
-    const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `row "${fillText(recipe.label, params).slice(0, 80)}"${recipe.offset ? ` +${recipe.offset}` : ""}` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier" };
+    const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `infobox/table row "${fillText(recipe.label, params).slice(0, 80)}${recipe.sub ? ` › ${recipe.sub}` : ""}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier" };
     // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
     const steps = cleanSteps(recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })));
     const runTrace = verdictFull.success && steps.length ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: finalChecks(texts, params, page.url()), ...(recipe ? { extract: recipe } : { no_value: true }) } : null;

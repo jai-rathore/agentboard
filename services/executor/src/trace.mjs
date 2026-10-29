@@ -285,7 +285,8 @@ export function deriveRecipeInPage({ candidates, labels }) {
         const i = rows.indexOf(row);
         for (let k = 0; i >= 0 && k <= Math.min(i, 8); k++) {
           const th = rows[i - k].querySelector("th");
-          if (th && labels.some((l) => low(th.innerText).includes(low(l)))) return { kind: "row", label: norm(th.innerText).slice(0, 200), offset: k, sample: norm(cell.innerText).slice(0, 300), candidate: c };
+          const subTh = k > 0 ? row.querySelector("th") : null;
+          if (th && labels.some((l) => low(th.innerText).includes(low(l)))) return { kind: "row", label: norm(th.innerText).slice(0, 200), offset: k, ...(subTh ? { sub: norm(subTh.innerText).replace(/^[•·\-\s]+/, "").slice(0, 120) } : {}), sample: norm(cell.innerText).slice(0, 300), candidate: c };
         }
         const own = row?.querySelector("th");
         if (own) return { kind: "row", label: norm(own.innerText).slice(0, 200), offset: 0, sample: norm(cell.innerText).slice(0, 300), candidate: c };
@@ -304,12 +305,19 @@ export function applyRecipeInPage({ recipe, scroll }) {
   if (recipe.kind === "css") { const el = document.querySelector(recipe.css); show(el); return el ? norm(el.innerText || el.textContent).slice(0, 1000) : null; }
   if (recipe.kind === "row") {
     const want = low(recipe.label);
-    const pick = (list) => list.find((x) => low(x.innerText) === want) ?? list.find((x) => low(x.innerText).startsWith(want)) ?? list.find((x) => low(x.innerText).includes(want));
+    const pick1 = (list) => list.find((x) => low(x.innerText) === want) ?? list.find((x) => low(x.innerText).startsWith(want)) ?? list.find((x) => low(x.innerText).includes(want));
+    // a fact box (infobox / sidebar) first: an article can have later tables with the same label
+    const factBox = (x) => Boolean(x.closest(".infobox, [class*='infobox'], aside, [role=complementary]"));
+    const pick = (list) => pick1(list.filter(factBox)) ?? pick1(list);
     const th = pick([...document.querySelectorAll("th")]);
     if (th) {
       const rows = [...th.closest("table").querySelectorAll("tr")], i = rows.indexOf(th.closest("tr"));
       // the recorded offset first; a header row without a value cell looks a few rows further (infobox sub-rows)
-      const tryRows = [i + (recipe.offset || 0), i, i + 1, i + 2, i + 3].filter((k, x, a) => k >= i && a.indexOf(k) === x);
+      // a sub-row label ("Metro" under "Population") wins over the recorded offset when the page has it
+      const block = []; for (const r of rows.slice(i + 1, i + 10)) { if (!r.querySelector("td")) break; block.push(r); } // rows up to the next header
+      const subRow = recipe.sub ? block.find((r) => low(r.querySelector("th")?.innerText).replace(/^[•·\-\s]+/, "").startsWith(low(recipe.sub))) : null;
+      // the label's own value cell first (e.g. "Elevation"); for a header row ("Population (2024)") the sub-row, then the offset
+      const tryRows = [i, subRow ? rows.indexOf(subRow) : -1, i + (recipe.offset || 0), i + 1, i + 2, i + 3].filter((k, x, a) => k >= i && a.indexOf(k) === x);
       for (const k of tryRows) { const td = rows[k]?.querySelector("td"); if (td && norm(td.innerText)) { show(td); return norm(td.innerText).slice(0, 1000); } }
     }
     const dt = pick([...document.querySelectorAll("dt")]);
@@ -321,14 +329,16 @@ export function applyRecipeInPage({ recipe, scroll }) {
 /** Values worth looking for in a model's answer: **bold** spans, versions, numbers (longest first), minus the inputs. */
 export function answerCandidates(answer, params = {}) {
   const a = String(answer ?? "");
-  const out = [];
+  const out = [], years = [];
   for (const m of a.matchAll(/\*\*([^*]{1,120})\*\*/g)) out.push(m[1].trim());
   for (const m of a.matchAll(new RegExp(VALUE_RE.version, "g"))) out.push(m[0]);
-  for (const m of a.matchAll(/\d[\d,]*(?:\.\d+)?/g)) if (m[0].replace(/\D/g, "").length >= 2) out.push(m[0]);
+  // numbers in the order the answer mentions them (the first is usually the one asked for); bare years last
+  for (const m of a.matchAll(/\d[\d,]*(?:\.\d+)?/g)) if (m[0].replace(/\D/g, "").length >= 2) (/^(1[5-9]|20)\d\d$/.test(m[0]) ? years : out).push(m[0]);
+  out.push(...years);
   const inputs = Object.values(params).map((v) => String(v).toLowerCase());
   const seen = new Set();
   return out.map((s) => s.replace(/[.,;:]+$/, "").trim()).filter((s) => s.length >= 1 && !inputs.includes(s.toLowerCase()) && !seen.has(s) && seen.add(s))
-    .sort((x, y) => Number(/\d/.test(y)) - Number(/\d/.test(x)) || y.length - x.length).slice(0, 12);
+    .slice(0, 12);
 }
 
 /** The value regex for a sample: versions and numbers are generalized; other text is returned whole. */
@@ -357,7 +367,7 @@ export function storeRecipe(r, params) {
   const regex = regexFor(r.candidate);
   // a label that names an input keeps only the placeholder ("{{target_field}}", not "{{target_field}} (2023)[2]"): matched as a prefix
   const label = r.kind === "row" ? (templ(r.label, params).match(/\{\{\s*[a-z0-9_]+\s*\}\}/i)?.[0] ?? templ(r.label, params)) : "";
-  return { kind: r.kind, ...(r.kind === "row" ? { label: label.slice(0, 200), offset: Math.max(0, Math.min(10, r.offset | 0)) } : { css: String(r.css).slice(0, 320) }), ...(regex ? { regex } : {}), sample: String(r.sample ?? "").slice(0, 300) };
+  return { kind: r.kind, ...(r.kind === "row" ? { label: label.slice(0, 200), offset: Math.max(0, Math.min(10, r.offset | 0)), ...(r.sub ? { sub: String(r.sub).slice(0, 120) } : {}) } : { css: String(r.css).slice(0, 320) }), ...(regex ? { regex } : {}), sample: String(r.sample ?? "").slice(0, 300) };
 }
 export const fillRecipe = (r, params) => (r.kind === "row" ? { ...r, label: fillText(r.label, params) } : r);
 
