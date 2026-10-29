@@ -7,7 +7,7 @@ import { generateKeyPair, verifyRecord } from "@agentboard/core";
 import { makeNode, type TestNode } from "./helpers.js";
 import { mountRemoteMcp } from "../src/mcpRemote.js";
 import { runBenchmark, ESTIMATE } from "../../../scripts/bench-reuse.js";
-import { BENCH, headlineOf } from "../src/services/benchmark.js";
+import { BENCH, headlineOf, normValue, valuesMatch, benchmarkHeadlineable } from "../src/services/benchmark.js";
 import { signRequest } from "../src/requestAuth.js";
 import { sha256Hex } from "@agentboard/core";
 
@@ -37,7 +37,7 @@ const nodeFetch: typeof fetch = async (url, init) => {
 const req = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => node.req(method, path, body, headers);
 
 /** What the executor does for a run: N loop turns + 1 verify through the guarded Muse route, then posts the run. */
-async function fakeRun(target: Record<string, string>, params: Record<string, string>, start_url: string, turns: number, success = true) {
+async function fakeRun(target: Record<string, string>, params: Record<string, string>, start_url: string, turns: number, success = true, value = "1,234,567") {
   const usage = { calls: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, usd: 0 };
   for (let i = 0; i <= turns; i++) {
     const r = await req("POST", "/internal/muse/responses", { input: [{ role: "user", content: [{ type: "input_text", text: "turn" }] }] }, { ...ex, "x-muse-kind": i < turns ? "loop" : "verify" });
@@ -49,6 +49,7 @@ async function fakeRun(target: Record<string, string>, params: Record<string, st
     verdict: { success, evidence: `infobox shows ${params.infobox_field}`, model: "muse-spark-1.3", capability: "image understanding + structured output" },
     turns, actions: [{ turn: 1, type: "type", detail: `type "${params.place}"`, approval: "auto", checks: [], target: "search box" }, { turn: 1, type: "click", detail: "click", approval: "auto", checks: [], target: "first result" }],
     usage, model: "muse-spark-1.3", final_jpeg_b64: jpeg(), executor: { name: "fake-executor", chromium: "none", viewport: "960x600" }, duration_ms: 1000 * turns,
+    answer: { value, method: "deterministic", source: "infobox/table row", verified_by: "verifier", model_text: `The ${params.infobox_field} is **${value}**.` },
   }, ex);
   expect(run.status).toBe(201);
   return { ...run.body, usage, turns, verdict: { success } };
@@ -143,6 +144,7 @@ describe("reuse benchmark", () => {
     expect(b.comparison.usd_ratio).toBe(3);
     expect(b.comparison.model_calls_ratio).toBe(3);
     expect(b.comparison.both_verified).toBe(true);
+    expect(b.comparison).toMatchObject({ values_match: true, cold_value: "1,234,567", reuse_value: "1,234,567" });
     expect(b.comparison.recording_one_time_usd).toBeGreaterThan(0);
     expect(b.comparison.reuses_to_pay_back_recording).toBeGreaterThanOrEqual(1);
     expect(b.runs.cold.client.muse_spend_delta_calls).toBe(6);
@@ -223,6 +225,26 @@ describe("reuse benchmark", () => {
     const row = (await req("GET", "/v1/benchmarks")).body.benchmarks[0];
     expect(row).toMatchObject({ cid: out.cid, verified: true, reuse_cheaper: false, headline_eligible: false });
     expect((await req("GET", "/v1/benchmarks/latest")).body.cid).toBe(head.cid);
+  });
+});
+
+describe("benchmark values must match for a headline", () => {
+  it("normalizes numbers and versions, and falls back to the cold agent's answer text", () => {
+    expect(normValue("3,477,497[4]")).toBe("3477497");
+    expect(normValue("8,848.86 m (29,031.7 ft)")).toBe("8848.86");
+    expect(normValue("v4.1.2")).toBe("4.1.2");
+    expect(valuesMatch({ value: "3,477,497" }, { value: "3477497" })).toBe(true);
+    expect(valuesMatch({ value: "3,477,497" }, { value: "6,125,583" })).toBe(false);
+    expect(valuesMatch({ answer_text: "Madrid's population is 3,477,497 (2024)." }, { value: "3,477,497" })).toBe(true);
+    expect(valuesMatch({ answer_text: "Madrid's metro population is 6,125,583." }, { value: "3,477,497" })).toBe(false);
+    expect(valuesMatch({}, { value: "3,477,497" })).toBe(null);
+  });
+  it("a verified, cheaper benchmark whose values differ is not headline-eligible", () => {
+    const base = { both_verified: true };
+    const runs = { cold: { success: true, usd: 0.02, model_calls: 5 }, reuse: { success: true, usd: 0, model_calls: 0 } };
+    expect(benchmarkHeadlineable({ comparison: { ...base, values_match: false }, runs })).toBe(false);
+    expect(benchmarkHeadlineable({ comparison: { ...base }, runs })).toBe(false);
+    expect(benchmarkHeadlineable({ comparison: { ...base, values_match: true }, runs })).toBe(true);
   });
 });
 

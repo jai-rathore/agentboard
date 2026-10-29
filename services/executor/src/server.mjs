@@ -124,6 +124,21 @@ async function runJob(id) {
   await chain;
 }
 
+// ---- warm browser: one Chromium kept between runs (each run gets its own fresh context); recycled every 25 runs
+// or when it dies, and only when no run is using it.
+const warm = { browser: null, uses: 0, active: 0, launching: null };
+async function acquireBrowser() {
+  if (warm.browser && (!warm.browser.isConnected() || (warm.uses >= 25 && warm.active === 0))) { const old = warm.browser; warm.browser = null; if (old.isConnected()) old.close().catch(() => {}); }
+  if (!warm.browser) {
+    warm.launching ??= chromium.launch({ args: CHROMIUM_ARGS }).then((b) => { warm.browser = b; warm.uses = 0; b.on("disconnected", () => { if (warm.browser === b) warm.browser = null; }); return b; }).finally(() => { warm.launching = null; });
+    await warm.launching;
+  }
+  warm.uses++; warm.active++;
+  return warm.browser;
+}
+const releaseBrowser = () => { warm.active = Math.max(0, warm.active - 1); };
+if (process.env.EXECUTOR_PREWARM !== "0") setTimeout(() => acquireBrowser().then(releaseBrowser, (e) => console.warn(`[executor] prewarm failed: ${e.message}`)), 1000);
+
 async function loadTarget(m) {
   if (m.draft_id) { const d = await api(`/v1/skills/drafts/${encodeURIComponent(m.draft_id)}`); return { skill: d.skill, start_url: m.start_url || d.source.start_url || d.skill.start_url_hint, target: { draft_id: d.id } }; }
   if (m.skill_cid) { const s = await api(`/v1/skills/${encodeURIComponent(m.skill_cid)}`); const b = s.skill.record.body; return { skill: b.skill, start_url: m.start_url || b.source.start_url, target: { skill_cid: m.skill_cid }, trace: m.no_trace ? null : s.trace ?? null }; }
@@ -143,17 +158,20 @@ async function replay(m, send, ask, isAborted) {
   let humanMs = 0;
   const origin = new URL(start_url).origin;
   stats.runs++;
-  send({ type: "status", message: `Launching Chromium for "${skill.name}"`, params, start_url });
-  const browser = await chromium.launch({ args: CHROMIUM_ARGS });
+  send({ type: "status", message: `${warm.browser?.isConnected() ? "Opening a fresh browser context" : "Launching Chromium"} for "${skill.name}"`, params, start_url });
+  const browser = await acquireBrowser();
+  let context = null;
   try {
-    const page = await (await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 })).newPage();
+    context = await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
     // Stay on the skill's site: top-level navigations to another origin are blocked.
     await page.route("**/*", (route) => {
       const r = route.request();
       if (r.isNavigationRequest() && r.frame() === page.mainFrame() && new URL(r.url()).origin !== origin) { actions.push({ turn: -1, type: "blocked", detail: `navigation to ${new URL(r.url()).origin} blocked (off-site)`, approval: "none", checks: [] }); return route.abort("blockedbyclient"); }
       return route.continue();
     });
-    await page.goto(start_url, { waitUntil: "load", timeout: 45_000 });
+    // a known trace only needs the DOM (each step waits for its own element); the model needs the page fully painted
+    await page.goto(start_url, { waitUntil: usableTrace(trace) ? "domcontentloaded" : "load", timeout: 45_000 });
     actions.push({ turn: 0, type: "navigate", detail: start_url.slice(0, 300), approval: "auto", checks: [] });
     let lastSelect = null, finalMessage = "", turn = 0, addressBar = false;
     const shoot = async (label) => {
@@ -188,8 +206,7 @@ async function replay(m, send, ask, isAborted) {
         rec({ ...structuredClone(s), changes_url: undefined });
         recorded[recorded.length - 1]._before = r.before; recorded[recorded.length - 1].changes_url = r.changed;
         replayInfo.trace_steps_done = i + 1;
-        if (gifFrames.length < 16) gifFrames.push(await page.screenshot({ type: "png" }));
-        await shoot(`trace ${i + 1}`);
+        // no mid-trace screenshots: the run's evidence is the final screenshot (and the signed action log)
       }
       if (replayInfo.mode === "trace+recovery") {
         history.push(`Recorded trace: steps 1-${replayInfo.trace_steps_done} were done without the model; step ${replayInfo.failed_step} (${describeTraceStep(trace.steps[replayInfo.failed_step - 1])}) failed: ${replayInfo.failed_reason}. Continue the task from the current screen.`);
@@ -325,7 +342,7 @@ async function replay(m, send, ask, isAborted) {
     }
     // no_value only when the model's answer quoted no value at all (else learning is retried on the next replay)
     const noValue = value == null && (verdictFull.model === "deterministic" ? Boolean(trace?.no_value) && !m.relearn : answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params).length === 0);
-    const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `infobox/table row "${fillText(recipe.label, params).slice(0, 80)}${recipe.sub ? ` › ${recipe.sub}` : ""}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier" };
+    const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `infobox/table row "${fillText(recipe.label, params).slice(0, 80)}${recipe.sub ? ` › ${recipe.sub}` : ""}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier", model_text: finalMessage ? finalMessage.slice(0, 400) : null };
     // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
     const steps = cleanSteps(recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })));
     const runTrace = verdictFull.success && steps.length ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: finalChecks(texts, params, page.url()), ...(recipe ? { extract: recipe } : noValue ? { no_value: true } : {}) } : null;
@@ -348,7 +365,8 @@ async function replay(m, send, ask, isAborted) {
     stats.failed++;
     throw e;
   } finally {
-    await browser.close().catch(() => {});
+    await context?.close().catch(() => {});
+    releaseBrowser();
   }
 }
 

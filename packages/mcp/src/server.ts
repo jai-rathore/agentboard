@@ -157,9 +157,10 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite,
     return { ...base, turns_so_far: j.turns?.length ?? 0, next: `Still running. Watch it live at ${j.url} or call skill_run_status again.` };
   };
   const waitFor = async (id: string, seconds: number) => {
-    const until = Date.now() + seconds * 1000;
+    const t0 = Date.now(), until = t0 + seconds * 1000;
     let j = await client.skillJob(id);
-    while (["queued", "running"].includes(j.status) && Date.now() < until) { await new Promise((r) => setTimeout(r, 3000)); j = await client.skillJob(id); }
+    // poll fast for the first 20 s (a deterministic replay finishes in seconds), then every 3 s
+    while (["queued", "running"].includes(j.status) && Date.now() < until) { await new Promise((r) => setTimeout(r, Date.now() - t0 < 20_000 ? 750 : 3000)); j = await client.skillJob(id); }
     return j;
   };
   const summary = (j: any) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${(j.result?.verdict?.success ?? j.verdict?.success) ? "verified success" : "not verified"}${j.result?.answer?.value != null ? `; returned value: ${j.result.answer.value}` : ""}; ${j.result?.usage?.calls ?? "?"} model call${j.result?.usage?.calls === 1 ? "" : "s"}${j.result?.replay?.mode === "trace" ? " (deterministic replay of the recorded trace)" : ""}; no human clicks${j.result?.time ? ` except ${j.result.time.human_approvals} approval(s) of risky steps` : ""}.${j.result?.run_cid ? ` Signed run record ${j.result.run_cid}: check it with verify_record.` : ""}${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;

@@ -144,6 +144,7 @@ export async function submitColdRun(ctx: AppContext, draft: { id: string; source
     loop: { model: run.model === ctx.cfg.openWeightModel ? ctx.cfg.metaModel : run.model, capability: "computer use (built-in computer tool) + image understanding" },
     actions: run.actions, evidence: { final_screenshot: final.sha256, gif: gif?.sha256 ?? null },
     usage: { ...run.usage, usd: round6(run.usage.usd) }, executor: run.executor,
+    ...(run.answer ? { answer: run.answer } : {}),
   } as Record<string, unknown>, new Date(ctx.now()));
   const out = await ctx.db.tx(async (tx) => {
     const ok = await tx.query<any>(`UPDATE benchmarks SET cold_run_cid = $2, updated_at = now() WHERE id = $1 AND cold_run_cid IS NULL RETURNING id`, [b.id, rec.cid]);
@@ -181,7 +182,31 @@ function metricsOf(body: any, extra?: { calls: number; input_tokens: number; cac
     // skill_run only: how the replay ran (trace = deterministic, no model calls; trace+recovery; model = hinted model run)
     ...(body.replay ? { replay_mode: String(body.replay.mode), verifier: String(body.replay.verifier ?? "model") } : {}),
     ...(body.answer?.value != null ? { value: String(body.answer.value) } : {}),
+    ...(body.answer?.model_text ? { answer_text: String(body.answer.model_text).slice(0, 400) } : {}),
   };
+}
+
+/** A value for comparison: a number's digits ("3,477,497" → "3477497"; "8,848.86 m" → "8848.86"), else lowercased text. */
+export function normValue(v: unknown): string | null {
+  const t = String(v ?? "").replace(/\[[^\]]*\]/g, "").trim();
+  if (!t) return null;
+  const ver = t.match(/^v?(\d+\.\d+\.\d+[\w.-]*)/);
+  if (ver) return ver[1].toLowerCase();
+  const n = t.match(/[-−]?\d[\d,\s]*(?:\.\d+)?/);
+  if (n && /\d/.test(t) && n[0].replace(/\D/g, "").length >= 1 && /^[^A-Za-z]*\d/.test(t)) return n[0].replace(/[,\s]/g, "").replace("−", "-");
+  return t.toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
+}
+/**
+ * Did both agents get the same answer? Compares the two returned values; when the cold run has no extracted value,
+ * checks whether the replay's value appears in the cold agent's final answer. null when it cannot be told.
+ */
+export function valuesMatch(A: { value?: string; answer_text?: string }, B: { value?: string; answer_text?: string }): boolean | null {
+  const a = normValue(A.value), b = normValue(B.value);
+  if (a != null && b != null) return a === b;
+  const other = b ?? a, text = b != null ? A.answer_text : B.answer_text;
+  if (other == null || !text) return null;
+  const numbers = [...String(text).matchAll(/\d[\d,]*(?:\.\d+)?/g)].map((m) => m[0].replace(/,/g, ""));
+  return /^[-\d.]+$/.test(other) ? numbers.includes(other) : String(text).toLowerCase().includes(other);
 }
 
 /** Sign the comparison once both runs have signed records. Client-side numbers (wall time, ledger deltas) are labeled as such. */
@@ -222,6 +247,8 @@ export async function finalizeBenchmark(ctx: AppContext, id: string, client: { c
     usd_saved: savedUsd, model_calls_saved: A.model_calls - B.model_calls,
     tokens_saved: (A.input_tokens + A.output_tokens) - (B.input_tokens + B.output_tokens),
     both_verified: A.success && B.success,
+    // the same answer from both agents (normalized); a cheaper replay that returns a different value is not a win
+    values_match: valuesMatch(A, B), cold_value: A.value ?? null, reuse_value: B.value ?? null,
     recording_one_time_usd: recordingUsd || null,
     reuses_to_pay_back_recording: savedUsd > 0 && recordingUsd > 0 ? Math.ceil(recordingUsd / savedUsd) : null,
   };
@@ -261,6 +288,7 @@ function present(ctx: AppContext, rec: { cid: string; author: string; created_at
     headline: headlineOf(rec.body),
     verified: benchmarkVerified(rec.body),
     reuse_cheaper: reuseCheaper(rec.body),
+    values_match: rec.body?.comparison?.values_match ?? null,
     headline_eligible: benchmarkHeadlineable(rec.body),
     record: { v: 1, type: "benchmark", author: rec.author, created_at: rec.created_at, body: rec.body, cid: rec.cid, sig: rec.sig },
     page: `${ctx.cfg.skillsWebUrl}/benchmark?id=${rec.body.benchmark}`,
@@ -276,7 +304,7 @@ export function headlineOf(b: any): string {
   const calls = (k: number) => `${k} model call${k === 1 ? "" : "s"}`;
   if (B.model_calls === 0 && A.model_calls > 0) {
     const verified0 = c.both_verified ? "Both runs verified." : `Cold run ${A.success ? "verified" : "not verified"}; replay ${B.success ? "verified" : "not verified"}.`;
-    return `Same task and input, two agents: reusing the ${b.task?.slug} skill replayed its recorded trace with no model calls (${usd(B.usd)}${B.verifier === "deterministic" ? ", checked deterministically" : ""}${B.value ? `, returned "${B.value}"` : ""}); doing it cold took ${calls(A.model_calls)} (${usd(A.usd)}). ${verified0}`;
+    return `Same task and input, two agents: reusing the ${b.task?.slug} skill replayed its recorded trace with no model calls (${usd(B.usd)}${B.verifier === "deterministic" ? ", checked deterministically" : ""}${B.value ? `, returned "${B.value}"` : ""}); doing it cold took ${calls(A.model_calls)} (${usd(A.usd)}). ${verified0}${c.values_match === true ? " Both returned the same value." : c.values_match === false ? ` The values differ (cold: "${c.cold_value ?? "?"}").` : ""}`;
   }
   const verified = c.both_verified ? "Both runs verified." : `Cold run ${A.success ? "verified" : "not verified"}; replay ${B.success ? "verified" : "not verified"}.`;
   return `Same task and input, two agents: reusing the ${b.task?.slug} skill took ${calls(B.model_calls)} (${usd(B.usd)}); doing it cold took ${calls(A.model_calls)} (${usd(A.usd)})${c.usd_ratio ? `, ${c.usd_ratio}x the cost` : ""}. ${verified}`;
@@ -295,12 +323,14 @@ export const benchmarkVerified = (body: any) => Boolean(body?.comparison?.both_v
 /** Reuse cost strictly less than the cold run (Muse list price). */
 export const reuseCheaper = (body: any) => num(body?.runs?.reuse?.usd) < num(body?.runs?.cold?.usd);
 /**
- * Only a benchmark where both runs verified AND reuse was cheaper than cold is used as a headline (homepage stat,
+ * Only a benchmark where both runs verified AND reuse was cheaper than cold AND both returned the same value is used as a headline (homepage stat,
  * /benchmark, llms.txt). Others stay in the list, labeled.
  */
-export const benchmarkHeadlineable = (body: any) => benchmarkVerified(body) && reuseCheaper(body);
+export const benchmarkHeadlineable = (body: any) => benchmarkVerified(body) && reuseCheaper(body) && valuesMatched(body);
+/** Both agents returned the same value (recorded in the signed comparison; older benchmarks did not record it). */
+export const valuesMatched = (body: any) => body?.comparison?.values_match === true;
 
-/** The latest headline benchmark (verified and reuse cheaper); `any` returns the latest one whatever its result. */
+/** The latest headline benchmark (verified, reuse cheaper, same value); `any` returns the latest one whatever its result. */
 export async function latestBenchmark(ctx: AppContext, opts: { any?: boolean } = {}) {
   const r = (await benchRows(ctx, "", [], 200)).find((x) => opts.any || benchmarkHeadlineable(x.body));
   return r ? present(ctx, r) : null;

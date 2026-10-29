@@ -216,7 +216,7 @@ export const RunZ = z.object({
   trace: TraceZ.optional(),
   replay: ReplayZ.optional(),
   /** The value the run returned, read deterministically off the final page with the trace's extraction recipe. */
-  answer: z.object({ value: S(300).nullable(), method: z.enum(["deterministic", "none"]), source: S(200).nullable(), verified_by: z.enum(["deterministic", "verifier"]) }).optional(),
+  answer: z.object({ value: S(300).nullable(), method: z.enum(["deterministic", "none"]), source: S(200).nullable(), verified_by: z.enum(["deterministic", "verifier"]), model_text: S(400).nullable().optional() }).optional(),
 });
 export type RunInput = z.infer<typeof RunZ>;
 

@@ -10,6 +10,10 @@ import { fill, approvalFor, nameOf } from "./policy.mjs";
 import { scrollToTextInPage } from "./click.mjs";
 
 export const TRACE_VERSION = 1;
+/** Only these actions can navigate; a URL that changed during a type or scroll was the previous step's late redirect. */
+export const NAV_ACTIONS = new Set(["click", "double_click", "keypress", "navigate"]);
+/** Same document: only the query or hash changed in a way pages do with history.replaceState (e.g. a searchToken). */
+export const sameDocument = (a, b) => { try { const x = new URL(a), y = new URL(b); return x.origin === y.origin && x.pathname === y.pathname; } catch { return false; } };
 export const MAX_TRACE_STEPS = 60;
 const STR = 200;
 
@@ -162,6 +166,14 @@ export const usableTrace = (t) => Boolean(t && t.v === TRACE_VERSION && Array.is
 export async function runTraceStep(page, s, params, c) {
   const before = page.url();
   const fail = (reason) => ({ ok: false, reason, before });
+  // a real document navigation (a link or a form submit), not a history.replaceState that only rewrites the query
+  let navReq = null, loaded = 0;
+  const onReq = (r) => { if (!navReq && r.isNavigationRequest() && r.frame() === page.mainFrame()) navReq = r; };
+  const onDcl = () => { loaded++; }; // fires only when a new document's DOM is ready
+  page.on("request", onReq); page.on("domcontentloaded", onDcl);
+  try { return await runTraceStepInner(page, s, params, c, before, fail, () => navReq, () => loaded); } finally { page.off("request", onReq); page.off("domcontentloaded", onDcl); }
+}
+async function runTraceStepInner(page, s, params, c, before, fail, nav, loaded) {
   const act = async (a, label) => {
     const el = await c.inspect(page, a);
     const p = approvalFor(a, el, c.skill, []);
@@ -227,12 +239,18 @@ export async function runTraceStep(page, s, params, c) {
     return fail(String(e.message ?? e).slice(0, 200));
   }
   // post-condition: the URL changes exactly when it changed in the recorded run
-  if (s.changes_url) {
-    const ok = await page.waitForURL((u) => u.toString() !== before, { timeout: 15_000 }).then(() => true, () => false);
-    if (!ok) return fail(`expected the page to change after ${describeTraceStep(s)}`);
-    await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
-  } else await page.waitForTimeout(300);
-  return { ok: true, before, changed: page.url() !== before };
+  // (targeted waits: the navigation's own response + domcontentloaded, never a fixed sleep longer than 150 ms)
+  if (s.changes_url && NAV_ACTIONS.has(s.action)) {
+    const deadline = Date.now() + 10_000;
+    while (!nav() && Date.now() < deadline) {
+      if (page.url() !== before && !sameDocument(before, page.url())) break; // a client-side route change (SPA)
+      await page.waitForTimeout(50);
+    }
+    const req = nav();
+    if (!req && page.url() === before) return fail(`expected the page to change after ${describeTraceStep(s)}`);
+    if (req) { const end = Date.now() + 15_000; while (!loaded() && Date.now() < end) await page.waitForTimeout(50); if (!loaded()) return fail(`the page did not load after ${describeTraceStep(s)}`); }
+  } else await page.waitForTimeout(150);
+  return { ok: true, before, changed: Boolean(nav()) || (page.url() !== before && !sameDocument(before, page.url())) };
 }
 
 
@@ -304,7 +322,11 @@ export function applyRecipeInPage({ recipe, scroll }) {
   const low = (s) => norm(s).toLowerCase();
   if (recipe.kind === "css") { const el = document.querySelector(recipe.css); show(el); return el ? norm(el.innerText || el.textContent).slice(0, 1000) : null; }
   if (recipe.kind === "row") {
-    const want = low(recipe.label);
+    // a field that names a sub-row ("Metro population", "urban area population") looks up the header ("Population") and that sub-row
+    const SUBWORD = /\b(metro(?:politan)?(?: area)?|urban(?: area)?|city proper|city|municipality|total|land|water|density|rank)\b/;
+    let want = low(recipe.label), named = null;
+    const nm = want.match(SUBWORD);
+    if (nm && want.replace(nm[0], "").trim()) { const headerHas = [...document.querySelectorAll("th")].some((x) => low(x.innerText).includes(want)); if (!headerHas) { named = nm[1]; want = want.replace(nm[0], "").replace(/\s+/g, " ").trim(); } }
     const pick1 = (list) => list.find((x) => low(x.innerText) === want) ?? list.find((x) => low(x.innerText).startsWith(want)) ?? list.find((x) => low(x.innerText).includes(want));
     // a fact box (infobox / sidebar) first: an article can have later tables with the same label
     const factBox = (x) => Boolean(x.closest(".infobox, [class*='infobox'], aside, [role=complementary]"));
@@ -315,10 +337,23 @@ export function applyRecipeInPage({ recipe, scroll }) {
       // the recorded offset first; a header row without a value cell looks a few rows further (infobox sub-rows)
       // a sub-row label ("Metro" under "Population") wins over the recorded offset when the page has it
       const block = []; for (const r of rows.slice(i + 1, i + 10)) { if (!r.querySelector("td")) break; block.push(r); } // rows up to the next header
-      const subRow = recipe.sub ? block.find((r) => low(r.querySelector("th")?.innerText).replace(/^[•·\-\s]+/, "").startsWith(low(recipe.sub))) : null;
+      const subName = (r) => low(r.querySelector("th")?.innerText).replace(/^[•·\-\s]+/, "");
+      const hasNum = (r) => /\d/.test(r.querySelector("td")?.innerText ?? "");
+      // which sub-row: the one the field names; else the main figure (City / Municipality / Total / Capital city…), never
+      // Urban or Metro unless asked for; a recorded sub-row only when it is a main one; else the first that is not a side figure
+      const SIDE = /^(urban|metro|density|rank|demonym|gdp|elevation|area code|time zone|postal)/;
+      const MAIN = /^(city|capital|municipality|total|town|village|commune|borough|county|district|state|province|country|national|estimate|census|overall|all)\b/;
+      const perArea = (r) => /\/\s*(km|sq)/i.test(r.querySelector("td")?.innerText ?? ""); // a density, not a count
+      const namedRows = named ? block.filter((r) => (named.startsWith("metro") ? /^(metro|cma\b|msa\b)/ : new RegExp(`^${named.split(" ")[0]}`)).test(subName(r)) && !perArea(r)) : [];
+      const subRow = (named ? namedRows.find((r) => subName(r) === named) ?? namedRows[0] : null)
+        ?? (!named ? block.find((r) => MAIN.test(subName(r)) && hasNum(r)) : null)
+        ?? (recipe.sub && !SIDE.test(low(recipe.sub)) ? block.find((r) => subName(r).startsWith(low(recipe.sub))) : null)
+        ?? (!named ? block.find((r) => !SIDE.test(subName(r)) && hasNum(r)) : null);
       // the label's own value cell first (e.g. "Elevation"); for a header row ("Population (2024)") the sub-row, then the offset
-      const tryRows = [i, subRow ? rows.indexOf(subRow) : -1, i + (recipe.offset || 0), i + 1, i + 2, i + 3].filter((k, x, a) => k >= i && a.indexOf(k) === x);
-      for (const k of tryRows) { const td = rows[k]?.querySelector("td"); if (td && norm(td.innerText)) { show(td); return norm(td.innerText).slice(0, 1000); } }
+      const sideOffset = !named && recipe.offset > 0 && SIDE.test(subName(rows[i + recipe.offset] ?? document.createElement("tr")));
+      const tryRows = [i, subRow ? rows.indexOf(subRow) : -1, sideOffset ? -1 : i + (recipe.offset || 0), i + 1, i + 2, i + 3].filter((k, x, a) => k >= i && a.indexOf(k) === x);
+      const wantsArea = /density|per /.test(want + " " + (named ?? ""));
+      for (const k of tryRows) { const td = rows[k]?.querySelector("td"); if (k !== i && !wantsArea && rows[k] && perArea(rows[k])) continue; if (td && norm(td.innerText)) { show(td); return norm(td.innerText).slice(0, 1000); } }
     }
     const dt = pick([...document.querySelectorAll("dt")]);
     if (dt) { let dd = dt.nextElementSibling; while (dd && dd.tagName !== "DD") dd = dd.nextElementSibling; if (dd) { show(dd); return norm(dd.innerText).slice(0, 1000); } }
@@ -331,9 +366,10 @@ export function answerCandidates(answer, params = {}) {
   const a = String(answer ?? "");
   const out = [], years = [];
   for (const m of a.matchAll(/\*\*([^*]{1,120})\*\*/g)) out.push(m[1].trim());
-  for (const m of a.matchAll(new RegExp(VALUE_RE.version, "g"))) out.push(m[0]);
+  for (const m of a.matchAll(/["“]([^"”\n]{3,160})["”]/g)) out.push(m[1].trim()); // a quoted title ("…") is usually the answer itself
+  for (const m of a.matchAll(new RegExp(VALUE_RE.version, "g"))) if (!/[A-Za-z]$/.test(a.slice(0, m.index))) out.push(m[0]); // not "Qwen3.5"
   // numbers in the order the answer mentions them (the first is usually the one asked for); bare years last
-  for (const m of a.matchAll(/\d[\d,]*(?:\.\d+)?/g)) if (m[0].replace(/\D/g, "").length >= 2) (/^(1[5-9]|20)\d\d$/.test(m[0]) ? years : out).push(m[0]);
+  for (const m of a.matchAll(/\d[\d,]*(?:\.\d+)?/g)) if (!/[A-Za-z]$/.test(a.slice(0, m.index)) && m[0].replace(/\D/g, "").length >= 2) (/^(1[5-9]|20)\d\d$/.test(m[0]) ? years : out).push(m[0]);
   out.push(...years);
   const inputs = Object.values(params).map((v) => String(v).toLowerCase());
   const seen = new Set();
@@ -367,6 +403,10 @@ export function storeRecipe(r, params) {
   const regex = regexFor(r.candidate);
   // a label that names an input keeps only the placeholder ("{{target_field}}", not "{{target_field}} (2023)[2]"): matched as a prefix
   const label = r.kind === "row" ? (templ(r.label, params).match(/\{\{\s*[a-z0-9_]+\s*\}\}/i)?.[0] ?? templ(r.label, params)) : "";
+  // a side sub-row (Urban / Metro / Density) is kept only when the field asked for it; otherwise replay picks the main figure
+  const askedText = String(fillText(label, params) ?? "").toLowerCase();
+  const sideSub = r.sub && /^(urban|metro|density|rank)/i.test(String(r.sub)) && !askedText.includes(String(r.sub).toLowerCase().split(/\s+/)[0]);
+  if (sideSub) r = { ...r, sub: undefined, offset: 0 };
   return { kind: r.kind, ...(r.kind === "row" ? { label: label.slice(0, 200), offset: Math.max(0, Math.min(10, r.offset | 0)), ...(r.sub ? { sub: String(r.sub).slice(0, 120) } : {}) } : { css: String(r.css).slice(0, 320) }), ...(regex ? { regex } : {}), sample: String(r.sample ?? "").slice(0, 300) };
 }
 export const fillRecipe = (r, params) => (r.kind === "row" ? { ...r, label: fillText(r.label, params) } : r);
@@ -391,6 +431,7 @@ export function cleanSteps(steps) {
   for (const s0 of steps) {
     const s = s0.locator ? { ...s0, locator: cleanLocator(s0.locator) } : { ...s0 };
     if (s.action === "scroll") continue;
+    if (!NAV_ACTIONS.has(s.action)) s.changes_url = false;
     if ((s.action === "click" || s.action === "double_click") && !s.changes_url && !meaningfulLoc(s.locator)) continue;
     const prev = out[out.length - 1];
     if (prev && !prev.changes_url && sameStep(prev, s)) { prev.changes_url = prev.changes_url || s.changes_url; continue; }

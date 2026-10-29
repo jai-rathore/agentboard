@@ -57,6 +57,21 @@ describe("trace: hygiene and value helpers", () => {
     expect(pickValue("8,848.86 m (29,031.7 ft) Ranked 1st", { kind: "row", regex: regexFor("8,848.86 m (29,031.7 ft)") })).toBe("8,848.86 m");
     expect(pickValue("Python", { kind: "css" })).toBe("Python");
   });
+  it("puts a quoted title first and ignores version-like digits inside a word (Qwen3.5)", () => {
+    const c = answerCandidates('The top story is "Qwen3.5 runs on a laptop" with 812 points.', {});
+    expect(c[0]).toBe("Qwen3.5 runs on a laptop");
+    expect(c).not.toContain("3.5");
+  });
+  it("forgets a side sub-row (Metro) unless the field asks for it", () => {
+    const r = { kind: "row", label: "Population (2024)", offset: 4, sub: "Metro", candidate: "6,125,583", sample: "6,125,583" };
+    expect(storeRecipe(r, { target_field: "Population" })).toMatchObject({ label: "{{target_field}}", offset: 0 });
+    expect(storeRecipe(r, { target_field: "Population" })).not.toHaveProperty("sub");
+    expect(storeRecipe({ ...r, label: "Metro population" }, { target_field: "Metro population" })).toMatchObject({ sub: "Metro", offset: 4 });
+  });
+  it("never waits for a URL change after a step that cannot navigate", () => {
+    const out = cleanSteps([{ url: "u", action: "scroll_to_text", text: "{{f}}", changes_url: true }, { url: "u", action: "type", text: "x", locator: { tag: "input", role: "searchbox", name: "S", text: "", css: "input", attrs: {} }, changes_url: true }]);
+    expect(out.map((x: any) => x.changes_url)).toEqual([false, false]);
+  });
 });
 
 describe("trace: deterministic final check", () => {
@@ -85,7 +100,7 @@ const SITE = "https://site.test";
 const pages: Record<string, (q: URLSearchParams, path: string) => string> = {
   "/": () => `<title>Home</title><form action="/search"><input type="search" name="q" aria-label="Search the wiki"><button>Search</button></form><p>Welcome</p>`,
   "/search": (q) => `<title>Search</title><h1>Results</h1><ul><li><a href="/wiki/Noise">Noise article</a></li><li><a href="/wiki/${encodeURIComponent(q.get("q") ?? "")}">${q.get("q")}</a></li></ul>`,
-  "/wiki": (_q, path) => { const t = decodeURIComponent(path.slice(6)); const pop = t === "Oslo" ? "717,710" : "139,875"; return `<title>${t} - Wiki</title><h1>${t}</h1><table class="infobox"><tr><th>Country</th><td>Somewhere</td></tr><tr><th colspan="2">Population (${t === "Oslo" ? 2024 : 2023})</th></tr><tr><th>• City</th><td>${pop}</td></tr><tr><th>Elevation</th><td>12 m</td></tr></table><p>Population figures are estimates.</p>`; },
+  "/wiki": (_q, path) => { const t = decodeURIComponent(path.slice(6)); const pop = t === "Oslo" ? "717,710" : "139,875"; return `<title>${t} - Wiki</title><h1>${t}</h1><table class="infobox"><tr><th>Country</th><td>Somewhere</td></tr><tr><th colspan="2">Population (${t === "Oslo" ? 2024 : 2023})</th></tr><tr><th>• City</th><td>${pop}</td></tr><tr><th>• Density</th><td>1,500/km2 (3,900/sq mi)</td></tr><tr><th>• Urban</th><td>${t === "Oslo" ? "1,064,235" : "200,000"}</td></tr><tr><th>• Metro</th><td>${t === "Oslo" ? "1,588,457" : "250,000"}</td></tr><tr><th>Elevation</th><td>12 m</td></tr></table><p>Population figures are estimates.</p>`; },
 };
 async function newPage() {
   const page = await (await browser.newContext({ viewport: { width: 960, height: 600 } })).newPage();
@@ -145,6 +160,11 @@ describe.skipIf(!chromium)("trace: replay in headless Chromium with no model", (
     // zero-call value return on the new input (the header says 2024 here, 2023 in the recording)
     expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, { ...P2, f: "Population" }) }), recipe)).toBe("717,710");
     expect(await r.evaluate(applyRecipeInPage, { recipe: { kind: "row", label: "Area", offset: 0 } })).toBeNull();
+    // city vs metro: "Population" is the City figure even with an old Metro recipe; "Metro population" is the Metro row
+    const metro = { kind: "row", label: "{{f}}", offset: 4, sub: "Metro", regex: regexFor("139,875") };
+    expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: fillRecipe(metro, { f: "Population" }) }), metro)).toBe("717,710");
+    expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: fillRecipe(metro, { f: "Metro population" }) }), metro)).toBe("1,588,457");
+    expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: fillRecipe(metro, { f: "Urban population" }) }), metro)).toBe("1,064,235");
     // a recipe recorded on a page where the value sat on the label's own row still finds it under a header row
     expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: { kind: "row", label: "Population", offset: 0 } }), { kind: "row", regex: regexFor("139,875") })).toBe("717,710");
     expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: { kind: "row", label: "Elevation", offset: 0, regex: regexFor("12 m") } }), { kind: "row", regex: regexFor("12 m") })).toBe("12 m");

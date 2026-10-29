@@ -39764,10 +39764,10 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
     return { ...base, turns_so_far: j.turns?.length ?? 0, next: `Still running. Watch it live at ${j.url} or call skill_run_status again.` };
   };
   const waitFor = async (id, seconds) => {
-    const until = Date.now() + seconds * 1e3;
+    const t0 = Date.now(), until = t0 + seconds * 1e3;
     let j = await client2.skillJob(id);
     while (["queued", "running"].includes(j.status) && Date.now() < until) {
-      await new Promise((r) => setTimeout(r, 3e3));
+      await new Promise((r) => setTimeout(r, Date.now() - t0 < 2e4 ? 750 : 3e3));
       j = await client2.skillJob(id);
     }
     return j;

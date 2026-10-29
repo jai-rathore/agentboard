@@ -32,7 +32,7 @@ export function BenchmarkPage({ id }: { id?: string }) {
   if (list.error) return <p className="err">{list.error}</p>;
   if (!latestId) return <article>
     <h1>Reuse benchmark</h1>
-    {all.length ? <><p className="muted">No headline result yet: a benchmark is headlined only when both runs are verified and reusing the skill cost less than doing it cold. Every attempt is listed below with its result.</p><History all={all} /></> : null}
+    {all.length ? <><p className="muted">No headline result yet: a benchmark is headlined only when both runs are verified, reusing the skill cost less than doing it cold, and both returned the same value. Every attempt is listed below with its result.</p><History all={all} /></> : null}
     <p className="muted">{all.length ? "" : "No benchmark has been published yet. "} When one qualifies, this page shows two agents doing the same task on the same input: one from scratch, one by finding and replaying a published skill, with model calls, tokens, cost and time from the signed run records.</p>
     <Method m={list.data?.method} />
   </article>;
@@ -41,6 +41,7 @@ export function BenchmarkPage({ id }: { id?: string }) {
   const d = one.data, b = d.record.body, A = b.runs.cold, B = b.runs.reuse, c = b.comparison ?? {}, cold = d.cold_run;
   const rows: [string, (x: any) => string][] = [
     ["Verified (final check below)", (x) => (x.success ? "✓ yes" : "✗ no")],
+    ["Returned value", (x) => (x.value ?? "–") + (x === B && c.values_match != null ? (c.values_match ? "  ✓ same as cold" : "  ✗ differs from cold") : "")],
     ["Model calls", (x) => n(x.model_calls)],
     ["Input tokens", (x) => n(x.input_tokens)],
     ["Output tokens", (x) => n(x.output_tokens)],
@@ -81,7 +82,7 @@ export function BenchmarkPage({ id }: { id?: string }) {
       </div>
       <ol className="steps">{(cold.actions ?? []).map((a: any, i: number) => <li key={i}><span className="act">{a.type}</span> {a.detail}{a.target && <span className="muted"> on "{a.target}"</span>}</li>)}</ol>
     </> : <p className="muted">Cold run record not found.</p>}
-    {!d.headline_eligible && <div className="verdict-box badv"><p>{!d.verified ? "✗ Not verified" : "✗ Reuse was not cheaper than cold"}: this benchmark is shown for the record only; headlines use the latest benchmark where both runs verified and reuse cost less.</p></div>}
+    {!d.headline_eligible && <div className="verdict-box badv"><p>{!d.verified ? "✗ Not verified" : !d.reuse_cheaper ? "✗ Reuse was not cheaper than cold" : d.values_match === false ? "✗ The two agents returned different values" : "✗ The values were not compared (an older benchmark)"}: this benchmark is shown for the record only; headlines use the latest benchmark where both runs verified, reuse cost less, and both returned the same value.</p></div>}
     <History all={all} current={d.id} />
     <h2>Signed records</h2>
     <p className="small mono">benchmark {d.cid}<br />cold run {A.record}<br />replay {B.record}<br />signed by the node {d.record.author}</p>
@@ -102,7 +103,7 @@ function History({ all, current }: { all: any[]; current?: string }) {
   return <section aria-label="Benchmark history">
     <h2>All benchmarks</h2>
     <ul className="small">{all.map((x) => <li key={x.id}>
-      <span className={x.headline_eligible ? "good" : "badv"}>{!x.verified ? "✗ unverified" : x.reuse_cheaper ? "✓ verified, reuse cheaper" : "✗ verified, reuse not cheaper"}</span>{" "}
+      <span className={x.headline_eligible ? "good" : "badv"}>{!x.verified ? "✗ unverified" : !x.reuse_cheaper ? "✗ verified, reuse not cheaper" : x.values_match === true ? "✓ verified, reuse cheaper, same value" : x.values_match === false ? "✗ values differ" : "✗ values not compared"}</span>{" "}
       {x.id === current ? <b>{ago(x.created_at)}</b> : <Link to={`/benchmark?id=${x.id}`}>{ago(x.created_at)}</Link>}
       {" · "}{x.record?.body?.task?.slug} <code>{JSON.stringify(x.record?.body?.input ?? {})}</code>
       {" · "}{x.record?.body?.runs?.reuse?.model_calls} vs {x.record?.body?.runs?.cold?.model_calls} model calls
