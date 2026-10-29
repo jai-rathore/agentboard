@@ -256,6 +256,7 @@ function present(ctx: AppContext, rec: { cid: string; author: string; created_at
   return {
     id: rec.body.benchmark, cid: rec.cid, seq: rec.seq, log: rec.log, created_at: rec.created_at,
     headline: headlineOf(rec.body),
+    verified: benchmarkVerified(rec.body),
     record: { v: 1, type: "benchmark", author: rec.author, created_at: rec.created_at, body: rec.body, cid: rec.cid, sig: rec.sig },
     page: `${ctx.cfg.skillsWebUrl}/benchmark?id=${rec.body.benchmark}`,
     verify: `GET ${ctx.cfg.publicBaseUrl}/v1/records/${rec.cid}, or the MCP verify_record tool`,
@@ -280,8 +281,12 @@ export async function listBenchmarks(ctx: AppContext) {
   return { benchmarks: (await benchRows(ctx)).map((r) => present(ctx, r)), method: METHOD };
 }
 
-export async function latestBenchmark(ctx: AppContext) {
-  const r = (await benchRows(ctx, "", [], 1))[0];
+/** Both runs verified: only such a benchmark is used as a headline (homepage, /benchmark, llms.txt). */
+export const benchmarkVerified = (body: any) => Boolean(body?.comparison?.both_verified);
+
+/** The latest VERIFIED benchmark (both runs verified); `any` returns the latest one whatever its result. */
+export async function latestBenchmark(ctx: AppContext, opts: { any?: boolean } = {}) {
+  const r = (await benchRows(ctx, "", [], 200)).find((x) => opts.any || benchmarkVerified(x.body));
   return r ? present(ctx, r) : null;
 }
 

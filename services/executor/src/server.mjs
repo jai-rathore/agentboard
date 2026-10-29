@@ -10,9 +10,10 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
 import { chromium } from "playwright-core";
-import { approvalFor, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL } from "./policy.mjs";
+import { approvalFor, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL, FIND_TOOL } from "./policy.mjs";
 import { makeGif } from "./gif.mjs";
 import { scrollPlan } from "./scroll.mjs";
+import { probeInPage, scrollToTextInPage, snapPoint, INTERACTIVE, SNAP_RADIUS, addressBarUrl, isAddressBarKey } from "./click.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
 const API = (process.env.AGENTBOARD_API || "https://agentboard-api.onrender.com").replace(/\/$/, "");
@@ -153,7 +154,7 @@ async function replay(m, send, ask, isAborted) {
     });
     await page.goto(start_url, { waitUntil: "load", timeout: 45_000 });
     actions.push({ turn: 0, type: "navigate", detail: start_url.slice(0, 300), approval: "auto", checks: [] });
-    let lastSelect = null, finalMessage = "", turn = 0;
+    let lastSelect = null, finalMessage = "", turn = 0, addressBar = false;
     const shoot = async (label) => {
       const jpg = await page.screenshot({ type: "jpeg", quality: 70 });
       send({ type: "frame", turn, label, jpeg: jpg.toString("base64") });
@@ -168,7 +169,7 @@ async function replay(m, send, ask, isAborted) {
         { type: "input_text", text: `${taskText(skill, params)}\n\nDone so far:\n${history.slice(-12).join("\n") || "(nothing yet)"}${note}\n\nCurrent screenshot (turn ${turn} of ${MAX_TURNS}):` },
         { type: "input_image", image_url: `data:image/jpeg;base64,${jpg.toString("base64")}` },
       ] }];
-      const r = await api("/internal/muse/responses", { instructions: LOOP_INSTRUCTIONS, tools: [{ type: "computer" }, SELECT_TOOL, STEP_TOOL], reasoning: { effort: "minimal" }, max_output_tokens: 800, input }, { "x-muse-kind": "loop", ...jobHeader });
+      const r = await api("/internal/muse/responses", { instructions: LOOP_INSTRUCTIONS, tools: [{ type: "computer" }, SELECT_TOOL, STEP_TOOL, FIND_TOOL], reasoning: { effort: "minimal" }, max_output_tokens: 800, input }, { "x-muse-kind": "loop", ...jobHeader });
       addUsage(r.usage);
       const out = r.response.output ?? [];
       const say = out.filter((o) => o.type === "message").flatMap((o) => o.content ?? []).map((c) => c.text ?? "").join(" ").trim();
@@ -202,8 +203,34 @@ async function replay(m, send, ask, isAborted) {
         actions.push({ turn, type: "select_option", detail: done ? `selected "${done}"` : `no option "${opt.slice(0, 60)}"`, approval: "auto", checks: [], target: selName || undefined });
         history.push(`turn ${turn}: select_option "${opt}" -> ${done ? "ok" : "not found"}`);
       }
+      for (const f of fns.filter((o) => o.name === "scroll_to_text")) {
+        let q = ""; try { q = String(JSON.parse(f.arguments || "{}").text ?? ""); } catch {}
+        const r = await page.evaluate(scrollToTextInPage, { text: q }).catch(() => ({ found: false }));
+        actions.push({ turn, type: "scroll_to_text", detail: `scroll_to_text "${q.slice(0, 60)}" -> ${r.found ? `found on ${r.tag}` : "not found"}`, approval: "auto", checks: [] });
+        history.push(`turn ${turn}: scroll_to_text "${q.slice(0, 60)}" -> ${r.found ? "scrolled into view" : "not found on this page"}`);
+      }
       const checks = (call?.pending_safety_checks ?? []).map((c) => c.code);
       for (const a of call?.actions ?? []) {
+        // Snap near-miss clicks onto the nearest link/button (see click.mjs) before the policy inspects the target.
+        if ((a.type === "click" || a.type === "double_click") && Number.isFinite(a.x) && Number.isFinite(a.y)) {
+          const snap = snapPoint(a.x, a.y, await page.evaluate(probeInPage, { x: a.x, y: a.y, r: SNAP_RADIUS, sel: INTERACTIVE }).catch(() => null));
+          if (snap) { a.x = snap.x; a.y = snap.y; history.push(`turn ${turn}: click at (${snap.from.x},${snap.from.y}) was ${snap.px}px off a ${snap.tag}; clicked its center (${snap.x},${snap.y})`); }
+        }
+        // Headless Chromium has no address bar: Ctrl/Cmd+L then a same-site URL becomes a navigation.
+        if (a.type === "keypress" && isAddressBarKey(a.keys)) { addressBar = true; actions.push({ turn, type: "keypress", detail: `keypress ${(a.keys ?? []).join("+")} (address bar)`, approval: "auto", checks: [] }); continue; }
+        if (addressBar && a.type === "type") {
+          addressBar = false;
+          const url = addressBarUrl(a.text, origin);
+          if (url) {
+            actions.push({ turn, type: "navigate", detail: url.slice(0, 300), approval: "auto", checks: [] });
+            history.push(`turn ${turn}: navigate ${url}`);
+            await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch((e) => history.push(`turn ${turn}: navigation failed: ${String(e.message).slice(0, 100)}`));
+            continue;
+          }
+          history.push(`turn ${turn}: address bar: "${String(a.text).slice(0, 80)}" is not a URL on ${origin}; ignored`);
+          continue;
+        }
+        if (a.type !== "type" && a.type !== "wait") addressBar = false;
         const el = await inspect(page, a);
         const p = approvalFor(a, el, skill, checks);
         const detail = `${describeAction(a)}${el ? ` on ${el.tag} "${(nameOf(el) || el.value || "").slice(0, 40)}"` : ""}`.slice(0, 300);

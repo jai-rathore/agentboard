@@ -81,8 +81,11 @@ Coordinates are pixels in the CURRENT screenshot: (0,0) is the top-left. Click t
 You only see the latest screenshot; a text log of what you already did is provided. Do not repeat steps that the screenshot shows are done.
 Batch actions only when they do not depend on new visual feedback (for example click a field, then type). Do not batch across submits or page changes.
 Native dropdowns (<select>) do not render their option list in screenshots: click the dropdown once, then call the select_option function with the visible option text.
+To bring a known label or value into view (for example an infobox or table row such as "Population"), call scroll_to_text with that text instead of scrolling repeatedly.
 If a recorded step's target looks different on screen (renamed, relabeled, moved or restyled), still do the step on the element that now serves that purpose, and in the same response call report_step_change for that step number describing what you see now.
 Finish with a short normal message (no computer call) once the success check is visibly met, or explain briefly why the task cannot be completed.`;
+
+export const FIND_TOOL = { type: "function", name: "scroll_to_text", description: "Scroll the page so the first visible element containing this text (case-insensitive; e.g. a table or infobox row label) is centered in view. Returns whether it was found.", parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"], additionalProperties: false } };
 
 export const STEP_TOOL = { type: "function", name: "report_step_change", description: "Report that recorded step N's target looks different now (renamed, relabeled, moved or restyled). Call it alongside the action that does the step.", parameters: { type: "object", properties: { step: { type: "integer" }, observed: { type: "string", description: "what the element looks like now: its label/text and position" } }, required: ["step", "observed"], additionalProperties: false } };
 

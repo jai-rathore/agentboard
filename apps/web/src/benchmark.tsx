@@ -7,7 +7,7 @@ import { fmtDur, SiteBadge, SignatureCheck, StepFrames } from "./skills";
 const usd = (x?: number | null) => (typeof x === "number" ? `$${x.toFixed(4)}` : "n/a");
 const n = (x?: number | null) => (typeof x === "number" ? x.toLocaleString("en-US") : "n/a");
 
-/** Homepage line: the latest benchmark's headline, or nothing at all when none exists. */
+/** Homepage line: the latest VERIFIED benchmark's headline (the API's /latest skips unverified ones), or nothing. */
 export function BenchmarkStat({ empty }: { empty?: ReactNode } = {}) {
   const r = useData<any>("/v1/benchmarks/latest");
   const b = r.data;
@@ -23,14 +23,17 @@ export function BenchmarkStat({ empty }: { empty?: ReactNode } = {}) {
 }
 
 export function BenchmarkPage({ id }: { id?: string }) {
-  const list = useData<any>(id ? null : "/v1/benchmarks");
-  const latestId = id ?? list.data?.benchmarks?.[0]?.id;
+  const list = useData<any>("/v1/benchmarks");
+  // The headline is the latest VERIFIED benchmark; unverified ones stay in the history below, labeled.
+  const all: any[] = list.data?.benchmarks ?? [];
+  const latestId = id ?? all.find((x) => x.verified)?.id;
   const one = useData<any>(latestId ? `/v1/benchmarks/${latestId}` : null, [latestId]);
   if (!id && list.loading) return <p className="muted">Loading…</p>;
   if (list.error) return <p className="err">{list.error}</p>;
   if (!latestId) return <article>
     <h1>Reuse benchmark</h1>
-    <p className="muted">No benchmark has been published yet. When one is, this page shows two agents doing the same task on the same input: one from scratch, one by finding and replaying a published skill, with model calls, tokens, cost and time from the signed run records.</p>
+    {all.length ? <><p className="muted">No verified benchmark yet (both runs must pass the model's check of the final screenshot). Unverified attempts are listed below.</p><History all={all} /></> : null}
+    <p className="muted">{all.length ? "" : "No benchmark has been published yet. "} When a verified one is, this page shows two agents doing the same task on the same input: one from scratch, one by finding and replaying a published skill, with model calls, tokens, cost and time from the signed run records.</p>
     <Method m={list.data?.method} />
   </article>;
   if (one.loading) return <p className="muted">Loading…</p>;
@@ -76,6 +79,8 @@ export function BenchmarkPage({ id }: { id?: string }) {
       </div>
       <ol className="steps">{(cold.actions ?? []).map((a: any, i: number) => <li key={i}><span className="act">{a.type}</span> {a.detail}{a.target && <span className="muted"> on "{a.target}"</span>}</li>)}</ol>
     </> : <p className="muted">Cold run record not found.</p>}
+    {!d.verified && <div className="verdict-box badv"><p>✗ Not verified: this benchmark is shown for the record only; headlines use the latest verified benchmark.</p></div>}
+    <History all={all} current={d.id} />
     <h2>Signed records</h2>
     <p className="small mono">benchmark {d.cid}<br />cold run {A.record}<br />replay {B.record}<br />signed by the node {d.record.author}</p>
     <p className="small muted">Raw: <a href={`${API}/v1/records/${d.cid}`}>benchmark</a> · <a href={`${API}/v1/records/${A.record}`}>cold run</a> · <a href={`${API}/v1/records/${B.record}`}>replay</a> · <a href={`${API}/v1/benchmarks/${d.id}`}>JSON</a>. Or check them with the MCP <code>verify_record</code> tool.</p>
@@ -87,4 +92,18 @@ function Method({ m }: { m?: Record<string, string> }) {
   if (!m) return null;
   const items: [string, string][] = [["Same input", m.same_input], ["Fresh identities", m.identities], ["Agent A (cold)", m.agent_a], ["Agent B (reuse)", m.agent_b], ["What counts as a model call", m.model_call], ["Cost", m.cost], ["Time", m.time], ["Not counted", m.not_counted]];
   return <><h2>Method</h2><dl className="method">{items.filter(([, v]) => v).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl></>;
+}
+
+/** Every published benchmark, newest first, labeled verified or not (unverified ones never make the headline). */
+function History({ all, current }: { all: any[]; current?: string }) {
+  if (!all?.length) return null;
+  return <section aria-label="Benchmark history">
+    <h2>All benchmarks</h2>
+    <ul className="small">{all.map((x) => <li key={x.id}>
+      <span className={x.verified ? "good" : "badv"}>{x.verified ? "✓ verified" : "✗ unverified"}</span>{" "}
+      {x.id === current ? <b>{ago(x.created_at)}</b> : <Link to={`/benchmark?id=${x.id}`}>{ago(x.created_at)}</Link>}
+      {" · "}{x.record?.body?.task?.slug} <code>{JSON.stringify(x.record?.body?.input ?? {})}</code>
+      {" · "}{x.record?.body?.runs?.reuse?.model_calls} vs {x.record?.body?.runs?.cold?.model_calls} model calls
+    </li>)}</ul>
+  </section>;
 }

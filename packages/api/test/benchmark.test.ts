@@ -37,7 +37,7 @@ const nodeFetch: typeof fetch = async (url, init) => {
 const req = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => node.req(method, path, body, headers);
 
 /** What the executor does for a run: N loop turns + 1 verify through the guarded Muse route, then posts the run. */
-async function fakeRun(target: Record<string, string>, params: Record<string, string>, start_url: string, turns: number) {
+async function fakeRun(target: Record<string, string>, params: Record<string, string>, start_url: string, turns: number, success = true) {
   const usage = { calls: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, usd: 0 };
   for (let i = 0; i <= turns; i++) {
     const r = await req("POST", "/internal/muse/responses", { input: [{ role: "user", content: [{ type: "input_text", text: "turn" }] }] }, { ...ex, "x-muse-kind": i < turns ? "loop" : "verify" });
@@ -45,13 +45,13 @@ async function fakeRun(target: Record<string, string>, params: Record<string, st
     usage.calls++; usage.input_tokens += r.body.usage.input_tokens; usage.output_tokens += r.body.usage.output_tokens; usage.usd += r.body.usage.usd;
   }
   const run = await req("POST", "/internal/skills/runs", {
-    ...target, start_url, params, success: true,
-    verdict: { success: true, evidence: `infobox shows ${params.infobox_field}`, model: "muse-spark-1.3", capability: "image understanding + structured output" },
+    ...target, start_url, params, success,
+    verdict: { success, evidence: `infobox shows ${params.infobox_field}`, model: "muse-spark-1.3", capability: "image understanding + structured output" },
     turns, actions: [{ turn: 1, type: "type", detail: `type "${params.place}"`, approval: "auto", checks: [], target: "search box" }, { turn: 1, type: "click", detail: "click", approval: "auto", checks: [], target: "first result" }],
     usage, model: "muse-spark-1.3", final_jpeg_b64: jpeg(), executor: { name: "fake-executor", chromium: "none", viewport: "960x600" }, duration_ms: 1000 * turns,
   }, ex);
   expect(run.status).toBe(201);
-  return { ...run.body, usage, turns, verdict: { success: true } };
+  return { ...run.body, usage, turns, verdict: { success } };
 }
 async function fakeJob(id: string) {
   busy = true;
@@ -201,5 +201,16 @@ describe("reuse benchmark", () => {
     expect((await req("POST", "/v1/operator/benchmarks", { skill: "wikipedia-infobox-fact", agent_a: a.did, agent_b: a.did }, op)).status).toBe(400);
     expect((await req("POST", "/v1/operator/benchmarks", { skill: "wikipedia-infobox-fact", agent_a: generateKeyPair().did, agent_b: generateKeyPair().did })).status).toBe(401);
     await new Promise((r) => setTimeout(r, 200)); // let the fake replay job finish
+  });
+  it("an unverified benchmark is kept in the list, labeled, but never becomes the headline", async () => {
+    const verified = (await req("GET", "/v1/benchmarks/latest")).body;
+    expect(verified.verified).toBe(true);
+    const out: any = await runBenchmark(opts({ input: "Reykjavik", runCold: async (a: any) => fakeRun({ draft_id: a.draft_id }, a.params, a.start_url, 5, false) }));
+    expect(out.record.body.comparison.both_verified).toBe(false);
+    const list = (await req("GET", "/v1/benchmarks")).body.benchmarks;
+    expect(list[0]).toMatchObject({ cid: out.cid, verified: false });
+    expect((await req("GET", "/v1/benchmarks/latest")).body.cid).toBe(verified.cid);
+    expect((await req("GET", "/v1/benchmarks/latest?any=1")).body.cid).toBe(out.cid);
+    expect(String((await req("GET", "/site/llms.txt")).body)).not.toContain(out.cid);
   });
 });

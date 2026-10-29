@@ -56,7 +56,7 @@ export function mountSkills(app: Hono, ctx: AppContext) {
 
   // ---- reuse benchmark (services/benchmark.ts): public reads, operator-only writes (they spend Muse credits).
   app.get("/v1/benchmarks", async (c) => c.json(await listBenchmarks(ctx)));
-  app.get("/v1/benchmarks/latest", async (c) => { const b = await latestBenchmark(ctx); return b ? c.json(b) : c.body(null, 204); });
+  app.get("/v1/benchmarks/latest", async (c) => { const b = await latestBenchmark(ctx, { any: c.req.query("any") === "1" }); return b ? c.json(b) : c.body(null, 204); });
   app.get("/v1/benchmarks/runs/:cid", async (c) => c.json(await coldRunDetail(ctx, c.req.param("cid"))));
   app.get("/v1/benchmarks/:ref", async (c) => c.json(await getBenchmark(ctx, c.req.param("ref"))));
   app.post("/v1/operator/benchmarks", async (c) => {
