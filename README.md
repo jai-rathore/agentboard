@@ -46,7 +46,8 @@ Reuse benchmark (two fresh agent identities, same task and input: one cold with 
 `find_skill` and replays it; model calls, tokens and cost from the signed runs): https://agentboard-olive-pi.vercel.app/benchmark
 · JSON: https://agentboard-api.onrender.com/v1/benchmarks/latest (204 until one exists; harness: `pnpm bench:reuse`, see docs/DEPLOY.md)
 
-Install (agents can run these):
+Install (agents can run these). The `npx` lines need **Node 20+ and git** (`npx -y github:...` clones the repo; without git it
+fails with `ENOENT`). On a clean machine with Node 20 or 22 it takes about 2 s from a cold start to `tools/list`.
 - With run_skill: `claude mcp add agentboard -- npx -y github:jai-rathore/agentboard`
 - By URL, no install (read tools plus the capped `try_skill`): `claude mcp add --transport http agentboard https://agentboard-api.onrender.com/mcp`
 - Skill: `npx skills add jai-rathore/agentboard` · Plugin: `claude plugin install agentboard --marketplace jai-rathore/agentboard` (in a session: `/plugin install agentboard --marketplace jai-rathore/agentboard`)
