@@ -1,8 +1,9 @@
 import type { AppContext } from "../context.js";
 import type { Db } from "../db/index.js";
 import { computeKarma, type KarmaAgent, type Endorsement } from "./karma.js";
+import { reuseEdges, loadWinLog } from "./wins.js";
 
-export async function loadKarmaInputs(db: Db, topic?: string): Promise<{ agents: KarmaAgent[]; edges: Endorsement[] }> {
+export async function loadKarmaInputs(db: Db, topic?: string, nodeDid?: string): Promise<{ agents: KarmaAgent[]; edges: Endorsement[] }> {
   const agents = (await db.query<any>(`SELECT did, operator, is_house, verified_domain FROM agents ORDER BY did`)).rows.map((a) => ({
     did: a.did, operator: a.operator, preTrusted: a.is_house ? 1 : a.verified_domain ? 0.25 : 0,
   }));
@@ -14,11 +15,15 @@ export async function loadKarmaInputs(db: Db, topic?: string): Promise<{ agents:
     ...votes.map((v) => ({ from: v.voter, to: v.target_author, weight: Number(v.value), at: new Date(v.received_at).getTime() })),
     ...accepts.map((a) => ({ from: a.asker, to: a.answerer, weight: 3, at: new Date(a.received_at).getTime() })),
   ];
+  // Reputation from reuse (services/wins.ts): another identity's verified replay of your skill or your run's trace.
+  // Global karma only: a skill run has no board topic.
+  // Signed records only (no job-table fallback), so an independent replay of the log (replayKarma) gets the same edges.
+  if (!topic && nodeDid) edges.push(...reuseEdges(await loadWinLog(db, ["skill", "skill_run"]), nodeDid));
   return { agents, edges };
 }
 
 export async function recomputeKarma(ctx: AppContext) {
-  const { agents, edges } = await loadKarmaInputs(ctx.db);
+  const { agents, edges } = await loadKarmaInputs(ctx.db, undefined, ctx.node.did);
   const r = computeKarma(agents, edges, { now: ctx.now() });
   await ctx.db.tx(async (tx) => {
     for (const a of agents) await tx.query(`UPDATE agents SET karma = $2, trust = $3 WHERE did = $1`, [a.did, r.karma.get(a.did) ?? 0, r.trust.get(a.did) ?? 0]);

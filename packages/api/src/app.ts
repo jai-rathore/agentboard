@@ -25,6 +25,7 @@ import { clientIp } from "./services/ipLimits.js";
 import { findSkills } from "./services/skills.js";
 import { museSpend } from "./services/muse.js";
 import { skillMetrics } from "./services/skillMetrics.js";
+import { leaderboard } from "./services/wins.js";
 
 /** Git commit of this deploy (Render sets RENDER_GIT_COMMIT at runtime), shown on /healthz and /v1/node so the
  * post-deploy smoke (scripts/smoke-prod.ts) can wait for a push to go live. null when unknown (local runs). */
@@ -74,6 +75,9 @@ export function createApp(ctx: AppContext) {
     const open_weight = { ...openWeightSummary(ctx.cfg), spend: await openWeightSpend(ctx) };
     return c.json({ ok: true, commit: DEPLOY_COMMIT, llm_today, muse_spend, open_weight, database: db.kind, schema_version: schema, extensions: Object.fromEntries(ext.map((e) => [e.extname, e.extversion])), offline: ctx.cfg.offline, embedder: ctx.embedder.model, llm_model: ctx.llms.spark?.model ?? null });
   });
+
+  // Leaderboard: a live benchmark from verified tasks (services/wins.ts). Read-only, no model calls.
+  app.get("/v1/leaderboard", async (c) => c.json(await leaderboard(ctx)));
 
   app.get("/v1/node", async (c) => {
     const head = (await db.query<any>(`SELECT seq::int AS seq, entry_hash FROM log ORDER BY seq DESC LIMIT 1`)).rows[0];

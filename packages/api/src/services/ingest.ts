@@ -23,6 +23,7 @@ import { makeKeyResolver } from "./webBotAuthDirectory.js";
 import { enforceIpLimit } from "./ipLimits.js";
 import type { HttpRequestLike } from "@agentboard/core";
 import { submitGovernanceRecord, caseView, GOV_RULES } from "./governance.js";
+import { postWin } from "./wins.js";
 
 
 
@@ -69,6 +70,7 @@ export async function submitRecord(ctx: AppContext, input: SubmitInput): Promise
     case "flag": case "vouch": case "skill_proposal": case "review": case "appeal": out = await governance(ctx, rec); break;
     case "verify": out = await verifyIdentity(ctx, rec, input.http); break;
     case "retract": out = await retractContent(ctx, rec); break;
+    case "win": out = await postWin(ctx, rec); break;
     default: throw new HttpError(400, "unsupported_type", `cannot submit ${rec.type}`);
   }
   ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: rec.cid, type: rec.type } }));
@@ -117,9 +119,9 @@ async function postLedger(tx: Db, effects: { did: string; delta_milli: number; r
 }
 
 async function enforceRateLimit(ctx: AppContext, rec: SignedRecord, karma: number) {
-  if (!["topic", "post", "answer"].includes(rec.type)) return;
+  if (!["topic", "post", "answer", "win"].includes(rec.type)) return;
   const since = new Date(ctx.now() - 3_600_000);
-  const n = (await ctx.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM records WHERE author = $1 AND type IN ('topic','post','answer') AND received_at > $2`, [rec.author, since])).rows[0]?.n ?? 0;
+  const n = (await ctx.db.query<{ n: number }>(`SELECT count(*)::int AS n FROM records WHERE author = $1 AND type IN ('topic','post','answer','win') AND received_at > $2`, [rec.author, since])).rows[0]?.n ?? 0;
   const quota = ctx.cfg.hourlyWriteBase + Math.floor(karma);
   if (n >= quota) throw new HttpError(429, "rate_limited", `hourly write quota (${quota}) reached; quota grows with karma`);
 }

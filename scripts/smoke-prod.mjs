@@ -140,6 +140,27 @@ if (process.env.SKIP_API !== "1") {
     return r.json.headline.slice(0, 120);
   });
 
+  await check("API /v1/leaderboard: ranked identities, hardest tasks, the difficulty formula; only verified wins rank; non-independent identities labeled", async () => {
+    const r = await req(`${API}/v1/leaderboard`);
+    assert(r.status === 200 && Array.isArray(r.json?.entrants) && Array.isArray(r.json?.hardest_tasks) && Array.isArray(r.json?.tasks), `/v1/leaderboard -> ${r.status}`);
+    const d = r.json;
+    assert(typeof d.method?.formula === "string" && /f_cold/.test(d.method.formula), "difficulty formula missing");
+    const ranked = d.entrants.filter((e) => e.ranked);
+    ranked.forEach((e, i) => assert(e.rank === i + 1, `rank order broken at ${e.name}`));
+    for (const e of d.entrants) {
+      assert(typeof e.label === "string" && e.label, `${e.key} has no label`);
+      assert(e.independent === (e.kind === "agent"), `${e.key} independent flag wrong`);
+      if (e.kind === "anonymous") assert(!e.ranked, "anonymous public trials are ranked");
+      if (/^demo-/i.test(e.name ?? "")) assert(e.kind === "demo", `${e.name} not labeled DEMO`);
+      for (const w of e.wins ?? []) if (w.ranked) assert(w.status === "verified", `${e.name}: a ${w.status} win is ranked`);
+    }
+    for (const t of d.tasks) assert(t.difficulty >= 1 && t.difficulty <= 5 && t.evidence && typeof t.evidence.attempts === "number", `task ${t.slug} difficulty/evidence shape`);
+    assert(d.entrants.length > 0 && d.hardest_tasks.length > 0, "leaderboard is empty (backfill from verified runs missing)");
+    const o = (await req(`${API}/openapi.json`)).json;
+    assert(o?.paths?.["/v1/leaderboard"], "openapi has no /v1/leaderboard");
+    return `${ranked.length} ranked, ${d.entrants.length - ranked.length} shown only, ${d.tasks.length} tasks, hardest ${d.hardest_tasks[0].slug} (${d.hardest_tasks[0].difficulty})`;
+  });
+
   await check("API 404 for unknown routes", async () => {
     for (const p of ["/definitely-not-a-route", "/v1/definitely-not-a-route"]) {
       const r = await req(`${API}${p}`);
@@ -183,9 +204,9 @@ if (process.env.SKIP_WEB !== "1") {
   const home = await req(`${WEB}/`).catch(() => undefined);
   const homeTitle = home?.text.match(/<title>([^<]*)<\/title>/)?.[1];
 
-  await check("web pages render the app (/, /board, /skills, /governance, /docs, /benchmark)", async () => {
+  await check("web pages render the app (/, /board, /skills, /governance, /docs, /benchmark, /leaderboard)", async () => {
     assert(home?.status === 200 && /<div id="root">/.test(home.text), "home is not the app shell");
-    for (const p of ["/board", "/skills", "/governance", "/docs", "/skills/metrics", "/benchmark"]) {
+    for (const p of ["/board", "/skills", "/governance", "/docs", "/skills/metrics", "/benchmark", "/leaderboard"]) {
       const r = await req(`${WEB}${p}`);
       assert(r.status === 200, `${p} -> ${r.status}`);
       assert(/<div id="root">/.test(r.text) && /<script[^>]+src="\/assets\//.test(r.text), `${p} is not the app shell`);

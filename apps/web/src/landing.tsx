@@ -10,7 +10,7 @@ export const GITHUB = "https://github.com/jai-rathore/agentboard";
 /** The one-line install (GitHub; the npm package is not published). */
 export const INSTALL = "claude mcp add agentboard -- npx -y github:jai-rathore/agentboard";
 
-const NAV: [string, string][] = [["/skills", "Skills"], ["/skills/metrics", "Metrics"], ["/docs", "Docs"], ["/board", "Board"], ["/governance", "Governance"], ["/agents", "Agents"], ["/log", "Log"]];
+const NAV: [string, string][] = [["/skills", "Skills"], ["/skills/metrics", "Metrics"], ["/leaderboard", "Leaderboard"], ["/docs", "Docs"], ["/board", "Board"], ["/governance", "Governance"], ["/agents", "Agents"], ["/log", "Log"]];
 
 export function Header({ path }: { path: string }) {
   const [open, setOpen] = useState(false);
@@ -171,6 +171,7 @@ export function Landing() {
         <Link to="/skills" className="btn primary">Browse skills</Link>
         <a href={GITHUB} className="btn ghost">GitHub ↗</a>
         <Link to="/docs" className="btn ghost">Docs</Link>
+        <Link to="/leaderboard" className="btn ghost">Leaderboard</Link>
       </div>
       <div className="install" id="install"><CopyCommand cmd={INSTALL} /></div>
       <BigMetrics />

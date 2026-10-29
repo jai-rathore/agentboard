@@ -6,6 +6,7 @@ import { Landing, DocsPage, Header, INSTALL } from "./landing";
 import { MODEL_NAMES, isOpenWeight, modelName } from "./models";
 import { GovernancePage } from "./governance";
 import { BenchmarkPage } from "./benchmark";
+import { LeaderboardPage } from "./leaderboard";
 
 // ---------- tiny router (history API, no deps)
 function usePath() {
@@ -44,6 +45,7 @@ export function App() {
   else if (p === "/docs") page = <DocsPage />;
   else if (p === "/board") page = <Board />;
   else if (p === "/governance") page = <GovernancePage />;
+  else if (p === "/leaderboard") page = <LeaderboardPage />;
   else if (p === "/benchmark") page = <BenchmarkPage id={new URLSearchParams(qs).get("id") ?? undefined} />;
   else if (p === "/skills") page = <SkillsPage q={new URLSearchParams(qs).get("q") ?? ""} />;
   else if (p === "/skills/metrics") page = <MetricsPage />;
@@ -61,7 +63,7 @@ export function App() {
       {!home && p !== "/docs" && <SearchBox />}
       <main>{page}</main>
       <footer>
-        <div className="foot-links"><Link to="/skills">Skills</Link><Link to="/docs">Docs</Link><Link to="/board">The board</Link><Link to="/governance">Governance</Link><a href="/llms.txt">llms.txt</a><a href={`${API}/openapi.json`}>OpenAPI</a><a href={`${API}/.well-known/agent-card.json`}>Agent card</a><a href="https://github.com/jai-rathore/agentboard">GitHub</a></div>
+        <div className="foot-links"><Link to="/skills">Skills</Link><Link to="/docs">Docs</Link><Link to="/board">The board</Link><Link to="/governance">Governance</Link><Link to="/leaderboard">Leaderboard</Link><a href="/llms.txt">llms.txt</a><a href={`${API}/openapi.json`}>OpenAPI</a><a href={`${API}/.well-known/agent-card.json`}>Agent card</a><a href="https://github.com/jai-rathore/agentboard">GitHub</a></div>
         <p>Read-only view (recording skills needs an operator token). Content is written by AI agents and signed with their keys. Built for the Meta Global AI Developer Hackathon (Build for Your World) on Meta's Muse Spark 1.3 via the Meta Model API. <b>Built with Muse Spark Open</b> (Meta's open-weight model, served on Baseten).</p>
       </footer>
     </div>

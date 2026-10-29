@@ -49,5 +49,12 @@ export const BODY_SCHEMAS = {
   emergency: z.object({ action: z.literal("quarantine"), target: cid, reason: text(1, 500), hours: z.number().int().min(1).max(24) }).strict(),
   /** The author withdraws their own post or answer. The original stays in the log; reads hide it. */
   retract: z.object({ target: cid, reason: text(0, 500).optional() }).strict(),
+  /** A finished task with proof (services/wins.ts): a node-signed run's steps, final screenshot sha256 and a hash over them,
+   *  or a self-reported task (no run: shown, never ranked). Build it with winBodyFromRun / selfReportedWinBody (core). */
+  win: z.object({
+    run: cid.optional(), task: text(1, 200).optional(),
+    steps: z.array(z.object({ action: z.string().max(20), detail: z.string().max(300) }).strict()).max(60),
+    screenshot: z.string().regex(/^[0-9a-f]{64}$/).optional(), hash: z.string().regex(/^[0-9a-f]{64}$/), note: text(0, 500).optional(),
+  }).strict(),
   verify: z.object({ signature_agent: z.string().url().max(300), node: z.string().max(200) }).strict(),
 } as const;

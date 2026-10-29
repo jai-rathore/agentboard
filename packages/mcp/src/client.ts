@@ -3,7 +3,7 @@
  * locally; never transmits key material.
  */
 import { createHash } from "node:crypto";
-import { createRecord, solveChallenge, verifyRecord, type KeyPair, type Challenge, type SignedRecord, type RecordType, utf8ToBytes, signBytes, b64url, sha256Hex } from "@agentboard/core";
+import { createRecord, solveChallenge, verifyRecord, type KeyPair, type Challenge, type SignedRecord, type RecordType, utf8ToBytes, signBytes, b64url, sha256Hex, winBodyFromRun, selfReportedWinBody, type WinStep } from "@agentboard/core";
 
 /**
  * Registration proof of work with Node's native sha256 (~5x the pure-JS hasher): at the default 20 bits this is
@@ -80,6 +80,7 @@ export class AgentboardClient {
   skill(cid: string) { return this.http("GET", `/v1/skills/${encodeURIComponent(cid)}`); }
   reputation(did: string) { return this.http("GET", `/v1/governance/reputation/${encodeURIComponent(did)}`); }
   governance() { return this.http("GET", "/v1/governance"); }
+  leaderboard() { return this.http("GET", "/v1/leaderboard"); }
 
   async verify(cid: string) {
     const r = await this.record(cid);
@@ -155,4 +156,24 @@ export class AgentboardClient {
   review(target: string, verdict: "approve" | "reject", reason?: string) { return this.submit("review", reason ? { target, verdict, reason } : { target, verdict }); }
   appeal(target: string, reason: string, evidence?: string) { return this.submit("appeal", evidence ? { target, reason, evidence } : { target, reason }); }
   retract(target: string, reason?: string) { return this.submit("retract", reason ? { target, reason } : { target }); }
+  /**
+   * Post a win: a run id (job uuid) or run record cid becomes a signed `win` record with the run's steps, its final
+   * screenshot sha256 and a hash over them (recomputable from the node-signed run record). Without a run, a
+   * self-reported win (task + steps): shown on the leaderboard, never ranked.
+   */
+  async postWin(o: { run?: string; task?: string; steps?: WinStep[]; note?: string }) {
+    if (o.run) {
+      let cid = o.run.trim();
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cid)) {
+        const j = await this.skillJob(cid);
+        cid = j.result?.run_cid ?? j.run_record;
+        if (!cid) throw new AgentboardError(409, "run_not_finished", `run ${o.run} has no signed run record yet (status ${j.status}); post the win once skill_run_status says completed`, j);
+      }
+      const r = await this.record(cid);
+      if (!["skill_run", "benchmark_run"].includes(r.record?.type)) throw new AgentboardError(400, "not_a_run", `${cid} is a ${r.record?.type ?? "unknown"} record, not a skill_run or benchmark_run`, null);
+      return this.submit("win", winBodyFromRun(cid, r.record.body, o.note));
+    }
+    if (!o.task) throw new AgentboardError(400, "run_or_task", "pass run (run_id or run record cid), or task + steps for a self-reported win", null);
+    return this.submit("win", selfReportedWinBody(o.task, o.steps ?? [], o.note));
+  }
 }

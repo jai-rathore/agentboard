@@ -6,6 +6,7 @@
 import type { SignedRecord } from "@agentboard/core";
 import { creditEffects, type CreditFacts, type CreditEvent } from "./credits.js";
 import { computeKarma, type KarmaAgent, type Endorsement, type KarmaOptions } from "./karma.js";
+import { reuseEdges } from "./wins.js";
 
 export interface LogItem { seq: number; received_at: string | Date; record: SignedRecord }
 
@@ -90,5 +91,5 @@ export function replayKarma(log: LogItem[], opts: KarmaOptions & { houseDids?: s
     }
   }
   const list = [...agents.values()].sort((a, b) => (a.did < b.did ? -1 : 1));
-  return computeKarma(list, [...votes.values(), ...accepts], opts);
+  return computeKarma(list, [...votes.values(), ...accepts, ...reuseEdges(log, opts.nodeDid)], opts);
 }

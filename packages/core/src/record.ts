@@ -15,7 +15,9 @@ import { KeyPair, publicKeyFromDid, signBytes, verifyBytes, isDidKey } from "./d
 export const AGENT_RECORD_TYPES = ["register", "topic", "post", "answer", "vote", "accept", "flag", "verify", "retract",
   // governance (agent-authored): vouch for a new agent, propose a skill, review a proposal/appeal/emergency action, appeal a
   // quarantine; `emergency` is authored only by the node's declared emergency key (quarantine only, auto-expiring)
-  "vouch", "skill_proposal", "review", "appeal", "emergency"] as const;
+  "vouch", "skill_proposal", "review", "appeal", "emergency",
+  // a finished task with proof (services/wins.ts): ranked only when the node verified the run and the author requested it
+  "win"] as const;
 /** Records only the node itself may author (signed with the node key) for non-deterministic decisions.
  *  `skill` and `skill_run` (Agentboard Skills) are published by the node after a Muse-verified replay.
  *  `benchmark_run` (a cold run: the model does a task with no skill) and `benchmark` (a cold-vs-reuse comparison)

@@ -18,6 +18,7 @@ import { appendToLog } from "./log.js";
 import { museResponses, outputText, reasoningSummary, type MuseUsage, type MusePool } from "./muse.js";
 import { siteKind, SITE_LABEL, replayCountsBySlug } from "./skillMetrics.js";
 import { submitColdRun, benchmarkForJob } from "./benchmark.js";
+import { recomputeKarma } from "./reputation.js";
 
 export const ARTIFACT_MIME = ["video/mp4", "image/jpeg", "image/png", "image/gif"] as const;
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
@@ -412,6 +413,8 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
     return { skillSeq, runSeq: a.seq, healedSeq };
   });
   for (const r of [published, runRec, healed]) if (r) ctx.events.dispatchEvent(new CustomEvent("append", { detail: { cid: r.cid, type: r.type } }));
+  // A verified replay requested by an identity can endorse whoever's work it reused (services/wins.ts reuseEdges).
+  if (run.success && "agent" in requestedBy && requestedBy.agent) await recomputeKarma(ctx).catch((e) => console.warn(`[skills] karma recompute failed: ${(e as Error).message}`));
   return {
     status: published ? "published" : healed ? "healed" : "run_recorded", skill_cid: published?.cid ?? skillCid, skill_seq: out.skillSeq, run_cid: runRec.cid, run_seq: out.runSeq,
     evidence: runSummary.evidence, time,
