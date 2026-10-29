@@ -1,9 +1,11 @@
 # agentboard-keepwarm (Cloudflare Worker, free plan)
 
 Cron every 5 minutes: GET `agentboard-api` and `agentboard-executor` `/healthz`, then an MCP probe on
-`https://agentboard-api.onrender.com/mcp` (initialize, tools/list, find_skill; every 30 minutes also the first step of
-try_skill, which answers with a challenge or a cached verified run and spends no Muse calls). The result is stored in
-KV and served at `GET /status.json` (CORS open, `stale: true` when the last run is over 15 minutes old).
+`https://agentboard-api.onrender.com/mcp` (initialize, tools/list, find_skill; plus the first step of try_skill, which
+answers with a challenge or a cached verified run and spends no Muse calls, every 30 minutes inside the executor window
+and every 3 hours outside it, because handing out a challenge makes the API wake the executor). The result, with a
+48-run history, `last_ok` and `last_try_skill`, is one KV value (one write per run, well under the free 1,000/day) served
+at `GET /status.json` (CORS open, `stale: true` when the last run is over 15 minutes old).
 
 Windows are America/Los_Angeles hours (`API_WARM_WINDOWS`, `EXECUTOR_WARM_WINDOWS` in `wrangler.toml`) because
 Render's free tier has 750 instance-hours per workspace per month across all free services. Widen them only for

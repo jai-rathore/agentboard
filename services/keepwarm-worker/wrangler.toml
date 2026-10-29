@@ -18,7 +18,10 @@ API_WARM_WINDOWS = "6-24"
 EXECUTOR_WARM_WINDOWS = "10-14"
 PROBE_SLUG = "hacker-news-top-story"
 PROBE_PARAMS = "{}"
+# try_skill first step (a challenge, no replay, no Muse calls; it makes the API wake the executor): every 30 min inside
+# EXECUTOR_WARM_WINDOWS, every 3 h outside it.
 PROBE_TRY_EVERY_MIN = "30"
+PROBE_TRY_OFF_WINDOW_EVERY_MIN = "180"
 TIMEOUT_MS = "70000"
 
 [[kv_namespaces]]
