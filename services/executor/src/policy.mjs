@@ -9,15 +9,30 @@ export const FLAG_WORDS = {
   deletes_data: /\b(delete|remove|destroy|erase|cancel|archive|clear|discard)\b/i,
 };
 const commits = (s) => s.action === "click" || s.action === "keypress";
+export const SEARCH_WORDS = /\b(search(es|ing)?|query|look ?up|find)\b/i;
+export function isSearchSubmit(s) {
+  if (!commits(s)) return false;
+  const text = `${s.intent} ${s.target}`;
+  if (!SEARCH_WORDS.test(text)) return false;
+  return GATED_FLAGS.every((f) => f === "submits_form" || !FLAG_WORDS[f].test(text));
+}
+function explainedBySearch(skill) {
+  const c = skill.steps.filter(commits);
+  return c.some(isSearchSubmit) && !c.some((s) => !isSearchSubmit(s) && FLAG_WORDS.submits_form.test(`${s.intent} ${s.target}`));
+}
+function declaredGated(skill) {
+  const d = (skill.risk_flags ?? []).filter((f) => GATED_FLAGS.includes(f));
+  return explainedBySearch(skill) ? d.filter((f) => f !== "submits_form") : d;
+}
 export function gatedSteps(skill) {
   const out = [];
   skill.steps.forEach((s, index) => {
-    if (!commits(s)) return;
+    if (!commits(s) || isSearchSubmit(s)) return;
     const text = `${s.intent} ${s.target}`;
     const flags = GATED_FLAGS.filter((f) => FLAG_WORDS[f].test(text));
     if (flags.length) out.push({ index, flags });
   });
-  const declared = (skill.risk_flags ?? []).filter((f) => GATED_FLAGS.includes(f));
+  const declared = declaredGated(skill);
   if (declared.length && !out.length) {
     const last = skill.steps.map((s, i) => [s, i]).filter(([s]) => commits(s)).pop();
     if (last) out.push({ index: last[1], flags: declared });
@@ -25,7 +40,8 @@ export function gatedSteps(skill) {
   return out;
 }
 export function effectiveRiskFlags(skill) {
-  const set = new Set((skill.risk_flags ?? []).filter((f) => f !== "none"));
+  const searchOnly = explainedBySearch(skill);
+  const set = new Set((skill.risk_flags ?? []).filter((f) => f !== "none" && !(f === "submits_form" && searchOnly)));
   for (const g of gatedSteps(skill)) for (const f of g.flags) set.add(f);
   return set.size ? [...set] : ["none"];
 }
@@ -68,6 +84,41 @@ export function approvalFor(action, el, skill = { steps: [], risk_flags: [] }, c
   if (!committing) return { approval: "auto", reason: `${what} does not commit anything`, flags: [] };
   const flags = flagsFor(label, effectiveRiskFlags(skill));
   return { approval: "human", reason: `${what} ${flags.length ? `${flags.map((f) => f.replace("_", " ")).join(" / ")}` : "commits an action"}: a human must approve`, flags: flags.length ? flags : ["submits_form"] };
+}
+
+/**
+ * Runs inside the page (page.evaluate(inspectInPage, { a })), so it must stay self-contained: what is under the
+ * pointer (or focused, for keys), for the approval policy and the select_option helper. lookupForm: a read-only
+ * search/lookup form (role=search, a type=search box, an explicit or default GET form whose single text field or
+ * action says search/query), where Enter or the search button only navigates to results.
+ */
+export function inspectInPage({ a }) {
+    let el = (a.type === "click" || a.type === "double_click") ? document.elementFromPoint(a.x, a.y) : (a.type === "keypress" || a.type === "type" ? document.activeElement : null);
+    if (!el || el === document.body) return null;
+    const btn = el.closest("button, a, [role=button], input, select, textarea, label");
+    if (btn?.tagName === "LABEL") el = btn.querySelector("input, select, textarea") ?? btn; else if (btn) el = btn;
+    if (el.tagName === "SELECT") window.__abLastSelect = el;
+    return {
+      tag: el.tagName.toLowerCase(), type: el.getAttribute("type") ?? "", role: el.getAttribute("role") ?? "",
+      text: (el.innerText ?? "").trim().slice(0, 80), value: (el.tagName === "SELECT" ? el.options[el.selectedIndex]?.text : el.value ?? "")?.toString().slice(0, 80) ?? "",
+      label: ((el.labels?.[0] ?? el.closest("label"))?.innerText ?? "").split("\n")[0].trim().slice(0, 80),
+      aria: el.getAttribute("aria-label") ?? "", placeholder: el.getAttribute("placeholder") ?? "", inForm: Boolean(el.closest("form")),
+      lookupForm: (() => {
+        const f = el.closest("form");
+        if (!f) return false;
+        // exactly one visible free-text field (selects such as "search in: all fields" are fine), never email/password/phone
+        const fields = [...f.querySelectorAll("input, textarea")].filter((x) => !/^(hidden|submit|button|image|reset|checkbox|radio)$/i.test(x.getAttribute("type") ?? "") && x.offsetParent !== null);
+        if (fields.length !== 1 || fields[0].tagName !== "INPUT" || /^(email|password|tel)$/i.test(fields[0].type) || /mail|pass|phone/i.test(fields[0].name ?? "")) return false;
+        // GET is the HTML default when a form names no method; POST (or dialog) forms are never lookups
+        const method = (f.getAttribute("method") ?? "get").toLowerCase();
+        if (method !== "get") return false;
+        if (f.getAttribute("method") || f.closest("[role=search]") || f.getAttribute("role") === "search" || fields[0].type === "search") return true;
+        // a method-less form whose one field or action says search/query (name="q", placeholder "Search gems", action="/search")
+        const hint = [fields[0].name, fields[0].id, fields[0].placeholder, fields[0].getAttribute("aria-label"), f.getAttribute("action"), f.id, f.className].join(" ");
+        return /(^|[^a-z])(search|query|q|find|lookup)([^a-z]|$)/i.test(hint);
+      })(),
+      options: el.tagName === "SELECT" ? [...el.options].map((o) => o.text).slice(0, 30) : undefined,
+    };
 }
 
 /** The element's accessible name, as a person would read it (label, aria-label, button text, placeholder). */

@@ -14,7 +14,8 @@ const base = {
   success_check: "infobox shows {{target_field}}", risk_flags: ["none"],
 };
 const step = (intent: string, action: string, value = "") => ({ intent, target: "search box", action, value });
-const V1 = { ...base, steps: [step("type the query", "type", "{{search_query}}"), step("Submit the search", "click"), step("open the article", "click")] };
+// "Submit the search" is a search submit (not risky); a real submit ("Save the edit") keeps a version off public replay
+const V1 = { ...base, steps: [step("type the query", "type", "{{search_query}}"), { intent: "Save the edit", target: "Publish changes button", action: "click", value: "" }, step("open the article", "click")] };
 const V2 = { ...base, steps: [step("type the query", "type", "{{search_query}}"), step("Press Enter to run the search", "keypress", "Enter"), step("open the article", "click")] };
 
 let nextSkill: any = V1;

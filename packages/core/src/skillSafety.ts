@@ -26,17 +26,42 @@ interface SkillLike { risk_flags?: string[]; steps: StepLike[] }
 
 const commits = (s: StepLike) => s.action === "click" || s.action === "keypress";
 
+/** Words that make a step a search or lookup ("Submit the search", "press Enter to run the query"). */
+export const SEARCH_WORDS = /\b(search(es|ing)?|query|look ?up|find)\b/i;
+/**
+ * A search submit: pressing Enter in, or clicking the button of, a search box. It only navigates to results, so it is
+ * not a risky submit even when its words say "submit": the only gated word it may use is submits_form's, and it must
+ * say search/query. Real form submits ("Submit the ticket") and anything that buys, sends or deletes stay gated, and
+ * the executor still checks the element itself at run time (a read-only GET/role=search form, or no form at all).
+ */
+export function isSearchSubmit(s: StepLike): boolean {
+  if (!commits(s)) return false;
+  const text = `${s.intent} ${s.target}`;
+  if (!SEARCH_WORDS.test(text)) return false;
+  return GATED_FLAGS.every((f) => f === "submits_form" || !FLAG_WORDS[f].test(text));
+}
+
+/** A declared submits_form whose only submitting steps are search submits (the recorder flagged pressing Enter in a search box). */
+function explainedBySearch(skill: SkillLike): boolean {
+  const c = skill.steps.filter(commits);
+  return c.some(isSearchSubmit) && !c.some((s) => !isSearchSubmit(s) && FLAG_WORDS.submits_form.test(`${s.intent} ${s.target}`));
+}
+function declaredGated(skill: SkillLike): GatedFlag[] {
+  const d = (skill.risk_flags ?? []).filter((f): f is GatedFlag => (GATED_FLAGS as readonly string[]).includes(f));
+  return explainedBySearch(skill) ? d.filter((f) => f !== "submits_form") : d;
+}
+
 /** Steps that will pause for a human, with the flags they trigger. */
 export function gatedSteps(skill: SkillLike): { index: number; flags: GatedFlag[] }[] {
   const out: { index: number; flags: GatedFlag[] }[] = [];
   skill.steps.forEach((s, index) => {
-    if (!commits(s)) return;
+    if (!commits(s) || isSearchSubmit(s)) return;
     const text = `${s.intent} ${s.target}`;
     const flags = GATED_FLAGS.filter((f) => FLAG_WORDS[f].test(text));
     if (flags.length) out.push({ index, flags });
   });
   // A skill flagged as committing whose steps never say so: its last click is the commit.
-  const declared = (skill.risk_flags ?? []).filter((f): f is GatedFlag => (GATED_FLAGS as readonly string[]).includes(f));
+  const declared = declaredGated(skill);
   if (declared.length && !out.length) {
     const last = skill.steps.map((s, i) => [s, i] as const).filter(([s]) => commits(s)).pop();
     if (last) out.push({ index: last[1], flags: declared });
@@ -44,9 +69,10 @@ export function gatedSteps(skill: SkillLike): { index: number; flags: GatedFlag[
   return out;
 }
 
-/** The recorder's flags plus any implied by the steps. Never fewer than declared. */
+/** The recorder's flags plus any implied by the steps. Never fewer than declared, except a declared submits_form whose only submitting steps are search submits. */
 export function effectiveRiskFlags(skill: SkillLike): string[] {
-  const set = new Set((skill.risk_flags ?? []).filter((f) => f !== "none"));
+  const searchOnly = explainedBySearch(skill);
+  const set = new Set((skill.risk_flags ?? []).filter((f) => f !== "none" && !(f === "submits_form" && searchOnly)));
   for (const g of gatedSteps(skill)) for (const f of g.flags) set.add(f);
   return set.size ? [...set] : ["none"];
 }
@@ -61,11 +87,11 @@ export const PUBLIC_REPLAY_BLOCKING_FLAGS = [...GATED_FLAGS, "login_required", "
  */
 export function publicReplaySafety(skill: SkillLike): { ok: boolean; reasons: string[] } {
   const reasons: string[] = [];
-  const flags = new Set([...(skill.risk_flags ?? []), ...effectiveRiskFlags(skill)]);
+  const flags = new Set(effectiveRiskFlags(skill)); // declared flags included (a declared submits_form only drops when it was a search submit)
   for (const f of PUBLIC_REPLAY_BLOCKING_FLAGS) if (flags.has(f)) reasons.push(`risk flag ${f}`);
   skill.steps.forEach((s, i) => {
     const text = `${s.intent} ${s.target}`;
-    const hit = GATED_FLAGS.filter((f) => FLAG_WORDS[f].test(text));
+    const hit = isSearchSubmit(s) ? [] : GATED_FLAGS.filter((f) => FLAG_WORDS[f].test(text));
     if (hit.length) reasons.push(`step ${i + 1} looks like it ${hit.map((f) => FLAG_LABELS[f]).join(" and ")}`);
   });
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };

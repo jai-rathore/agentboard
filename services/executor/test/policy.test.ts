@@ -47,6 +47,26 @@ describe("executor approval policy", () => {
     expect(gatedSteps(cases[2])).toEqual([{ index: 1, flags: ["purchase"] }]);
     expect(effectiveRiskFlags(cases[4])).toEqual(["none"]);
   });
+  it("a search submit (Enter in a search box) is not a risky submit; real form submits stay gated (same as @agentboard/core)", () => {
+    const st = (intent: string, target: string, action = "keypress") => ({ intent, target, action, value: "" });
+    const rubygems = { risk_flags: ["none"], steps: [st("Click the search input to focus it", "search input", "click"), st("Type the gem name", "search input", "type"), st("Submit the search by pressing Enter", "\"Search Gems…\" search input"), st("Open the matching gem from results", "search result link", "click")] };
+    const crates = { risk_flags: ["none"], steps: [st("Type the crate name into the search bar", "search input", "type"), st("Submit the search", "Large white search input")] };
+    const hn = { risk_flags: ["none"], steps: [st("Enter search query on Hacker News", "search input", "type"), st("Submit search to view results", "same search input containing {{q}}")] };
+    const declared = { risk_flags: ["submits_form"], steps: rubygems.steps }; // the recorder flagged the search itself
+    const ticket = { risk_flags: [], steps: [st("Type the subject", "subject field", "type"), st("Submit the support ticket", "Submit button", "click")] };
+    const searchThenBuy = { risk_flags: [], steps: [st("Submit the search", "search box"), st("Place the order", "Buy now button", "click")] };
+    const orderSearch = { risk_flags: [], steps: [st("Submit the search for the order", "search box")] }; // 'order' reads as a purchase: stays gated
+    for (const c of [rubygems, crates, hn, declared, ticket, searchThenBuy, orderSearch]) { expect(gatedSteps(c)).toEqual(core.gatedSteps(c)); expect(effectiveRiskFlags(c)).toEqual(core.effectiveRiskFlags(c)); }
+    for (const c of [rubygems, crates, hn, declared]) { expect(gatedSteps(c)).toEqual([]); expect(effectiveRiskFlags(c)).toEqual(["none"]); expect(core.publicReplaySafety(c).ok).toBe(true); }
+    expect(gatedSteps(ticket)).toEqual([{ index: 1, flags: ["submits_form"] }]);
+    expect(gatedSteps(searchThenBuy)).toEqual([{ index: 1, flags: ["purchase"] }]);
+    expect(gatedSteps(orderSearch).length).toBe(1);
+    // at run time: Enter in a method-less form whose field says search is a lookup; a POST form never is
+    const enter = { type: "keypress", keys: ["ENTER"] };
+    expect(approvalFor(enter, { tag: "input", type: "text", value: "rails", inForm: true, lookupForm: true }, rubygems).approval).toBe("auto");
+    expect(approvalFor(enter, { tag: "input", type: "text", value: "rails", inForm: false, lookupForm: false }, rubygems).approval).toBe("auto");
+    expect(approvalFor(enter, { tag: "input", type: "text", value: "x", inForm: true, lookupForm: false }, ticket).approval).toBe("human");
+  });
   it("names elements the way a person reads them", () => {
     expect(nameOf({ tag: "input", label: "Customer email\nfoo", placeholder: "name@example.com" })).toBe("Customer email");
     expect(nameOf({ tag: "button", text: "Submit request" })).toBe("Submit request");

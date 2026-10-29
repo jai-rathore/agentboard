@@ -10,7 +10,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { WebSocketServer } from "ws";
 import { chromium } from "playwright-core";
-import { approvalFor, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL, FIND_TOOL } from "./policy.mjs";
+import { approvalFor, inspectInPage, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL, FIND_TOOL } from "./policy.mjs";
 import { makeGif } from "./gif.mjs";
 import { scrollPlan } from "./scroll.mjs";
 import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep, deriveRecipeInPage, applyRecipeInPage, answerCandidates, pickValue, storeRecipe, fillRecipe, cleanSteps } from "./trace.mjs";
@@ -378,30 +378,7 @@ async function replay(m, send, ask, isAborted) {
 
 /** What is under the pointer (or focused, for keys): used by the approval policy and the select_option helper. */
 async function inspect(page, a) {
-  return page.evaluate(({ a }) => {
-    let el = (a.type === "click" || a.type === "double_click") ? document.elementFromPoint(a.x, a.y) : (a.type === "keypress" || a.type === "type" ? document.activeElement : null);
-    if (!el || el === document.body) return null;
-    const btn = el.closest("button, a, [role=button], input, select, textarea, label");
-    if (btn?.tagName === "LABEL") el = btn.querySelector("input, select, textarea") ?? btn; else if (btn) el = btn;
-    if (el.tagName === "SELECT") window.__abLastSelect = el;
-    return {
-      tag: el.tagName.toLowerCase(), type: el.getAttribute("type") ?? "", role: el.getAttribute("role") ?? "",
-      text: (el.innerText ?? "").trim().slice(0, 80), value: (el.tagName === "SELECT" ? el.options[el.selectedIndex]?.text : el.value ?? "")?.toString().slice(0, 80) ?? "",
-      label: ((el.labels?.[0] ?? el.closest("label"))?.innerText ?? "").split("\n")[0].trim().slice(0, 80),
-      aria: el.getAttribute("aria-label") ?? "", placeholder: el.getAttribute("placeholder") ?? "", inForm: Boolean(el.closest("form")),
-      lookupForm: (() => {
-        const f = el.closest("form");
-        if (!f) return false;
-        // exactly one visible free-text field (selects such as "search in: all fields" are fine), never email/password/phone
-        const fields = [...f.querySelectorAll("input, textarea")].filter((x) => !/^(hidden|submit|button|image|reset|checkbox|radio)$/i.test(x.getAttribute("type") ?? "") && x.offsetParent !== null);
-        if (fields.length !== 1 || fields[0].tagName !== "INPUT" || /^(email|password|tel)$/i.test(fields[0].type) || /mail|pass|phone/i.test(fields[0].name ?? "")) return false;
-        const method = (f.getAttribute("method") ?? "").toLowerCase();
-        if (method && method !== "get") return false;
-        return method === "get" || Boolean(f.closest("[role=search]")) || f.getAttribute("role") === "search" || fields[0].type === "search";
-      })(),
-      options: el.tagName === "SELECT" ? [...el.options].map((o) => o.text).slice(0, 30) : undefined,
-    };
-  }, { a });
+  return page.evaluate(inspectInPage, { a });
 }
 
 async function execute(page, a) {
