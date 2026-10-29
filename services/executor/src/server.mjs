@@ -154,8 +154,12 @@ async function replay(m, send, ask, isAborted) {
     context = await browser.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
     const page = await context.newPage();
     // Stay on the skill's site: top-level navigations to another origin are blocked.
+    // a deterministic replay needs the DOM, not the pictures: images, media and web fonts are skipped (the executor's
+    // CPU is small; decoding them was most of a trace step). The model loop (and a recovery) gets the full page.
+    const lean = { on: usableTrace(trace) };
     await page.route("**/*", (route) => {
       const r = route.request();
+      if (lean.on && ["image", "media", "font"].includes(r.resourceType())) return route.abort("blockedbyclient");
       if (r.isNavigationRequest() && r.frame() === page.mainFrame() && new URL(r.url()).origin !== origin) { actions.push({ turn: -1, type: "blocked", detail: `navigation to ${new URL(r.url()).origin} blocked (off-site)`, approval: "none", checks: [] }); return route.abort("blockedbyclient"); }
       return route.continue();
     });
@@ -192,7 +196,7 @@ async function replay(m, send, ask, isAborted) {
         const s = trace.steps[i], tStep = Date.now();
         if (isAborted()) throw Object.assign(new Error("viewer disconnected"), { code: "aborted" });
         const r = await runTraceStep(page, s, params, { origin, skill, ask, send, actions, history, index: i, W, H, selectOption, inspect, execute, onHuman: (ms) => { humanMs += ms; } });
-        if (!r.ok) { replayInfo.mode = "trace+recovery"; replayInfo.failed_step = i + 1; replayInfo.failed_reason = r.reason.slice(0, 300); break; }
+        if (!r.ok) { lean.on = false; replayInfo.mode = "trace+recovery"; replayInfo.failed_step = i + 1; replayInfo.failed_reason = r.reason.slice(0, 300); break; }
         rec({ ...structuredClone(s), changes_url: undefined });
         recorded[recorded.length - 1]._before = r.before; recorded[recorded.length - 1].changes_url = r.changed;
         replayInfo.trace_steps_done = i + 1; stepMs.push(Date.now() - tStep);
@@ -295,6 +299,7 @@ async function replay(m, send, ask, isAborted) {
     const check = fill(skill.success_check, params);
     await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
     closePrev();
+    const tFinal = Date.now();
     const texts = await page.evaluate(pageTextInPage).catch(() => ({ viewport: "", page: "", title: "" }));
     // ---- deterministic value return: read the answer off the page with the trace's extraction recipe
     const extractWith = async (recipe) => (recipe ? pickValue(await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: false }).catch(() => null), recipe) : null);
@@ -304,7 +309,8 @@ async function replay(m, send, ask, isAborted) {
     // the final screenshot shows the extracted value (scrolled into view) for the record and any verifier call
     if (value != null) await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: true }).catch(() => {});
     const finalJpg = await shoot("final");
-    gifFrames.push(await page.screenshot({ type: "png" }));
+    // a zero-model replay has no turns to animate: its evidence is the final screenshot (no GIF to encode)
+    if (replayInfo.mode !== "trace") gifFrames.push(await page.screenshot({ type: "png" }));
     let det = null;
     if (replayInfo.mode === "trace") {
       det = checkFinal(trace.final, texts, params, page.url());
@@ -339,12 +345,13 @@ async function replay(m, send, ask, isAborted) {
     // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
     const steps = cleanSteps(recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })));
     const runTrace = verdictFull.success && steps.length ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: finalChecks(texts, params, page.url()), ...(recipe ? { extract: recipe } : noValue ? { no_value: true } : {}) } : null;
+    if (replayInfo.mode === "trace") send({ type: "status", message: `Final page read, value extracted and checked in ${Date.now() - tFinal} ms` });
     send({ type: "verdict", ...verdictFull, final_message: finalMessage, value });
-    const gif = makeGif(gifFrames);
+    const gif = gifFrames.length ? makeGif(gifFrames) : null;
     const run = {
       ...target, ...(m.job_id ? { job_id: m.job_id } : {}), start_url, params, success: verdictFull.success, step_changes: stepChanges, human_ms: humanMs, verdict: verdictFull, turns: replayInfo.mode === "trace" ? 0 : Math.min(turn, MAX_TURNS), actions: actions.slice(0, 200), usage, model: replayInfo.mode === "trace" ? "none (recorded trace)" : v.model,
       ...(runTrace ? { trace: runTrace } : {}), ...(target.skill_cid ? { replay: replayInfo } : {}), answer,
-      final_jpeg_b64: finalJpg.toString("base64"), gif_b64: gif.toString("base64"),
+      final_jpeg_b64: finalJpg.toString("base64"), ...(gif ? { gif_b64: gif.toString("base64") } : {}),
       executor: { name: "agentboard-executor", chromium: `headless-shell ${browser.version()}`, viewport: `${W}x${H}` }, duration_ms: Date.now() - t0,
     };
     if (verdictFull.success && target.skill_cid) send({ type: "status", message: "Verified. Checking whether the skill's steps still match the site…" });
