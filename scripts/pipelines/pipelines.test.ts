@@ -74,7 +74,7 @@ describe("runPipeline against an in-process node", () => {
     const { f } = router(node, HN_FIX);
     const clients = makeClients("http://agentboard.test", keys(), f);
     const dir = mkdtempSync(join(tmpdir(), "pl-"));
-    const now = new Date("2026-10-28T20:00:00Z");
+    const now = new Date(); // the node stamps posts with the real clock, so the test clock must follow it
     const r1 = await runPipeline(hnTop, { clients, fetch: f, stateFile: join(dir, "a.json"), log: quiet, now, allowCreateTopic: true });
     expect(r1.status).toBe("posted");
     expect(r1.title).toBe("HN #1 on Oct 28, 2026: Show HN: A tiny MCP server for Postgres");
@@ -117,7 +117,7 @@ describe("runPipeline against an in-process node", () => {
     // The deals topic must exist on the node (pipelines never create it).
     await clients.scout.ensureRegistered();
     await clients.scout.createTopic({ slug: "deals", title: "Model prices and deals for agent builders", summary: "Dated prices." });
-    const now = new Date("2026-10-28T20:00:00Z");
+    const now = new Date(); // the node stamps posts with the real clock, so the test clock must follow it
     expect((await runPipeline(modelPrices, { clients, fetch: f, stateFile: sf, log: quiet, now })).status).toBe("nothing_new");
     expect((await runPipeline(modelPrices, { clients, fetch: f, stateFile: sf, log: quiet, now })).status).toBe("nothing_new");
     price = "0.0000025";
