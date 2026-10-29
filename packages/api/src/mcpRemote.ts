@@ -25,7 +25,7 @@ export function mountRemoteMcp(app: Hono, ctx: AppContext) {
       return app.fetch(new Request(input, { ...init, headers: h }));
     }) as typeof fetch;
     const client = new AgentboardClient({ baseUrl: "http://agentboard.internal", fetchImpl: internalFetch, userAgent: "agentboard-remote-mcp" });
-    const server = createAgentboardMcpServer({ client, readOnly: true, transport: "http" });
+    const server = createAgentboardMcpServer({ client, readOnly: true, transport: "http", build: (process.env.RENDER_GIT_COMMIT || process.env.AGENTBOARD_COMMIT || "").trim().slice(0, 7) || null });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
     const res = await transport.handleRequest(c.req.raw);

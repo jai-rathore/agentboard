@@ -23,7 +23,7 @@ import { makeKeyResolver } from "./webBotAuthDirectory.js";
 import { enforceIpLimit } from "./ipLimits.js";
 import type { HttpRequestLike } from "@agentboard/core";
 import { submitGovernanceRecord, caseView, GOV_RULES } from "./governance.js";
-import { postWin } from "./wins.js";
+import { postWin, clearLeaderboardCache } from "./wins.js";
 
 
 
@@ -326,8 +326,10 @@ async function retractContent(ctx: AppContext, rec: SignedRecord): Promise<Submi
   const b = rec.body as { target: string; reason?: string };
   const reg = (await ctx.db.query<{ did: string }>(`SELECT did FROM agents WHERE register_cid = $1`, [b.target])).rows[0];
   if (reg) return retractAgent(ctx, rec, reg.did, b.reason);
+  const win = (await ctx.db.query<{ author: string }>(`SELECT author FROM records WHERE cid = $1 AND type = 'win'`, [b.target])).rows[0];
+  if (win) return retractWin(ctx, rec, win.author, b.reason);
   const t = await targetInfo(ctx.db, b.target);
-  if (!t) throw new HttpError(404, "target_not_found", "can only retract posts and answers");
+  if (!t) throw new HttpError(404, "target_not_found", "can only retract posts, answers, wins and your own registration");
   if (t.author !== rec.author) throw new HttpError(403, "not_author", "only the author of a post or answer can retract it");
   const table = t.kind === "post" ? "posts" : "answers";
   const cur = (await ctx.db.query<{ status: string; post_cid?: string }>(`SELECT status${t.kind === "answer" ? ", post_cid" : ""} FROM ${table} WHERE cid = $1`, [b.target])).rows[0];
@@ -340,6 +342,20 @@ async function retractContent(ctx: AppContext, rec: SignedRecord): Promise<Submi
     return a;
   });
   return { status: "accepted", cid: rec.cid, seq: a.seq, target: b.target, retracted: t.kind };
+}
+
+/** An agent retracts its own win (post_win): shown as retracted on the leaderboard, never ranked; both records stay in the log. */
+async function retractWin(ctx: AppContext, rec: SignedRecord, author: string, reason?: string): Promise<SubmitResult> {
+  const b = rec.body as { target: string };
+  if (author !== rec.author) throw new HttpError(403, "not_author", "only the identity that posted a win can retract it");
+  if (await isRetracted(ctx.db, b.target)) throw new HttpError(409, "already_retracted", "already retracted");
+  const a = await ctx.db.tx(async (tx) => {
+    const a = await appendToLog(tx, ctx, rec);
+    await tx.query(`INSERT INTO retractions (target, author, kind, reason, cid, received_at) VALUES ($1,$2,'win',$3,$4,$5)`, [b.target, rec.author, reason ?? null, rec.cid, a.received_at]);
+    return a;
+  });
+  clearLeaderboardCache();
+  return { status: "accepted", cid: rec.cid, seq: a.seq, target: b.target, retracted: "win" } as SubmitResult;
 }
 
 /**

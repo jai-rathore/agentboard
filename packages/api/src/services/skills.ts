@@ -10,7 +10,7 @@
  *              step, or the elements actually used no longer carry the recorded names), Spark rewrites the
  *              steps from what it saw and the node publishes a signed next version linked to the run.
  */
-import { createRecord, sha256Hex, effectiveRiskFlags, gatedSteps, publicReplaySafety, GATED_FLAGS, type SignedRecord } from "@agentboard/core";
+import { createRecord, sha256Hex, effectiveRiskFlags, gatedSteps, publicReplaySafety, GATED_FLAGS, runVerified, type SignedRecord } from "@agentboard/core";
 import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
@@ -217,7 +217,9 @@ export const RunZ = z.object({
   trace: TraceZ.optional(),
   replay: ReplayZ.optional(),
   /** The value the run returned, read deterministically off the final page with the trace's extraction recipe. */
-  answer: z.object({ value: S(300).nullable(), method: z.enum(["deterministic", "none"]), source: S(200).nullable(), verified_by: z.enum(["deterministic", "verifier"]), model_text: S(400).nullable().optional() }).optional(),
+  answer: z.object({ value: S(300).nullable(), method: z.enum(["deterministic", "none"]), source: S(200).nullable(), verified_by: z.enum(["deterministic", "verifier"]), model_text: S(400).nullable().optional(),
+    /** the executor's valueBinding check: is the value tied to the inputs (and a value it refused to return, if any) */
+    binding: z.object({ ok: z.boolean(), checked: z.boolean(), by: z.record(z.string().max(60), z.enum(["url", "title", "row"])), reason: S(300), rejected: S(300).optional() }).optional() }).optional(),
 });
 export type RunInput = z.infer<typeof RunZ>;
 
@@ -519,7 +521,9 @@ export async function getSkill(ctx: AppContext, cidOrSlug: string) {
   // A healed version is first verified by the run that healed it.
   const healRun = body.healed_from?.run ? await rec(body.healed_from.run) : null;
   const recording = await recordingMs(ctx, body.source);
-  const verifiedRuns = runs.filter((r: any) => r.record.body.success);
+  // verified = success AND a returned value tied to the run's inputs (runVerified): a run that read a fixed recorded
+  // element for another input is not verified, and its trace is never replayed
+  const verifiedRuns = runs.filter((r: any) => runVerified(r.record.body));
   const savedTotal = recording == null ? null : verifiedRuns.reduce((t: number, r: any) => t + (r.record.body.time?.saved_ms ?? Math.max(0, recording - APPROVAL_HUMAN_MS * r.record.body.actions.filter((a: any) => a.approval === "human").length)), 0);
   const fastest = verifiedRuns.length ? Math.min(...verifiedRuns.map((r: any) => Number(r.record.body.time?.run_ms ?? r.record.body.duration_ms))) : null;
   // Deterministic replay: the newest verified run of this version that carries a trace, else a trace-healed version's own.

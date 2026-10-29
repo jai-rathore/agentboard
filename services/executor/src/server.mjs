@@ -13,7 +13,7 @@ import { chromium } from "playwright-core";
 import { approvalFor, inspectInPage, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL, FIND_TOOL } from "./policy.mjs";
 import { makeGif } from "./gif.mjs";
 import { scrollPlan } from "./scroll.mjs";
-import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep, deriveRecipeInPage, applyRecipeInPage, answerCandidates, pickValue, storeRecipe, fillRecipe, cleanSteps } from "./trace.mjs";
+import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep, deriveRecipeInPage, applyRecipeInPage, answerCandidates, pickValue, storeRecipe, fillRecipe, cleanSteps, valueBinding } from "./trace.mjs";
 import { probeInPage, scrollToTextInPage, snapPoint, INTERACTIVE, SNAP_RADIUS, addressBarUrl, isAddressBarKey } from "./click.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
@@ -307,7 +307,17 @@ async function replay(m, send, ask, isAborted) {
     const extractWith = async (recipe) => (recipe ? pickValue(await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: false }).catch(() => null), recipe) : null);
     // an operator run with relearn: true learns the recipe again from the verifier's answer (the old one is the fallback)
     let recipe = m.relearn ? null : (trace?.extract ?? null), value = await extractWith(recipe);
-    if (recipe && value == null) { send({ type: "status", message: `The extraction recipe found no value on this page (${recipe.kind}${recipe.label ? ` "${fillText(recipe.label, params)}"` : ""})` }); recipe = null; }
+    // a value must be tied to this run's inputs (see valueBinding): the final page is specific to each parameter, or the
+    // value comes from the row whose label names it. A fixed recorded element on a shared page (the first row of a rates
+    // table) is never returned for another input.
+    const rowLabelOf = async (rc) => (rc?.kind === "row" ? ((await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(rc, params), scroll: false, withLabel: true }).catch(() => null))?.label ?? fillText(rc.label, params)) : null);
+    const bindingOf = async (rc, val) => valueBinding({ params, value: val, finalUrlTemplate: templ(page.url(), params), finalUrl: page.url(), rowLabel: await rowLabelOf(rc), titleParams: finalChecks(texts, params, page.url()).title });
+    let unboundNote = null;
+    if (recipe && value != null) {
+      const b = await bindingOf(recipe, value);
+      if (!b.ok) { unboundNote = b.reason; send({ type: "status", message: `Not returning "${value}": ${b.reason}` }); recipe = null; value = null; }
+    }
+    if (!unboundNote && recipe && value == null) { send({ type: "status", message: `The extraction recipe found no value on this page (${recipe.kind}${recipe.label ? ` "${fillText(recipe.label, params)}"` : ""})` }); recipe = null; }
     // the final screenshot shows the extracted value (scrolled into view) for the record and any verifier call
     if (value != null) await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: true }).catch(() => {});
     const finalJpg = await shoot("final");
@@ -316,7 +326,7 @@ async function replay(m, send, ask, isAborted) {
     let det = null;
     if (replayInfo.mode === "trace") {
       det = checkFinal(trace.final, texts, params, page.url());
-      if (det.ok && trace.extract && value == null) det = { ok: false, checks: det.checks, reason: "the value could not be extracted" };
+      if (det.ok && trace.extract && value == null) det = { ok: false, checks: det.checks, reason: unboundNote ? `the recorded value is not tied to the inputs (${unboundNote})` : "the value could not be extracted" };
       // no recipe yet: one verifier call quotes the value, and this run learns where it is on the page (next replays: 0 calls)
       // (an operator run with relearn: true retries learning on a trace marked no_value)
       if (det.ok && !trace.extract && (!trace.no_value || m.relearn)) det = { ok: false, checks: det.checks, reason: "no extraction recipe yet" };
@@ -342,15 +352,16 @@ async function replay(m, send, ask, isAborted) {
       const derived = await page.evaluate(deriveRecipeInPage, { candidates: [...new Set([...vvParts, ...answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params)])].slice(0, 14), labels: Object.values(params).filter((x) => String(x).length >= 2) }).catch(() => null);
       const stored = storeRecipe(derived, params);
       const got = await extractWith(stored);
-      if (stored && got != null) { recipe = stored; value = got; }
+      if (stored && got != null) { const b = await bindingOf(stored, got); if (b.ok) { recipe = stored; value = got; } else { unboundNote = b.reason; send({ type: "status", message: `Not keeping the value "${got}": ${b.reason}` }); } }
     }
-    if (value == null && m.relearn && trace?.extract) { const got = await extractWith(trace.extract); if (got != null) { recipe = trace.extract; value = got; } }
+    if (value == null && m.relearn && trace?.extract) { const got = await extractWith(trace.extract); if (got != null && (await bindingOf(trace.extract, got)).ok) { recipe = trace.extract; value = got; } }
+    const binding = await bindingOf(recipe, value);
     // no_value only when the model's answer quoted no value at all (else learning is retried on the next replay)
     const noValue = value == null && (verdictFull.model === "deterministic" ? Boolean(trace?.no_value) && !m.relearn : answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params).length === 0);
     // the label of the row the value was actually read from (not the recipe's sub-row hint)
     const matched = value != null && recipe.kind === "row" ? await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: false, withLabel: true }).catch(() => null) : null;
     const rowLabel = (matched?.label || fillText(recipe?.label ?? "", params)).slice(0, 120);
-    const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `infobox/table row "${rowLabel}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier", model_text: finalMessage ? finalMessage.slice(0, 400) : null };
+    const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `infobox/table row "${rowLabel}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier", model_text: finalMessage ? finalMessage.slice(0, 400) : null, binding: { ok: binding.ok, checked: binding.checked, by: binding.by, reason: binding.reason.slice(0, 300), ...(unboundNote ? { rejected: unboundNote.slice(0, 300) } : {}) } };
     // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
     const steps = cleanSteps(recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })));
     const runTrace = verdictFull.success && (steps.length || recipe) ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: finalChecks(texts, params, page.url()), ...(recipe ? { extract: recipe } : noValue ? { no_value: true } : {}) } : null;

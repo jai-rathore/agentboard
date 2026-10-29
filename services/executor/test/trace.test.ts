@@ -3,6 +3,9 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { templ, fillUrl, finalChecks, checkFinal, traceStep, usableTrace, describeInPage, pageTextInPage, locate, runTraceStep, cleanSteps, locLabel, answerCandidates, deriveRecipeInPage, applyRecipeInPage, storeRecipe, fillRecipe, pickValue, regexFor } from "../src/trace.mjs";
 // @ts-expect-error plain ESM module without types
 import { INTERACTIVE } from "../src/click.mjs";
+// @ts-expect-error plain ESM module without types
+import { valueBinding as execBinding } from "../src/trace.mjs";
+import { valueBinding as coreBinding } from "../../../packages/core/src/valueBinding";
 
 const params = { search_query: "Reykjavík", target_field: "Population" };
 
@@ -108,6 +111,8 @@ const SITE = "https://site.test";
 const pages: Record<string, (q: URLSearchParams, path: string) => string> = {
   "/": () => `<title>Home</title><form action="/search"><input type="search" name="q" aria-label="Search the wiki"><button>Search</button></form><p>Welcome</p>`,
   "/search": (q) => `<title>Search</title><h1>Results</h1><ul><li><a href="/wiki/Noise">Noise article</a></li><li><a href="/wiki/${encodeURIComponent(q.get("q") ?? "")}">${q.get("q")}</a></li></ul>`,
+  // a rates table (x-rates): rows labeled by their first cell; Euro is the first row
+  "/table/": () => `<title>Exchange Rates table</title><table><thead><tr><th>US Dollar</th><th>1.00 USD</th><th>inv. 1.00 USD</th></tr></thead><tbody><tr><td>Euro</td><td><a href="/e">0.895817</a></td><td>1.116299</td></tr><tr><td>British Pound</td><td><a href="/g">0.741203</a></td><td>1.349159</td></tr><tr><td>Japanese Yen</td><td><a href="/j">157.869642</a></td><td>0.006334</td></tr></tbody></table>`,
   "/wiki": (_q, path) => { const t = decodeURIComponent(path.slice(6)); const pop = t === "Oslo" ? "717,710" : "139,875"; return `<title>${t} - Wiki</title><h1>${t}</h1><table class="infobox"><tr><th>Country</th><td>Somewhere</td></tr><tr><th colspan="2">Population (${t === "Oslo" ? 2024 : 2023})</th></tr><tr><th>• City</th><td>${pop}</td></tr><tr><th>• Density</th><td>1,500/km2 (3,900/sq mi)</td></tr><tr><th>• Urban</th><td>${t === "Oslo" ? "1,064,235" : "200,000"}</td></tr><tr><th>• Metro</th><td>${t === "Oslo" ? "1,588,457" : "250,000"}</td></tr><tr><th>Elevation</th><td>12 m</td></tr></table><p>Population figures are estimates.</p>`; },
 };
 async function newPage() {
@@ -197,5 +202,65 @@ describe("a start URL that names params", () => {
     expect(fillUrl(tpl, { package: "requests" })).toBe("https://pypi.org/project/requests/");
     expect(fillUrl(tpl, { package: "a b" })).toBe("https://pypi.org/project/a%20b/");
     expect(templ(fillUrl(tpl, { package: "flask" }), { package: "flask" })).toBe(tpl);
+  });
+});
+
+describe("value binding: a returned value must be tied to the run's inputs (same as @agentboard/core)", () => {
+  const cases: any[] = [
+    // x-rates: the recorded first-row cell on a page that is the same for every currency: never tied to the input
+    { params: { target_currency: "Japanese Yen" }, value: "0.895817", finalUrlTemplate: "https://www.x-rates.com/table/?from=USD&amount=1", finalUrl: "https://www.x-rates.com/table/?from=USD&amount=1", rowLabel: null },
+    { params: { target_currency: "Japanese Yen" }, value: "157.869642", finalUrlTemplate: "https://www.x-rates.com/table/?from=USD&amount=1", rowLabel: "Japanese Yen" },
+    { params: { target_currency: "Japanese Yen" }, value: "0.89", rowLabel: "Euro" },
+    // per-input pages (PyPI, crates, Go, HN search): the final URL names the input
+    { params: { package: "numpy" }, value: "2.5.4", finalUrlTemplate: "https://pypi.org/project/{{package}}/#history" },
+    { params: { module_path: "github.com/spf13/cobra" }, value: "v1.10.2", finalUrl: "https://pkg.go.dev/github.com%2Fspf13%2Fcobra" },
+    { params: { search_query: "Mount Everest", target_field: "Elevation" }, value: "8,848.86 m", finalUrl: "https://en.wikipedia.org/wiki/Mount_Everest", rowLabel: "Elevation" },
+    { params: { search_query: "Mount Everest", target_field: "Elevation" }, value: "9,600,000", finalUrl: "https://en.wikipedia.org/wiki/Mount_Everest", rowLabel: "Area › Total" },
+    { params: { search_query: "NYC", target_field: "Population" }, value: "8,478,072", finalUrl: "https://en.wikipedia.org/wiki/New_York_City", rowLabel: "Population (2024) › City", titleParams: ["search_query"] },
+    { params: { search_query: "Seoul", target_field: "Metro population" }, value: "26,037,000", finalUrl: "https://en.wikipedia.org/wiki/Seoul", rowLabel: "Population › Metro" },
+    { params: { q: "x" }, value: "1" }, // 1-char values are not bound
+    { params: { a: "Oslo" }, value: null },
+  ];
+  it("binds every parameter by page URL, page title or row label, else refuses the value", () => {
+    const r = cases.map((c) => execBinding(c));
+    expect(r.map((x: any) => x.ok)).toEqual([false, true, false, true, true, true, false, true, true, true, true]);
+    expect(r[0].reason).toMatch(/not tied to target_currency "Japanese Yen".*fixed element/);
+    expect(r[6].missing).toEqual(["target_field"]);
+    expect(r[1].by).toEqual({ target_currency: "row" });
+    expect(r[7].by).toEqual({ search_query: "title", target_field: "row" });
+    expect(r[10].checked).toBe(false);
+    for (const c of cases) expect(execBinding(c)).toEqual(coreBinding(c));
+  });
+
+  it("fills a URL template: whole-URL params as is, path params keep '/', query params fully encoded; query params are checked", () => {
+    expect(fillUrl("{{repository_url}}", { repository_url: "https://github.com/microsoft/playwright" })).toBe("https://github.com/microsoft/playwright");
+    expect(fillUrl("https://pkg.go.dev/{{module_path}}", { module_path: "golang.org/x/net" })).toBe("https://pkg.go.dev/golang.org/x/net");
+    expect(fillUrl("https://hn.algolia.com/?query={{q}}&type=story", { q: "a/b c" })).toBe("https://hn.algolia.com/?query=a%2Fb%20c&type=story");
+    const final = { url: "https://hn.algolia.com/?query={{q}}&type=story", viewport: ["q"], page: [], title: [] };
+    expect(checkFinal(final, { viewport: "postgres", page: "", title: "" }, { q: "postgres" }, "https://hn.algolia.com/?query=postgres&type=story").ok).toBe(true);
+    expect(checkFinal(final, { viewport: "postgres", page: "", title: "" }, { q: "postgres" }, "https://hn.algolia.com/?query=sqlite&type=story").ok).toBe(false);
+  });
+});
+
+describe.skipIf(!chromium)("value binding in headless Chromium: a rates table (x-rates)", () => {
+  it("reads the row labeled with the input, not the recorded first row, for Japanese Yen and British Pound", async () => {
+    if (!browser) return;
+    const p = await newPage();
+    await p.goto(SITE + "/table/?from=USD&amount=1");
+    // learning: the verifier quoted 157.869642 for Japanese Yen -> a row recipe labeled with the input
+    const derived = await p.evaluate(deriveRecipeInPage, { candidates: ["157.869642"], labels: ["Japanese Yen"] });
+    const recipe = storeRecipe(derived, { target_currency: "Japanese Yen" });
+    expect(recipe).toMatchObject({ kind: "row", label: "{{target_currency}}", offset: 0 });
+    for (const [cur, want] of [["Japanese Yen", "157.869642"], ["British Pound", "0.741203"], ["Euro", "0.895817"]]) {
+      const got = await p.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, { target_currency: cur }), withLabel: true });
+      expect(pickValue(got.text, recipe)).toBe(want);
+      expect(got.label).toBe(cur);
+      expect(execBinding({ params: { target_currency: cur }, value: want, finalUrl: p.url(), rowLabel: got.label }).ok).toBe(true);
+    }
+    // the old recipe (the recorded first-row cell) returns the Euro rate for any input: refused
+    const old = { kind: "css", css: "table > tbody > tr:nth-of-type(1) > td:nth-of-type(2)", regex: "v?\\d+(?:\\.\\d+)+" };
+    const stale = pickValue(await p.evaluate(applyRecipeInPage, { recipe: old }), old);
+    expect(stale).toBe("0.895817");
+    expect(execBinding({ params: { target_currency: "Japanese Yen" }, value: stale, finalUrl: p.url(), rowLabel: null }).ok).toBe(false);
   });
 });

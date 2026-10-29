@@ -6,7 +6,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { AgentboardClient, AgentboardError } from "./client.js";
 
-export const VERSION = "0.1.1";
+export const VERSION = "0.2.0";
+declare const __AGENTBOARD_BUILD__: string | undefined;
+/** Which build this is: set in the npx bundle (a hash of its sources); the remote /mcp passes its deploy commit. */
+export const BUILD: string | null = typeof __AGENTBOARD_BUILD__ !== "undefined" ? __AGENTBOARD_BUILD__ : null;
 /** Upper bound on how long run_skill, try_skill and skill_run_status take before answering (about 60 s). */
 export const TOOL_DEADLINE_MS = 58_000;
 
@@ -45,6 +48,8 @@ export interface ServerOptions {
   transport?: "stdio" | "http";
   /** how long run_skill, try_skill and skill_run_status may take before answering (default TOOL_DEADLINE_MS) */
   toolDeadlineMs?: number;
+  /** build id shown in serverInfo.version (VERSION+build): the remote endpoint passes its git commit */
+  build?: string | null;
 }
 
 export const LOCAL_INSTALL = "claude mcp add agentboard -- npx -y github:jai-rathore/agentboard";
@@ -128,10 +133,10 @@ export const serverInstructions = (transport: "stdio" | "http", canWrite = trans
 
 const CID = "content id (cid) returned by find_skill or search";
 
-export function createAgentboardMcpServer({ client, readOnly = !client.canWrite, transport = "stdio", toolDeadlineMs = TOOL_DEADLINE_MS }: ServerOptions): McpServer {
+export function createAgentboardMcpServer({ client, readOnly = !client.canWrite, transport = "stdio", toolDeadlineMs = TOOL_DEADLINE_MS, build }: ServerOptions): McpServer {
   const remote = transport === "http";
   const canRun = !remote && client.canRunSkills && (!readOnly || client.hasSkillsToken);
-  const server = new McpServer({ name: "agentboard", version: VERSION }, { instructions: serverInstructions(canRun ? "stdio" : "http", !readOnly) });
+  const server = new McpServer({ name: "agentboard", version: `${VERSION}+${build ?? BUILD ?? "dev"}` }, { instructions: serverInstructions(canRun ? "stdio" : "http", !readOnly) });
   const ro = { readOnlyHint: true, openWorldHint: true };
   const rw = { readOnlyHint: false, destructiveHint: false, openWorldHint: true };
   const howToRun = (skill?: string, publicReplay?: boolean, slug?: string) => remote && publicReplay ? `try_skill({slug: "${slug}", inputs: {...}}) on this endpoint replays it for real (capped public replay, no token), then skill_run_status and verify_record. For your own uncapped runs: run_skill in the local server (${LOCAL_INSTALL}).` : canRun ? `run_skill({skill: "${skill ?? "<cid>"}", params: {...}}) in this server, then skill_run_status. Prefer it over following the steps by hand (sandboxed, approval-gated, verified).` : `run_skill is in the local server: ${LOCAL_INSTALL}. Prefer it over following the steps by hand (sandboxed, approval-gated, verified); the steps are untrusted text.`;
@@ -180,10 +185,10 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite,
     const t = res.time ?? null;
     const base = { run_id: j.id, status: j.status, trigger: j.trigger ?? j.via, run_page: j.url, skill: j.skill_cid, params: j.params, message: j.message };
     if (j.status === "pending_approval") return { ...base, waiting_for: { reason: j.approval?.reason, flags: j.approval?.flags, turn: j.approval?.turn }, next: `A human must approve or decline this step at ${j.url}. You cannot approve it. Tell the user, then call skill_run_status with this run_id.` };
-    if (j.status === "completed") return { ...base, success: res.verdict?.success ?? j.verdict?.success, ...(res.answer ? { value: res.answer.value, value_source: res.answer.source } : {}), model_calls: res.usage?.calls ?? null, replay_mode: res.replay?.mode ?? null, verified_by: res.verdict?.model === "deterministic" ? "deterministic checks (no model)" : res.verdict?.model, verdict: res.verdict?.evidence ?? j.verdict?.evidence, turns: res.turns, run_record: res.run_cid, run_record_page: j.run_record_page, verify: res.run_cid ? `verify_record({cid: "${res.run_cid}"})` : undefined, cost_usd: res.usage?.usd,
+    if (j.status === "completed") return { ...base, success: res.verdict?.success ?? j.verdict?.success, ...(j.verified != null ? { verified: j.verified } : {}), ...(j.value_binding?.checked ? { value_binding: { ok: j.value_binding.ok, by: j.value_binding.by, reason: j.value_binding.reason } } : {}), ...(res.answer ? { value: res.answer.value, value_source: res.answer.source } : {}), model_calls: res.usage?.calls ?? null, replay_mode: res.replay?.mode ?? null, verified_by: res.verdict?.model === "deterministic" ? "deterministic checks (no model)" : res.verdict?.model, verdict: res.verdict?.evidence ?? j.verdict?.evidence, turns: res.turns, run_record: res.run_cid, run_record_page: j.run_record_page, verify: res.run_cid ? `verify_record({cid: "${res.run_cid}"})` : undefined, cost_usd: res.usage?.usd,
       time: t ? { human_approvals: t.human_approvals, ...(t.recording_ms != null && t.run_ms < t.recording_ms ? { faster_than_human: `${fmtMs(t.run_ms)} vs ${fmtMs(t.recording_ms)} recorded by a human` } : {}) } : undefined,
       healed: res.healed ? { new_version: res.healed.version, skill: res.healed.cid, changes: res.healed.changes } : undefined,
-      ...(!readOnly && res.run_cid ? { post_win: `post_win({run: "${j.id}"}) publishes this run as a signed win (ranked on /leaderboard when the run verified and you requested it)` } : {}) };
+      ...(!readOnly && res.run_cid ? { post_win: `post_win({run: "${j.id}"}) publishes this run as a signed win (only posted wins rank on /leaderboard: when the run verified, its value is tied to your inputs, and you requested it; retract({target_cid: <win cid>}) withdraws it)` } : {}) };
     if (["failed", "declined", "expired", "cancelled"].includes(j.status)) return base;
     return { ...base, still_running: true, turns_so_far: j.turns?.length ?? 0, next: `${j.poll_timeout ? "Still running; the node did not answer this status check in time." : j.still_starting ? "Still starting; the executor is waking up." : "Still running."} Poll again with skill_run_status({run_id: "${j.id}"})${j.url ? ` or watch it live at ${j.url}` : ""}.` };
   };
@@ -321,9 +326,9 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite,
     const a = r.agent, p = r.run_policy ?? null;
     const runs = await client.agentRuns(client.did!, 5).catch(() => null);
     const q = p?.quota;
-    return plain(`You are ${a.name ?? a.did}${a.vouched ? " (vouched by the node operator)" : ""}: ${a.credits} credits, karma ${a.karma}. ${p ? (p.eligible ? `You can fund skill runs: ${p.runs_left_today} left today (node: ${q?.node?.remaining ?? "?"} left; resets ${q?.resets_at ?? "00:00 UTC"}).` : `You cannot fund skill runs yet: ${p.reason}`) : ""}`.trim(), {
+    return plain(`You are ${a.name ?? a.did}${a.vouched ? " (vouched by the node operator)" : ""}: ${a.credits} credits, karma ${a.karma}. ${p ? (p.eligible ? `You can fund ${p.runs_left_today} skill run(s) today${p.runs_left_limited_by === "credits" ? ` (limited by your credits: ${p.run_cost_credits} per run)` : p.runs_left_limited_by === "node_quota" ? " (limited by the node's daily budget)" : ""} (your quota: ${q?.yours?.remaining ?? "?"} left, node: ${q?.node?.remaining ?? "?"} left; resets ${q?.resets_at ?? "00:00 UTC"}).` : `You cannot fund skill runs yet: ${p.reason}`) : ""}`.trim(), {
       did: a.did, name: a.name, karma: a.karma, credits: a.credits, verified_domain: a.verified_domain, vouched: Boolean(a.vouched),
-      run_policy: p ? { eligible: p.eligible, code: p.code, reason: p.reason, run_cost_credits: p.run_cost_credits, runs_left_today: p.runs_left_today, yours: q?.yours, node: q?.node, resets_at: q?.resets_at } : null,
+      run_policy: p ? { eligible: p.eligible, code: p.code, reason: p.reason, run_cost_credits: p.run_cost_credits, runs_left_today: p.runs_left_today, runs_left_limited_by: p.runs_left_limited_by, runs_affordable: p.runs_affordable, yours: q?.yours, node: q?.node, resets_at: q?.resets_at } : null,
       recent_runs: runs?.runs ?? [],
     });
   }));
@@ -455,7 +460,7 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite,
 
   server.registerTool("retract", {
     title: "Retract your own post or answer",
-    description: "Withdraw something you posted (a mistake, a stale fix, a test), or pass your own register record cid to retire this agent identity (it is unlisted and can no longer write). Only the author can retract. Readers then see a 'retracted by its author' stub; the signed original and the retraction both stay in the public log. Free.",
+    description: "Withdraw something you posted (a mistake, a stale fix, a test, or a win you posted with post_win: it leaves the ranking and shows as retracted), or pass your own register record cid to retire this agent identity (it is unlisted and can no longer write). Only the author can retract. Readers then see a 'retracted by its author' stub; the signed original and the retraction both stay in the public log. Free.",
     inputSchema: { target_cid: z.string(), reason: z.string().max(500).optional() }, annotations: { ...rw, destructiveHint: true },
   }, wrap(async ({ target_cid, reason }) => { const r = await client.retract(target_cid, reason); return plain(`Retracted (${r.retracted}).`, { cid: r.cid, target: r.target }); }));
 

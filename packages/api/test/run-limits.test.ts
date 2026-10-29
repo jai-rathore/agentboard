@@ -54,6 +54,28 @@ describe("agent-funded run budget", () => {
   });
 });
 
+describe("runs left today is what you can actually start", () => {
+  let node: TestNode;
+  beforeAll(async () => { node = await makeNode({ skillsAgentRunsPerAgentDay: 10, skillsAgentRunsPerDay: 15, skillsAgentRunsCeiling: 100, skillsAgentRunCredits: 5 } as any); });
+  afterAll(async () => { await node.ctx.db.close(); });
+  it("is min(your quota, the node's budget, floor(credits / run cost)), and says which one limits it", async () => {
+    const a = new TestAgent(node); await a.register("left-a");
+    (node.ctx.cfg as any).agentRunVouchedDids = [a.did];
+    const bal = async () => Number((await node.ctx.db.query<any>(`SELECT COALESCE(SUM(delta_milli),0)::float8 AS b FROM credit_ledger WHERE did = $1`, [a.did])).rows[0].b);
+    const set = async (credits: number) => { await node.ctx.db.query(`INSERT INTO credit_ledger (did, delta_milli, reason, ref_cid, seq, received_at) VALUES ($1,$2,'test',NULL,NULL,now())`, [a.did, credits * 1000 - (await bal())]); };
+    await set(0);
+    let p = (await node.req("GET", `/v1/agents/${a.did}`)).body.run_policy;
+    expect(p).toMatchObject({ eligible: true, runs_left_today: 0, runs_left_limited_by: "credits", runs_affordable: 0 });
+    expect(p.quota.yours.remaining).toBe(10);
+    await set(14);
+    p = (await node.req("GET", `/v1/agents/${a.did}`)).body.run_policy;
+    expect(p).toMatchObject({ runs_left_today: 2, runs_left_limited_by: "credits" });
+    await set(500);
+    p = (await node.req("GET", `/v1/agents/${a.did}`)).body.run_policy;
+    expect(p).toMatchObject({ runs_left_today: 10, runs_left_limited_by: "your_quota" });
+  });
+});
+
 describe("MCP waits are bounded", () => {
   it("skill_run_status on a stalled node answers 'still running, poll again' within the deadline", async () => {
     // a fetch that never answers (it only gives up when the request's deadline aborts it)
@@ -63,6 +85,8 @@ describe("MCP waits are bounded", () => {
     const [a, b] = InMemoryTransport.createLinkedPair();
     const c = new Client({ name: "t", version: "0" });
     await Promise.all([mcp.connect(a), c.connect(b)]);
+    // serverInfo names the build: VERSION+<commit or source hash>, "dev" when run from source
+    expect(c.getServerVersion()?.version).toMatch(/^0\.2\.0\+(dev|src\.[0-9a-f]{10}|[0-9a-f]{7})$/);
     const id = randomUUID();
     const t0 = Date.now();
     const r: any = await c.callTool({ name: "skill_run_status", arguments: { run_id: id, wait_seconds: 100 } });

@@ -6,7 +6,7 @@ import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
 import { museSpend } from "./muse.js";
 import { APPROVAL_HUMAN_MS, artifactUrl } from "./skills.js";
-import { siteKindOf } from "@agentboard/core";
+import { siteKindOf, displayAnswer, runVerified, runValueBinding } from "@agentboard/core";
 import { getJob } from "./skillJobs.js";
 
 const CLICKY = new Set(["click", "double_click", "select", "keypress", "type", "scroll", "drag"]);
@@ -208,7 +208,9 @@ export async function runDetail(ctx: AppContext, id: string) {
     models: { loop: b.loop?.model ?? null, loop_capability: b.loop?.capability ?? null, verifier: b.verdict?.model ?? null, verifier_capability: b.verdict?.capability ?? null },
     evidence: { final_screenshot: b.evidence?.final_screenshot ? artifactUrl(ctx, b.evidence.final_screenshot) : null, gif: b.evidence?.gif ? artifactUrl(ctx, b.evidence.gif) : null, sha256: b.evidence },
     usage: b.usage, turns: b.turns, actions: b.actions, time: b.time,
-    answer: b.answer ?? null, replay: b.replay ?? null, model_calls: Number(b.usage?.calls ?? 0),
+    answer: displayAnswer({ created_at: new Date(rec.created_at).toISOString(), body: b }), replay: b.replay ?? null, model_calls: Number(b.usage?.calls ?? 0),
+    // verified = success AND the returned value is tied to the inputs (valueBinding over the signed record)
+    verified: runVerified(b), value_binding: runValueBinding(b),
     signature: { cid: rec.cid, sig: rec.sig, signed_by: rec.author, node: ctx.node.did, verify: `GET ${ctx.cfg.publicBaseUrl}/v1/records/${rec.cid}, or the MCP verify_record tool` },
     page: `${ctx.cfg.skillsWebUrl}/skills/runs/${rec.cid}`,
   };

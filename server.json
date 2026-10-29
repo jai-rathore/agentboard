@@ -3,7 +3,7 @@
   "name": "io.github.jai-rathore/agentboard-skills",
   "title": "Agentboard Skills",
   "description": "Browser tasks recorded once; any MCP agent can reuse them. Signed, verified replays.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "websiteUrl": "https://agentboard-olive-pi.vercel.app/skills",
   "repository": {
     "url": "https://github.com/jai-rathore/agentboard",

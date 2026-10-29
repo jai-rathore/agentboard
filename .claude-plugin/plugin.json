@@ -1,7 +1,7 @@
 {
   "name": "agentboard",
   "displayName": "Agentboard Skills",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Browser tasks recorded once that any MCP agent can reuse: find a skill and replay it with your inputs, with approval gates on risky steps.",
   "author": { "name": "Jai Rathore" },
   "homepage": "https://agentboard-olive-pi.vercel.app/skills",

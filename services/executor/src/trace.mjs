@@ -31,8 +31,18 @@ export function templ(str, params = {}) {
   }
   return s.slice(0, 500);
 }
-/** Fill {{name}} placeholders; in URLs, values are URL-encoded. */
-export const fillUrl = (tpl, params) => String(tpl ?? "").replace(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi, (m, k) => (k in params ? encodeURIComponent(params[k]) : m));
+/**
+ * Fill {{name}} placeholders in a URL. A placeholder that is the whole URL takes the value as is (a repository URL);
+ * in the path, values are encoded but keep their "/" (a Go module path github.com/spf13/cobra); in the query or
+ * fragment they are fully URL-encoded.
+ */
+export const fillUrl = (tpl, params) => {
+  const t = String(tpl ?? "");
+  const whole = t.trim().match(/^\{\{\s*([a-z0-9_]+)\s*\}\}$/i);
+  if (whole && whole[1] in params) return String(params[whole[1]]);
+  const q = t.search(/[?#]/);
+  return t.replace(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi, (m, k, off) => (k in params ? (q < 0 || off < q ? encodeURIComponent(params[k]).replace(/%2F/gi, "/") : encodeURIComponent(params[k])) : m));
+};
 export const fillText = (tpl, params) => fill(String(tpl ?? ""), params);
 
 /** Runs in the page: a locator for the element at (x, y) (its interactive ancestor), or the focused element. */
@@ -93,7 +103,9 @@ export function checkFinal(final, texts, params, url) {
   if (final.url && url) {
     const path = (u) => { try { const x = new URL(u); return norm(decodeURIComponent(x.origin + x.pathname)); } catch { return norm(u); } };
     const want = fillUrl(final.url, params);
-    (path(want) === path(url) ? checks : fails).push(`final page ${want.slice(0, 160)}`);
+    // query parameters the template names ({{param}} in ?query=...) must match too (the path alone is the same page for any search)
+    const qOk = (() => { try { const tq = new URL(final.url.replace(/\{\{/g, "%7B%7B").replace(/\}\}/g, "%7D%7D")).searchParams, w = new URL(want).searchParams, u = new URL(url).searchParams; for (const [k, v] of tq) if (/%7B%7B|\{\{/i.test(v) || /\{\{/.test(decodeURIComponent(v))) { if (norm(u.get(k)) !== norm(w.get(k))) return false; } return true; } catch { return true; } })();
+    (path(want) === path(url) && qOk ? checks : fails).push(`final page ${want.slice(0, 160)}`);
   }
   const one = (list, hay, label) => { for (const k of list ?? []) { if (!(k in params)) continue; const v = params[k]; (has(hay, v) ? checks : fails).push(`"${v}" ${label}`); } };
   // viewport-recorded values are checked on the page: idle scrolls are dropped from saved traces
@@ -309,6 +321,9 @@ export function deriveRecipeInPage({ candidates, labels }) {
           const subTh = k > 0 ? row.querySelector("th") : null;
           if (th && labels.some((l) => low(th.innerText).includes(low(l)))) return { kind: "row", label: norm(th.innerText).slice(0, 200), offset: k, ...(subTh ? { sub: norm(subTh.innerText).replace(/^[•·\-\s]+/, "").slice(0, 120) } : {}), sample: norm(cell.innerText).slice(0, 300), candidate: c };
         }
+        // no header cell: the row's first cell names an input (a rates table row "Japanese Yen | 157.87 | 0.0063")
+        const first = row?.querySelector("td");
+        if (first && first !== cell && first.nextElementSibling === cell && labels.some((l) => low(first.innerText) === low(l) || low(first.innerText).startsWith(low(l)))) return { kind: "row", label: norm(first.innerText).slice(0, 200), offset: 0, sample: norm(cell.innerText).slice(0, 300), candidate: c };
         const own = row?.querySelector("th");
         if (own) return { kind: "row", label: norm(own.innerText).slice(0, 200), offset: 0, sample: norm(cell.innerText).slice(0, 300), candidate: c };
       }
@@ -369,6 +384,9 @@ export function applyRecipeInPage({ recipe, scroll, withLabel }) {
         }
       }
     }
+    // a table whose rows are labeled by their first cell (a rates table: "Japanese Yen | 157.87 | 0.0063"): the cell after the label
+    const tdl = th ? null : pick([...document.querySelectorAll("tr > td:first-child")].filter((x) => x.nextElementSibling?.tagName === "TD"));
+    if (tdl) { const td = tdl.nextElementSibling; show(td); const text = norm(td.innerText).slice(0, 1000); return withLabel ? { text, label: norm(tdl.innerText).replace(/\[[^\]]*\]/g, "").trim() } : text; }
     const dt = pick([...document.querySelectorAll("dt")]);
     if (dt) { let dd = dt.nextElementSibling; while (dd && dd.tagName !== "DD") dd = dd.nextElementSibling; if (dd) { show(dd); const text = norm(dd.innerText).slice(0, 1000); return withLabel ? { text, label: norm(dt.innerText) } : text; } }
   }
@@ -458,3 +476,28 @@ export function cleanSteps(steps) {
 }
 /** Human label for a locator in logs: the filled parameter or accessible name, never stale recorded text. */
 export const locLabel = (l, params) => fillText(l?.match === "prefix" ? l.name : placeholderLead(l?.name) ?? (l?.name || l?.text || l?.css || ""), params).slice(0, 60);
+
+// ---------------------------------------------------------------- is the returned value tied to the inputs?
+// Same as @agentboard/core valueBinding (packages/core/src/valueBinding.ts; a test keeps them identical).
+const bnorm = (s) => String(s ?? "").normalize("NFC").toLowerCase().replace(/[\s_+]+/g, " ").replace(/\s+/g, " ").trim();
+const bwords = (s) => bnorm(s).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2);
+const bdecode = (u) => { try { return decodeURIComponent(u.replace(/\+/g, " ")); } catch { return u; } };
+export function answerRowLabel(source) { const m = String(source ?? "").match(/row "(.*)"$/); return m ? m[1] : null; }
+export function valueBinding(input) {
+  const params = Object.entries(input.params ?? {}).filter(([, v]) => String(v ?? "").trim().length >= 2);
+  if (input.value == null || String(input.value).trim() === "" || !params.length) return { ok: true, checked: false, by: {}, missing: [], reason: input.value == null ? "no value returned: nothing to bind" : "no parameters: nothing to bind" };
+  const tpl = String(input.finalUrlTemplate ?? ""), url = bnorm(bdecode(String(input.finalUrl ?? "")));
+  const label = input.rowLabel ? bnorm(input.rowLabel) : null;
+  const labelWords = label ? new Set(bwords(label)) : null;
+  const by = {}, missing = [];
+  for (const [k, v] of params) {
+    const val = bnorm(v);
+    if (new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, "i").test(tpl) || (url && url.includes(val))) by[k] = "url";
+    else if (input.titleParams?.includes(k)) by[k] = "title";
+    else if (label && (label.includes(val) || (bwords(val).length > 0 && bwords(val).every((w) => labelWords.has(w))))) by[k] = "row";
+    else missing.push(k);
+  }
+  return missing.length
+    ? { ok: false, checked: true, by, missing, reason: `the returned value is not tied to ${missing.map((k) => `${k} "${String(input.params[k]).slice(0, 60)}"`).join(", ")}: it was read from ${label ? `the "${input.rowLabel}" row` : "a fixed element"} on a page that is not specific to ${missing.length > 1 ? "them" : "it"}` }
+    : { ok: true, checked: true, by, missing, reason: `value tied to the inputs (${Object.entries(by).map(([k, how]) => `${k}: ${how === "url" ? "page URL" : how === "title" ? "page title" : "row label"}`).join(", ")})` };
+}

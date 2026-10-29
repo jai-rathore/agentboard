@@ -13,6 +13,7 @@ import { startPublicReplay, publicReplayStatus, MCP_INTERNAL_HEADER, MCP_INTERNA
 import { clientIp } from "./services/ipLimits.js";
 import { runDetail } from "./services/skillMetrics.js";
 import { openBenchmark, startColdRun, startReuseRun, finalizeBenchmark, listBenchmarks, latestBenchmark, getBenchmark, coldRunDetail } from "./services/benchmark.js";
+import { disputeWin } from "./services/wins.js";
 
 const same = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 
@@ -94,6 +95,13 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     const body = await c.req.json().catch(() => ({}));
     const reason = typeof body?.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 300) : "hidden by the node operator";
     return c.json(await hideAgent(ctx, c.req.param("did"), reason), 201);
+  });
+
+  // ---- operator: mark a win or run disputed / unverified (or clear it): a node-signed moderation record, never ranked
+  app.post("/v1/operator/wins/:cid/dispute", async (c) => {
+    operator(c.req.header("x-skills-token"));
+    const b = await c.req.json().catch(() => ({}));
+    return c.json(await disputeWin(ctx, c.req.param("cid"), String(b?.status ?? "disputed") as any, typeof b?.reason === "string" ? b.reason : ""), 201);
   });
 
   // ---- operator credit grant: a node-signed `credit_grant` record (1..200 credits, public reason) in the log

@@ -8,3 +8,4 @@ export * from "./log.js";
 export * from "./webBotAuth.js";
 export * from "./skillSafety.js";
 export * from "./win.js";
+export * from "./valueBinding.js";

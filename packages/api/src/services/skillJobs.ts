@@ -4,6 +4,7 @@
  * submits, buys, sends or deletes, sets the job to pending_approval and waits. Only a human with the
  * operator token can approve, on the job page. Nothing here lets the requesting agent approve itself.
  */
+import { runValueBinding, runVerified, displayAnswer } from "@agentboard/core";
 import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
@@ -81,9 +82,17 @@ export async function getJob(ctx: AppContext, id: string, internal = false) {
   let status = r.status as string;
   if (!(TERMINAL as readonly string[]).includes(status) && ctx.now() - new Date(r.updated_at).getTime() > STALE_MS) status = "expired";
   const approval = j(r.approval);
+  // verified = the run succeeded AND its value is tied to the inputs (valueBinding), recomputed from the signed record
+  const runCid = j(r.result)?.run_cid;
+  const runRow = runCid ? (await ctx.db.query<any>(`SELECT body_text, created_at FROM records WHERE cid = $1`, [runCid])).rows[0] : null;
+  const runBody = runRow?.body_text ?? null;
+  const binding = runBody ? runValueBinding(JSON.parse(runBody)) : null;
+  const verified = runBody ? JSON.parse(runBody).success === true && binding!.ok : null;
+  const message = runBody && binding && !binding.ok && JSON.parse(runBody).success === true ? `Not verified: ${binding.reason}` : r.message;
   return {
-    id: r.id, skill_cid: r.skill_cid, status, message: r.message, params: j(r.params), start_url: r.start_url, via: r.via, trigger: r.via, agent: r.via === "agent" || r.via === "benchmark" ? r.requested_by : null,
-    turns: j(r.turns), approval, verdict: j(r.verdict), result: j(r.result),
+    id: r.id, skill_cid: r.skill_cid, status, message, ...(runBody ? { verified, value_binding: binding } : {}), params: j(r.params), start_url: r.start_url, via: r.via, trigger: r.via, agent: r.via === "agent" || r.via === "benchmark" ? r.requested_by : null,
+    turns: j(r.turns), approval, verdict: j(r.verdict),
+    result: runBody && j(r.result)?.answer ? { ...j(r.result), answer: displayAnswer({ created_at: new Date(runRow.created_at).toISOString(), body: JSON.parse(runBody) }) } : j(r.result),
     ...(internal ? { decision: j(r.decision) } : {}),
     frame_url: r.has_frame ? `${ctx.cfg.publicBaseUrl}/v1/skills/jobs/${r.id}/frame?t=${new Date(r.updated_at).getTime()}` : null,
     url: jobUrl(ctx, r.id),
@@ -155,7 +164,13 @@ export async function verifiedContributions(db: AppContext["db"], did: string): 
 export async function agentRunEligibility(ctx: AppContext, did: string, agent?: { status: string; registered_at: string | Date }) {
   const el = await probationCheck(ctx, did, agent);
   const quota = await runQuota(ctx, did);
-  return { ...el, runs_left_today: el.eligible ? quota.yours.remaining : 0, quota };
+  // runs you can actually start today: the smallest of your daily quota, the node's budget, and what your credits pay for
+  const cost = Math.round(ctx.cfg.skillsAgentRunCredits * 1000);
+  const bal = Number((await ctx.db.query<any>(`SELECT COALESCE(SUM(delta_milli),0)::float8 AS b FROM credit_ledger WHERE did = $1`, [did])).rows[0]?.b ?? 0);
+  const affordable = cost > 0 ? Math.max(0, Math.floor(bal / cost)) : Infinity;
+  const left = el.eligible ? Math.max(0, Math.min(quota.yours.remaining, quota.node.remaining, affordable)) : 0;
+  const limitedBy = !el.eligible ? "eligibility" : left === affordable && affordable < Math.min(quota.yours.remaining, quota.node.remaining) ? "credits" : left === quota.node.remaining && quota.node.remaining < quota.yours.remaining ? "node_quota" : "your_quota";
+  return { ...el, runs_left_today: left, runs_left_limited_by: limitedBy, credits: bal / 1000, runs_affordable: Number.isFinite(affordable) ? affordable : null, quota };
 }
 async function probationCheck(ctx: AppContext, did: string, agent?: { status: string; registered_at: string | Date }) {
   const a = agent ?? (await ctx.db.query<any>(`SELECT status, registered_at FROM agents WHERE did = $1`, [did])).rows[0];
@@ -230,12 +245,14 @@ export async function runQuota(ctx: AppContext, did: string | null) {
 export async function agentRuns(ctx: AppContext, did: string, limit = 20) {
   const rows = (await ctx.db.query<any>(`SELECT j.id, j.status, j.via, j.created_at, j.updated_at, j.message, s.slug, s.version,
       (SELECT rec.cid FROM records rec WHERE rec.type = 'skill_run' AND rec.body->'requested_by'->>'job' = j.id LIMIT 1) AS run_cid,
-      (SELECT (rec.body->>'success') FROM records rec WHERE rec.type = 'skill_run' AND rec.body->'requested_by'->>'job' = j.id LIMIT 1) AS ok
+      (SELECT rec.body_text FROM records rec WHERE rec.type = 'skill_run' AND rec.body->'requested_by'->>'job' = j.id LIMIT 1) AS run_body
     FROM skill_jobs j LEFT JOIN skills s ON s.cid = j.skill_cid WHERE j.requested_by = $1 AND j.via IN ('agent', 'benchmark')
     ORDER BY j.created_at DESC LIMIT $2`, [did, Math.min(Math.max(limit, 1), 50)])).rows;
   return rows.map((r) => ({
     run_id: r.id, run_cid: r.run_cid ?? null, skill: r.slug ?? null, version: r.version ?? null, status: r.status,
-    verified: r.run_cid ? r.ok === "true" : null, via: r.via, created_at: new Date(r.created_at).toISOString(),
+    verified: r.run_body ? runVerified(JSON.parse(r.run_body)) : null,
+    ...(r.run_body && JSON.parse(r.run_body).success === true && !runVerified(JSON.parse(r.run_body)) ? { not_verified_because: runValueBinding(JSON.parse(r.run_body)).reason } : {}),
+    via: r.via, created_at: new Date(r.created_at).toISOString(),
     ...(r.status === "failed" && r.message ? { message: String(r.message).slice(0, 200) } : {}),
     run_page: r.run_cid ? `${ctx.cfg.skillsWebUrl}/skills/runs/${r.run_cid}` : jobUrl(ctx, r.id),
   }));

@@ -25,6 +25,8 @@ const run = (skillCid: string, by: KeyPair | "web" | "public", success = true, e
   requested_by: by === "web" ? { via: "web" } : by === "public" ? { via: "public", job: "j" } : { via: "agent", agent: by.did, job: "j" }, ...extra,
 }, at()));
 const cold = (slug: string, skillCid: string, by: KeyPair, success: boolean) => item(createRecord(NODE, "benchmark_run", { benchmark: "b1", role: "cold", task_of: { slug, skill: skillCid }, requested_by: { via: "benchmark", agent: by.did }, success, actions: [], evidence: { final_screenshot: "b".repeat(64) } }, at()));
+/** the identity that requested a run posts it with post_win (only posted wins rank) */
+const posted = (k: KeyPair, r: LogRec) => item(createRecord(k, "win", winBodyFromRun(r.record.cid, r.record.body), at()));
 const opts = (agents: [KeyPair, string, string?][] = []) => ({ nodeDid: NODE.did, mockHosts: [], agents: new Map(agents.map(([k, name, status]) => [k.did, { did: k.did, name, is_house: false, status: status ?? "active" }])) });
 
 describe("difficulty and leaderboard (pure fold)", () => {
@@ -33,11 +35,13 @@ describe("difficulty and leaderboard (pure fold)", () => {
     const hard = skill("hard-task", { draft: true });
     const pub = run(hard.record.cid, "web"); // publishing run (seq right after the skill): not a replay
     const easy = skill("easy-task");
+    const rA = run(hard.record.cid, A), rB = run(hard.record.cid, B), rBe = run(easy.record.cid, B);
     const items = [hard, pub, easy,
       cold("hard-task", hard.record.cid, C, false), cold("hard-task", hard.record.cid, C, false), cold("hard-task", hard.record.cid, C, false),
-      run(hard.record.cid, A), run(hard.record.cid, B), run(hard.record.cid, B, false),
-      run(easy.record.cid, B), run(easy.record.cid, "public"),
+      rA, rB, run(hard.record.cid, B, false),
+      rBe, run(easy.record.cid, "public"),
       cold("easy-task", easy.record.cid, C, true),
+      posted(A, rA), posted(B, rB), posted(B, rBe),
     ];
     const lb = computeLeaderboard(items, opts([[A, "alpha"], [B, "beta"]]));
     const h = lb.tasks.find((t: any) => t.slug === "hard-task")!, e = lb.tasks.find((t: any) => t.slug === "easy-task")!;
@@ -100,10 +104,56 @@ describe("difficulty and leaderboard (pure fold)", () => {
     expect(gone.counts.posted_wins).toBe(2);
   });
 
+  it("a value not tied to the run's inputs is unverified; only posted wins rank; operator disputes and author retractions un-rank", () => {
+    seq = 0;
+    const s = skill("rates");
+    const xrates = (cur: string, answer: Record<string, unknown>, finalUrl = "https://www.x-rates.com/table/?from=USD&amount=1") => ({ params: { target_currency: cur }, answer, trace: { v: 1, start_url: finalUrl, steps: [], final: { url: finalUrl, viewport: ["target_currency"], page: [], title: [] } } });
+    // the recorded first-row cell (Euro) returned for Japanese Yen: verified by the old executor, not tied to the input
+    const bad = run(s.record.cid, A, true, xrates("Japanese Yen", { value: "0.895817", method: "deterministic", source: "element div > table > tbody > tr:nth-of-type(1) > td:nth-of-type(2)", verified_by: "deterministic" }));
+    // read from the row labeled with the input: verified
+    const good = run(s.record.cid, B, true, xrates("Japanese Yen", { value: "157.869642", method: "deterministic", source: 'infobox/table row "Japanese Yen"', verified_by: "deterministic" }));
+    const unposted = run(s.record.cid, C, true, xrates("British Pound", { value: "0.74", method: "deterministic", source: 'infobox/table row "British Pound"', verified_by: "deterministic" }));
+    const items = [s, bad, good, unposted, posted(A, bad), posted(B, good)];
+    const lb = computeLeaderboard(items, opts([[A, "alpha"], [B, "beta"], [C, "gamma"]]));
+    const by = (k: KeyPair) => lb.entrants.find((x: any) => x.did === k.did)!;
+    expect(by(A).ranked).toBe(false);
+    expect(by(A).wins[0]).toMatchObject({ status: "unverified", ranked: false, posted: true });
+    expect(by(A).wins[0].reason).toMatch(/not tied to target_currency "Japanese Yen"/);
+    expect(lb.posted_wins.find((w: any) => w.author === A.did)).toMatchObject({ status: "unverified", ranked: false });
+    expect(by(B)).toMatchObject({ ranked: true, rank: 1 });
+    expect(by(C).ranked).toBe(false);
+    expect(by(C).wins[0]).toMatchObject({ status: "verified", posted: false, ranked: false });
+    expect(by(C).wins[0].reason).toMatch(/not posted with post_win/);
+    expect(lb.hardest_tasks[0].solved_by).toEqual(["beta"]);
+    expect(lb.method.value_binding).toMatch(/fixed recorded element/);
+
+    // the operator marks B's win disputed (a node-signed moderation record): shown, not ranked; cleared, it ranks again
+    const mod = (verdict: string, target: string) => item(createRecord(NODE, "moderation", { target, verdict, reasons: ["re-checked by the operator"], model: "operator" }, at()));
+    const winB = items[5];
+    const disputed = computeLeaderboard([...items, mod("win_disputed", winB.record.cid)], opts([[A, "alpha"], [B, "beta"], [C, "gamma"]]));
+    expect(disputed.entrants.find((x: any) => x.did === B.did)).toMatchObject({ ranked: false, disputed_wins: 1 });
+    expect(disputed.entrants.find((x: any) => x.did === B.did).wins[0].reason).toMatch(/disputed by the node operator: re-checked/);
+    const byRun = computeLeaderboard([...items, mod("win_unverified", good.record.cid)], opts([[B, "beta"]]));
+    expect(byRun.entrants.find((x: any) => x.did === B.did)).toMatchObject({ ranked: false, unverified_wins: 1 });
+    const cleared = computeLeaderboard([...items, mod("win_disputed", winB.record.cid), mod("win_cleared", winB.record.cid)], opts([[B, "beta"]]));
+    expect(cleared.entrants.find((x: any) => x.did === B.did).ranked).toBe(true);
+    // a moderation record not signed by the node changes nothing
+    const forged = item(createRecord(C, "moderation", { target: winB.record.cid, verdict: "win_disputed", reasons: ["x"] }, at()));
+    expect(computeLeaderboard([...items, forged], opts([[B, "beta"]])).entrants.find((x: any) => x.did === B.did).ranked).toBe(true);
+
+    // the author retracts its own win: shown as retracted, not ranked; someone else's retract does nothing
+    const retract = (k: KeyPair, target: string) => item(createRecord(k, "retract", { target, reason: "wrong input" }, at()));
+    const r1 = computeLeaderboard([...items, retract(B, winB.record.cid)], opts([[B, "beta"]]));
+    expect(r1.entrants.find((x: any) => x.did === B.did)).toMatchObject({ ranked: false, retracted_wins: 1 });
+    expect(r1.posted_wins.find((w: any) => w.author === B.did)).toMatchObject({ status: "retracted", ranked: false });
+    expect(computeLeaderboard([...items, retract(A, winB.record.cid)], opts([[B, "beta"]])).entrants.find((x: any) => x.did === B.did).ranked).toBe(true);
+  });
+
   it("vouched identities rank but are labeled VOUCHED and not independent; reuse between operator-run identities earns nothing", () => {
     seq = 0;
     const s = skill("v", { proposer: A.did });
-    const items = [s, run(s.record.cid, B), run(s.record.cid, C)];
+    const rB = run(s.record.cid, B), rC = run(s.record.cid, C);
+    const items = [s, rB, rC, posted(B, rB), posted(C, rC)];
     const lb = computeLeaderboard(items, { ...opts([[A, "alpha"], [B, "grok-bot"], [C, "indie"]]), vouched: [B.did] });
     const b = lb.entrants.find((x: any) => x.did === B.did)!;
     expect(b).toMatchObject({ kind: "vouched", ranked: true, independent: false });
@@ -136,10 +186,11 @@ describe("difficulty and leaderboard (pure fold)", () => {
 
 describe("win records on a node", () => {
   let node: TestNode;
-  beforeAll(async () => { node = await makeNode(); });
+  const TOKEN = "test-".repeat(6); // fake test value
+  beforeAll(async () => { node = await makeNode({ skillsOperatorToken: TOKEN } as any); });
   afterAll(async () => { await node.ctx.db.close(); });
 
-  async function nodeRun(slug: string, by: string | null, success = true) {
+  async function nodeRun(slug: string, by: string | null, success = true, extra: Record<string, unknown> = {}) {
     const ctx = node.ctx;
     let sk = (await ctx.db.query<any>(`SELECT cid FROM skills WHERE slug = $1`, [slug])).rows[0]?.cid;
     if (!sk) {
@@ -147,7 +198,7 @@ describe("win records on a node", () => {
       await ctx.db.tx(async (tx) => { await appendToLog(tx, ctx, rec); await tx.query(`INSERT INTO skills (cid, slug, version, prev_cid, name, summary, created_at) VALUES ($1,$2,1,NULL,$3,'s',$4)`, [rec.cid, slug, `Task ${slug}`, rec.created_at]); });
       sk = rec.cid;
     }
-    const r = createRecord(ctx.node, "skill_run", { skill: sk, success, params: {}, start_url: "https://example.org/", actions: [{ turn: 1, type: "click", detail: "click go", approval: "auto", checks: [] }, { turn: -1, type: "note", detail: "internal", approval: "none", checks: [] }], evidence: { final_screenshot: "c".repeat(64), gif: null }, requested_by: by ? { via: "agent", agent: by, job: "j" } : { via: "web" } }, new Date(ctx.now()));
+    const r = createRecord(ctx.node, "skill_run", { skill: sk, success, params: {}, start_url: "https://example.org/", actions: [{ turn: 1, type: "click", detail: "click go", approval: "auto", checks: [] }, { turn: -1, type: "note", detail: "internal", approval: "none", checks: [] }], evidence: { final_screenshot: "c".repeat(64), gif: null }, requested_by: by ? { via: "agent", agent: by, job: "j" } : { via: "web" }, ...extra }, new Date(ctx.now()));
     await ctx.db.tx(async (tx) => { await appendToLog(tx, ctx, r); await tx.query(`INSERT INTO skill_runs (cid, skill_cid, success, created_at) VALUES ($1,$2,$3,$4)`, [r.cid, sk, success, r.created_at]); });
     return r;
   }
@@ -177,6 +228,35 @@ describe("win records on a node", () => {
     expect(lb.method.formula).toMatch(/difficulty = 1 \+ 3/);
     expect(lb.hardest_tasks[0].slug).toBe("node-task");
     expect((await node.req("GET", "/openapi.json")).body.paths["/v1/leaderboard"]).toBeTruthy();
+  });
+
+  it("an unbound value posts as unverified; the operator disputes a win; the author retracts its own", async () => {
+    const agent = new TestAgent(node); await agent.register("disputed-one");
+    const xr = await nodeRun("rates-node", agent.did, true, { params: { target_currency: "Japanese Yen" }, answer: { value: "0.895817", method: "deterministic", source: "element table > tbody > tr:nth-of-type(1) > td:nth-of-type(2)", verified_by: "deterministic" }, trace: { v: 1, start_url: "https://www.x-rates.com/table/", steps: [], final: { url: "https://www.x-rates.com/table/", viewport: [], page: [], title: [] } } });
+    const bad = await agent.submit("win", winBodyFromRun(xr.cid, xr.body));
+    expect(bad.body).toMatchObject({ win_status: "unverified", ranked: false });
+    expect(bad.body.reason).toMatch(/not tied to target_currency/);
+    const ok = await nodeRun("rates-node-2", agent.did);
+    const win = await agent.submit("win", winBodyFromRun(ok.cid, ok.body));
+    expect(win.body).toMatchObject({ win_status: "verified", ranked: true });
+    const lbOf = async () => (await node.req("GET", "/v1/leaderboard")).body.entrants.find((e: any) => e.did === agent.did);
+    expect((await lbOf()).ranked).toBe(true);
+    // operator: needs the token and a reason; a node-signed moderation record; the win is shown as disputed
+    expect((await node.req("POST", `/v1/operator/wins/${win.body.cid}/dispute`, { status: "disputed", reason: "x" })).status).toBe(401);
+    expect((await node.req("POST", `/v1/operator/wins/${win.body.cid}/dispute`, { status: "disputed" }, { "x-skills-token": TOKEN })).status).toBe(400);
+    const d = await node.req("POST", `/v1/operator/wins/${win.body.cid}/dispute`, { status: "disputed", reason: "value re-checked: wrong row" }, { "x-skills-token": TOKEN });
+    expect(d.status).toBe(201);
+    expect(d.body).toMatchObject({ verdict: "win_disputed" });
+    expect(await lbOf()).toMatchObject({ ranked: false, disputed_wins: 1 });
+    await node.req("POST", `/v1/operator/wins/${win.body.cid}/dispute`, { status: "cleared", reason: "re-checked again: right row" }, { "x-skills-token": TOKEN });
+    expect((await lbOf()).ranked).toBe(true);
+    // the author retracts it (a signed retract record); another identity cannot
+    const other = new TestAgent(node); await other.register("not-the-author");
+    expect((await other.submit("retract", { target: win.body.cid })).status).toBe(403);
+    const rt = await agent.submit("retract", { target: win.body.cid, reason: "posted by mistake" });
+    expect(rt.body).toMatchObject({ retracted: "win" });
+    expect(await lbOf()).toMatchObject({ ranked: false, retracted_wins: 1 });
+    expect((await agent.submit("retract", { target: win.body.cid })).status).toBe(409);
   });
 
   it("the MCP client posts a win from a run cid, and a self-reported one that is shown but not ranked", async () => {

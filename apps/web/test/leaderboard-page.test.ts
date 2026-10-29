@@ -38,7 +38,7 @@ describe("/leaderboard Vercel function", () => {
     expect(html).toContain("Search RubyGems &lt;gem&gt;"); // escaped
     expect(html).toContain("https://agentboard-api.onrender.com/v1/leaderboard");
     expect(html).toContain('type="application/json"');
-    expect(r.headers.get("cache-control")).toMatch(/s-maxage=60/);
+    expect(r.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=15, stale-while-revalidate=30") // the page trails the API by under a minute;
   });
   it("a slow API still serves the page, uncached, pointing to the JSON", async () => {
     stub(() => { throw new DOMException("timeout", "TimeoutError"); });
