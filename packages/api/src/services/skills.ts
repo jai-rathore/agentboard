@@ -10,7 +10,7 @@
  *              step, or the elements actually used no longer carry the recorded names), Spark rewrites the
  *              steps from what it saw and the node publishes a signed next version linked to the run.
  */
-import { createRecord, sha256Hex, effectiveRiskFlags, gatedSteps, GATED_FLAGS, type SignedRecord } from "@agentboard/core";
+import { createRecord, sha256Hex, effectiveRiskFlags, gatedSteps, publicReplaySafety, GATED_FLAGS, type SignedRecord } from "@agentboard/core";
 import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
@@ -382,6 +382,14 @@ const latestSkillsSql = `
     WHERE s.status = 'active' AND NOT EXISTS (SELECT 1 FROM agents g WHERE g.did = s.proposer AND g.status IN ('quarantined', 'suspended'))
       AND s.version = (SELECT max(version) FROM skills x WHERE x.slug = s.slug AND x.status = 'active')`;
 
+/**
+ * Whether try_skill / public replay will accept this slug: public replay on, the slug allowlisted, and its latest
+ * version safe for public replay (the same checks publicSkill applies). `latest` is the latest version's skill.
+ */
+export function publicReplayable(ctx: AppContext, slug: string, latest: { risk_flags?: string[]; steps: any[] } | null | undefined): boolean {
+  return ctx.cfg.publicReplayDailyCap > 0 && ctx.cfg.publicReplaySkills.includes(slug) && Boolean(latest) && publicReplaySafety(latest!).ok;
+}
+
 /** Real-site vs Agentboard demo (mock) site, from where the skill starts, plus replay counts that leave out publishing runs. */
 async function withSite(ctx: AppContext, rows: any[]) {
   const counts = await replayCountsBySlug(ctx);
@@ -390,7 +398,7 @@ async function withSite(ctx: AppContext, rows: any[]) {
     const body = JSON.parse((await ctx.db.query<any>(`SELECT body_text FROM records WHERE cid = $1`, [r.cid])).rows[0].body_text);
     const kind = siteKind(ctx, body.source?.start_url);
     const c = counts.get(r.slug) ?? { replays: 0, verified_replays: 0, new_input_replays: 0 };
-    out.push({ ...r, site_kind: kind, site_label: SITE_LABEL[kind], start_url: body.source?.start_url ?? null, ...c, public_replay: ctx.cfg.publicReplayDailyCap > 0 && ctx.cfg.publicReplaySkills.includes(r.slug) });
+    out.push({ ...r, site_kind: kind, site_label: SITE_LABEL[kind], start_url: body.source?.start_url ?? null, ...c, public_replay: publicReplayable(ctx, r.slug, body.skill) });
   }
   return out;
 }
@@ -433,7 +441,7 @@ export async function findSkills(ctx: AppContext, q: string, limit = 5) {
       risk_flags: effectiveRiskFlags(body.skill), approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, intent: body.skill.steps[g.index].intent, flags: g.flags })),
       site_kind: siteKind(ctx, body.source?.start_url), site_label: SITE_LABEL[siteKind(ctx, body.source?.start_url)],
       verified_runs: r.verified_runs, runs: r.runs, ...(counts.get(r.slug) ?? { replays: 0, verified_replays: 0, new_input_replays: 0 }), recording_ms: rec, healed: Boolean(body.healed_from),
-      public_replay: ctx.cfg.publicReplayDailyCap > 0 && ctx.cfg.publicReplaySkills.includes(r.slug),
+      public_replay: publicReplayable(ctx, r.slug, body.skill),
       url: `${ctx.cfg.skillsWebUrl}/s/${r.cid}`,
     });
   }
@@ -473,7 +481,7 @@ export async function getSkill(ctx: AppContext, cidOrSlug: string) {
     time: { human_clicks: 0, approvals_per_run: gatedSteps(body.skill).length, recording_ms: recording, fastest_run_ms: fastest, agent_faster: recording != null && fastest != null && fastest < recording, approval_human_ms: APPROVAL_HUMAN_MS, verified_runs: verifiedRuns.length, saved_total_ms: savedTotal },
     site_kind: siteKind(ctx, body.source?.start_url), site_label: SITE_LABEL[siteKind(ctx, body.source?.start_url)],
     reuse: (await replayCountsBySlug(ctx)).get(s.slug) ?? { replays: 0, verified_replays: 0, new_input_replays: 0 },
-    public_replay: ctx.cfg.publicReplayDailyCap > 0 && ctx.cfg.publicReplaySkills.includes(s.slug),
+    public_replay: publicReplayable(ctx, s.slug, versions[0]?.cid && versions[0].cid !== cid ? JSON.parse((await rec(versions[0].cid))?.body_text ?? "null")?.skill : body.skill),
     badge: { verified: verifiedRuns.length > 0 || Boolean(healRun && JSON.parse(healRun.body_text).success), replayed: runs.length, runs_this_version: runs.length, verified_runs_this_version: verifiedRuns.length, runs_all_versions: allRuns, verified_runs_all_versions: allVerified, versions: versions.length, healed: Boolean(body.healed_from) },
     node: ctx.node.did,
   };

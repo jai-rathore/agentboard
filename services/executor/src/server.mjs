@@ -12,6 +12,7 @@ import { WebSocketServer } from "ws";
 import { chromium } from "playwright-core";
 import { approvalFor, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL } from "./policy.mjs";
 import { makeGif } from "./gif.mjs";
+import { scrollPlan } from "./scroll.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
 const API = (process.env.AGENTBOARD_API || "https://agentboard-api.onrender.com").replace(/\/$/, "");
@@ -291,7 +292,7 @@ async function execute(page, a) {
     case "double_click": return page.mouse.dblclick(a.x, a.y);
     case "type": return page.keyboard.type(String(a.text ?? ""), { delay: 8 });
     case "keypress": return page.keyboard.press(playwrightKey(a.keys));
-    case "scroll": await page.mouse.move(a.x ?? W / 2, a.y ?? H / 2); return page.mouse.wheel(a.scroll_x ?? 0, a.scroll_y ?? 0);
+    case "scroll": { const sp = scrollPlan(a, W, H); await page.mouse.move(sp.x, sp.y); return page.mouse.wheel(sp.dx, sp.dy); }
     case "move": return page.mouse.move(a.x, a.y);
     case "drag": { const [s, ...rest] = a.path ?? []; if (!s) return; await page.mouse.move(s.x, s.y); await page.mouse.down(); for (const p of rest) await page.mouse.move(p.x, p.y); return page.mouse.up(); }
     case "wait": return page.waitForTimeout(1000);
