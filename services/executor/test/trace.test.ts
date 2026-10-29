@@ -111,6 +111,8 @@ describe.skipIf(!chromium)("trace: replay in headless Chromium with no model", (
     expect(checkFinal(final, await r.evaluate(pageTextInPage), { ...P2, target_field: "Population" }, r.url())).toMatchObject({ ok: true });
     expect(c.actions.every((a: any) => a.turn === 0)).toBe(true);
     expect(await locate(r, { tag: "a", role: "link", name: "Nope", text: "Nope", css: "#nope", attrs: {} }, P2, 300)).toBeNull();
+    // a recorded name with extra text after the parameter still finds the element by its leading part
+    expect(await locate(r, { tag: "h1", role: "heading", name: "{{q}} 8.1.4 Full-stack web application framework", text: "", css: "#nope", attrs: {} }, P2, 300)).toMatchObject({ how: "role+name-prefix" });
 
     // the site changed: the result link is gone -> the step fails with a reason, so the model recovers from there
     const q = await newPage();

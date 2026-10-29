@@ -125,6 +125,13 @@ export async function locate(page, loc, params, timeout = 6000) {
   if (text && text.length <= 120) tries.push(["text", () => page.getByText(text, { exact: true })]);
   if (loc.attrs?.id) tries.push(["id", () => page.locator(`[id="${CSS_escape(loc.attrs.id)}"]`)]);
   if (loc.attrs?.name) tries.push(["name", () => page.locator(`${loc.tag}[name="${CSS_escape(loc.attrs.name)}"]`)]);
+  // The recorded name had more than the parameter (e.g. a search result "rails 8.1.4 Full-stack web…"): match the
+  // element whose accessible name starts with the filled leading part ("sinatra …").
+  const lead = String(loc.name ?? "").match(/^(.*?\{\{\s*[a-z0-9_]+\s*\}\})/i)?.[1];
+  if (loc.role && lead && lead.length < String(loc.name).length) {
+    const re = new RegExp(`^\\s*${esc(fillText(lead, params))}(\\s|$)`, "i");
+    tries.push(["role+name-prefix", () => page.getByRole(loc.role, { name: re })]);
+  }
   if (loc.css) tries.push(["css", () => page.locator(loc.css)]);
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
