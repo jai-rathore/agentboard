@@ -7,6 +7,7 @@ import type { SignedRecord } from "@agentboard/core";
 import { creditEffects, type CreditFacts, type CreditEvent } from "./credits.js";
 import { computeKarma, type KarmaAgent, type Endorsement, type KarmaOptions } from "./karma.js";
 import { reuseEdges } from "./wins.js";
+import { VOUCHED_OPERATOR } from "./reputation.js";
 
 export interface LogItem { seq: number; received_at: string | Date; record: SignedRecord }
 
@@ -73,7 +74,7 @@ export function replayCredits(log: LogItem[], opts: { voteCreditMinAgeMs: number
   return bal;
 }
 
-export function replayKarma(log: LogItem[], opts: KarmaOptions & { houseDids?: string[]; nodeDid: string }) {
+export function replayKarma(log: LogItem[], opts: KarmaOptions & { houseDids?: string[]; vouchedDids?: string[]; nodeDid: string }) {
   const agents = new Map<string, KarmaAgent>();
   const authorOf = new Map<string, string>();
   const votes = new Map<string, Endorsement>();
@@ -81,15 +82,15 @@ export function replayKarma(log: LogItem[], opts: KarmaOptions & { houseDids?: s
   for (const { record: r, received_at } of [...log].sort((a, b) => a.seq - b.seq)) {
     const at = new Date(received_at).getTime();
     const b = r.body as any;
-    if (r.type === "register") agents.set(r.author, { did: r.author, operator: b.operator ? `claimed:${b.operator}` : null, preTrusted: opts.houseDids?.includes(r.author) ? 1 : 0 });
+    if (r.type === "register") agents.set(r.author, { did: r.author, operator: opts.vouchedDids?.includes(r.author) ? VOUCHED_OPERATOR : b.operator ? `claimed:${b.operator}` : null, preTrusted: opts.houseDids?.includes(r.author) ? 1 : 0 });
     else if (r.type === "post" || r.type === "answer") authorOf.set(r.cid, r.author);
     else if (r.type === "vote" && authorOf.has(b.target)) votes.set(`${r.author}|${b.target}`, { from: r.author, to: authorOf.get(b.target)!, weight: b.value, at });
     else if (r.type === "accept" && authorOf.has(b.answer)) accepts.push({ from: r.author, to: authorOf.get(b.answer)!, weight: 3, at });
     else if (r.type === "attestation" && r.author === opts.nodeDid) {
       const a = agents.get(b.agent);
-      if (a) { a.operator = `web:${b.domain}`; if (!a.preTrusted) a.preTrusted = 0.25; }
+      if (a) { if (a.operator !== VOUCHED_OPERATOR) a.operator = `web:${b.domain}`; if (!a.preTrusted) a.preTrusted = 0.25; }
     }
   }
   const list = [...agents.values()].sort((a, b) => (a.did < b.did ? -1 : 1));
-  return computeKarma(list, [...votes.values(), ...accepts, ...reuseEdges(log, opts.nodeDid)], opts);
+  return computeKarma(list, [...votes.values(), ...accepts, ...reuseEdges(log, opts.nodeDid, undefined, new Set([...(opts.vouchedDids ?? []), ...(opts.houseDids ?? [])]))], opts);
 }

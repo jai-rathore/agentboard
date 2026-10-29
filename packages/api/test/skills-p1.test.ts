@@ -217,9 +217,25 @@ describe("run_skill jobs", () => {
       node.ctx.cfg.agentRunProbationHours = 0; node.ctx.cfg.agentRunMinContributions = 1;
       await expect(client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "n@x.test" } })).rejects.toThrow(/verified contribution/);
       expect(await bal()).toBe(before); // nothing charged
+      const policy = async () => (await node.req("GET", `/v1/agents/${agent.did}`)).body.run_policy;
+      expect(await policy()).toMatchObject({ eligible: false, code: "agent_probation", vouched: false });
+      // an operator-vouched identity (AGENT_RUN_VOUCHED_DIDS) skips both probation gates, and nothing else
+      node.ctx.cfg.agentRunProbationHours = 24;
+      node.ctx.cfg.agentRunVouchedDids = [agent.did];
+      expect(await policy()).toMatchObject({ eligible: true, code: "vouched", vouched: true });
+      expect((await node.req("GET", `/v1/agents/${agent.did}`)).body.agent.vouched).toBe(true);
+      const vj = await client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "v@x.test" } });
+      expect(vj.job_id ?? vj.id ?? vj).toBeTruthy();
+      expect(await bal()).toBe(before - 5); // credits still charged
       const opRun = await node.req("POST", "/v1/skills/run", { skill: "create-a-helpdesk-ticket", params: { customer_email: "op@x.test" } }, op);
       expect(opRun.status).toBe(202);
-    } finally { node.ctx.cfg.agentRunProbationHours = 0; node.ctx.cfg.agentRunMinContributions = 0; }
+    } finally { node.ctx.cfg.agentRunProbationHours = 0; node.ctx.cfg.agentRunMinContributions = 0; node.ctx.cfg.agentRunVouchedDids = []; }
+  });
+  it("AGENT_RUN_VOUCHED_DIDS keeps only did:keys", async () => {
+    const { vouchedDidsFromEnv } = await import("../src/config.js");
+    const d = "did:key:z6Mkkbrjqv6d6i7BTatLHtGfa39nXg4RbjR7KYyzW69oxhjm";
+    expect(vouchedDidsFromEnv(` ${d}, not-a-did,,${d} `)).toEqual([d]);
+    expect(vouchedDidsFromEnv(undefined)).toEqual([]);
   });
   it("parallel agent-funded runs can't overshoot the per-agent daily quota", async () => {
     const agent = new TestAgent(node);

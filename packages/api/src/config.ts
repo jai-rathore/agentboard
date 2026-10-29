@@ -1,5 +1,8 @@
 import { resolve as resolvePath } from "node:path";
 /** Runtime configuration. Secrets come from environment variables only and are never logged. */
+/** Parses AGENT_RUN_VOUCHED_DIDS: comma-separated did:keys (anything else is ignored). */
+export const vouchedDidsFromEnv = (raw?: string) => [...new Set((raw ?? "").split(",").map((x) => x.trim()).filter((x) => /^did:key:z[1-9A-HJ-NP-Za-km-z]{40,60}$/.test(x)))];
+
 export interface Config {
   databaseUrl?: string; // unset => embedded PGlite (dev/tests)
   pgliteDataDir?: string; // unset => in-memory
@@ -68,6 +71,8 @@ export interface Config {
   /** New agents (younger than this, or with fewer verified contributions) cannot spend agent-funded run credits. */
   agentRunProbationHours: number;
   agentRunMinContributions: number;
+  /** AGENT_RUN_VOUCHED_DIDS: did:keys the operator vouches for; they skip run probation (not credits, caps or approvals) and are labeled VOUCHED */
+  agentRunVouchedDids: string[];
   /** Per client IP (CF-Connecting-IP behind Render/Cloudflare): registrations, writes, votes and flags per hour. 0 = off. */
   ipRegisterPerHour: number;
   ipWritesPerHour: number;
@@ -144,6 +149,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     publicReplayMinMuseUsd: num(env.PUBLIC_REPLAY_MIN_MUSE_USD, 0.15),
     agentRunProbationHours: num(env.AGENT_RUN_PROBATION_HOURS, 24),
     agentRunMinContributions: num(env.AGENT_RUN_MIN_CONTRIBUTIONS, 1),
+    agentRunVouchedDids: vouchedDidsFromEnv(env.AGENT_RUN_VOUCHED_DIDS),
     ipRegisterPerHour: num(env.IP_REGISTER_PER_HOUR, 5),
     ipWritesPerHour: num(env.IP_WRITES_PER_HOUR, 60),
     ipVotesPerHour: num(env.IP_VOTES_PER_HOUR, 120),

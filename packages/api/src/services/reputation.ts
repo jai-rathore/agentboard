@@ -3,9 +3,13 @@ import type { Db } from "../db/index.js";
 import { computeKarma, type KarmaAgent, type Endorsement } from "./karma.js";
 import { reuseEdges, loadWinLog } from "./wins.js";
 
-export async function loadKarmaInputs(db: Db, topic?: string, nodeDid?: string): Promise<{ agents: KarmaAgent[]; edges: Endorsement[] }> {
-  const agents = (await db.query<any>(`SELECT did, operator, is_house, verified_domain FROM agents ORDER BY did`)).rows.map((a) => ({
-    did: a.did, operator: a.operator, preTrusted: a.is_house ? 1 : a.verified_domain ? 0.25 : 0,
+/** Operator group of identities the node operator vouches for (AGENT_RUN_VOUCHED_DIDS): endorsements among them drop. */
+export const VOUCHED_OPERATOR = "node-operator:vouched";
+
+export async function loadKarmaInputs(db: Db, topic?: string, nodeDid?: string, vouched: string[] = []): Promise<{ agents: KarmaAgent[]; edges: Endorsement[] }> {
+  const rows = (await db.query<any>(`SELECT did, operator, is_house, verified_domain FROM agents ORDER BY did`)).rows;
+  const agents = rows.map((a) => ({
+    did: a.did, operator: vouched.includes(a.did) ? VOUCHED_OPERATOR : a.operator, preTrusted: a.is_house ? 1 : a.verified_domain ? 0.25 : 0,
   }));
   const topicFilter = topic ? `WHERE topic_path <@ $1::ltree` : "";
   const params = topic ? [topic] : [];
@@ -18,12 +22,12 @@ export async function loadKarmaInputs(db: Db, topic?: string, nodeDid?: string):
   // Reputation from reuse (services/wins.ts): another identity's verified replay of your skill or your run's trace.
   // Global karma only: a skill run has no board topic.
   // Signed records only (no job-table fallback), so an independent replay of the log (replayKarma) gets the same edges.
-  if (!topic && nodeDid) edges.push(...reuseEdges(await loadWinLog(db, ["skill", "skill_run"]), nodeDid));
+  if (!topic && nodeDid) edges.push(...reuseEdges(await loadWinLog(db, ["skill", "skill_run"]), nodeDid, undefined, new Set([...vouched, ...rows.filter((a) => a.is_house).map((a) => a.did)])));
   return { agents, edges };
 }
 
 export async function recomputeKarma(ctx: AppContext) {
-  const { agents, edges } = await loadKarmaInputs(ctx.db, undefined, ctx.node.did);
+  const { agents, edges } = await loadKarmaInputs(ctx.db, undefined, ctx.node.did, ctx.cfg.agentRunVouchedDids ?? []);
   const r = computeKarma(agents, edges, { now: ctx.now() });
   await ctx.db.tx(async (tx) => {
     for (const a of agents) await tx.query(`UPDATE agents SET karma = $2, trust = $3 WHERE did = $1`, [a.did, r.karma.get(a.did) ?? 0, r.trust.get(a.did) ?? 0]);
@@ -32,7 +36,7 @@ export async function recomputeKarma(ctx: AppContext) {
 }
 
 export async function topicKarma(ctx: AppContext, topic: string) {
-  const { agents, edges } = await loadKarmaInputs(ctx.db, topic);
+  const { agents, edges } = await loadKarmaInputs(ctx.db, topic, undefined, ctx.cfg.agentRunVouchedDids ?? []);
   return computeKarma(agents, edges, { now: ctx.now() });
 }
 

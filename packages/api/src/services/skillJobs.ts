@@ -148,6 +148,27 @@ export async function verifiedContributions(db: AppContext["db"], did: string): 
 }
 
 /**
+ * Whether an agent may fund a skill run right now, and why not (read-only: GET /v1/agents/:did returns it as
+ * run_policy). Operator-vouched identities (AGENT_RUN_VOUCHED_DIDS) skip only the probation gates; credits, quotas and
+ * approval steps are unchanged, and the leaderboard labels them VOUCHED (not independent of the operator).
+ */
+export async function agentRunEligibility(ctx: AppContext, did: string, agent?: { status: string; registered_at: string | Date }) {
+  const a = agent ?? (await ctx.db.query<any>(`SELECT status, registered_at FROM agents WHERE did = $1`, [did])).rows[0];
+  const vouched = (ctx.cfg.agentRunVouchedDids ?? []).includes(did);
+  const base = { vouched, probation_hours: ctx.cfg.agentRunProbationHours, contributions_required: ctx.cfg.agentRunMinContributions, run_cost_credits: ctx.cfg.skillsAgentRunCredits, runs_per_agent_day: ctx.cfg.skillsAgentRunsPerAgentDay };
+  if (!a) return { ...base, eligible: false, code: "not_registered", reason: "register this agent first (any write registers it)" };
+  if (a.status !== "active") return { ...base, eligible: false, code: "agent_suspended", reason: "agent is not active" };
+  const ageH = (ctx.now() - new Date(a.registered_at).getTime()) / 3_600_000;
+  if (vouched) return { ...base, eligible: true, code: "vouched", reason: "vouched by the node operator: probation skipped (credits, quotas and approvals still apply)", age_hours: Math.floor(ageH) };
+  if (ageH < ctx.cfg.agentRunProbationHours) return { ...base, eligible: false, code: "agent_probation", reason: `new agents can't fund skill runs for their first ${ctx.cfg.agentRunProbationHours} hours (this one is ${Math.floor(ageH)} h old)`, age_hours: Math.floor(ageH) };
+  if (ctx.cfg.agentRunMinContributions > 0) {
+    const n = await verifiedContributions(ctx.db, did);
+    if (n < ctx.cfg.agentRunMinContributions) return { ...base, eligible: false, code: "agent_probation", reason: `agent-funded skill runs need at least ${ctx.cfg.agentRunMinContributions} verified contribution(s) first (an accepted or upvoted answer, an upvoted post, or a verified run)`, age_hours: Math.floor(ageH), contributions: n };
+  }
+  return { ...base, eligible: true, code: "ok", reason: "past probation", age_hours: Math.floor(ageH) };
+}
+
+/**
  * Agent-funded runs. New agents are on probation (younger than agentRunProbationHours, or fewer than
  * agentRunMinContributions verified contributions) and cannot spend run credits; operator runs are exempt.
  * The quota checks, the charge and the job row happen in one transaction under an advisory lock, so parallel
@@ -155,11 +176,8 @@ export async function verifiedContributions(db: AppContext["db"], did: string): 
  */
 export async function createAgentFundedJob(ctx: AppContext, did: string, req: JobRequest): Promise<{ job: { id: string; skill_cid: string }; cost: number }> {
   const agent = (await ctx.db.query<any>(`SELECT did, status, registered_at FROM agents WHERE did = $1`, [did])).rows[0];
-  if (!agent) throw new HttpError(403, "not_registered", "register this agent first (any write registers it)");
-  if (agent.status !== "active") throw new HttpError(403, "agent_suspended", "agent is not active");
-  const ageH = (ctx.now() - new Date(agent.registered_at).getTime()) / 3_600_000;
-  if (ageH < ctx.cfg.agentRunProbationHours) throw new HttpError(403, "agent_probation", `new agents can't fund skill runs for their first ${ctx.cfg.agentRunProbationHours} hours (this one is ${Math.floor(ageH)} h old)`);
-  if (ctx.cfg.agentRunMinContributions > 0 && (await verifiedContributions(ctx.db, did)) < ctx.cfg.agentRunMinContributions) throw new HttpError(403, "agent_probation", `agent-funded skill runs need at least ${ctx.cfg.agentRunMinContributions} verified contribution(s) first (an accepted or upvoted answer, an upvoted post, or a verified run)`);
+  const el = await agentRunEligibility(ctx, did, agent);
+  if (!el.eligible) throw new HttpError(403, el.code, el.reason);
   const cost = Math.round(ctx.cfg.skillsAgentRunCredits * 1000);
   const job = await ctx.db.tx(async (tx) => {
     await tx.query(`SELECT pg_advisory_xact_lock(7240311)`);

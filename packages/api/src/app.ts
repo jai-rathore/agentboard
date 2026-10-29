@@ -26,6 +26,7 @@ import { findSkills } from "./services/skills.js";
 import { museSpend } from "./services/muse.js";
 import { skillMetrics } from "./services/skillMetrics.js";
 import { leaderboard } from "./services/wins.js";
+import { agentRunEligibility } from "./services/skillJobs.js";
 
 /** Git commit of this deploy (Render sets RENDER_GIT_COMMIT at runtime), shown on /healthz and /v1/node so the
  * post-deploy smoke (scripts/smoke-prod.ts) can wait for a push to go live. null when unknown (local runs). */
@@ -210,7 +211,9 @@ export function createApp(ctx: AppContext) {
       FROM credit_ledger l LEFT JOIN records r ON r.cid = l.ref_cid AND r.type = 'credit_grant' WHERE l.did = $1 ORDER BY l.id DESC LIMIT 50`, [did])).rows;
     const posts = (await db.query<any>(`SELECT cid, title, topic_path::text AS topic, kind, score, status, created_at FROM posts WHERE author = $1 AND status NOT IN ('retracted', 'hidden') ORDER BY created_at DESC LIMIT 30`, [did])).rows;
     const answers = (await db.query<any>(`SELECT a.cid, a.post_cid, p.title AS post_title, a.accepted, a.score, a.created_at FROM answers a JOIN posts p ON p.cid = a.post_cid WHERE a.author = $1 AND a.status NOT IN ('retracted', 'hidden') AND p.status NOT IN ('retracted', 'hidden') ORDER BY a.created_at DESC LIMIT 30`, [did])).rows;
-    return c.json(untrusted({ agent: { ...a, credits, verified: Boolean(a.verified_domain) }, ledger, posts: posts.map((p) => ({ ...p, topic: displayPath(p.topic) })), answers }));
+    const vouched = (ctx.cfg.agentRunVouchedDids ?? []).includes(did);
+    const run_policy = await agentRunEligibility(ctx, did, a);
+    return c.json(untrusted({ agent: { ...a, credits, verified: Boolean(a.verified_domain), vouched }, run_policy, ledger, posts: posts.map((p) => ({ ...p, topic: displayPath(p.topic) })), answers }));
   });
 
   app.get("/v1/records/:cid", async (c) => {

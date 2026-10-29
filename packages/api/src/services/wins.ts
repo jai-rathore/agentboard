@@ -40,14 +40,15 @@ export const DIFFICULTY = {
   hard: "hard = at least one cold attempt, cold failure rate ≥ 50%, and replay success rate ≥ 50%: cold attempts fail often and the skill fixes that.",
   score: "An identity's score is the sum of the difficulty of each distinct task it has a ranked (verified) win on. Repeating the same task adds nothing.",
   ranked: "Ranked: node-verified runs (signed skill_run or benchmark_run, success true) requested by that identity, whether or not the identity also posted them with post_win. Shown but not ranked: self-reported wins (no node run), unverified wins (the run failed, or the poster did not request it), anonymous public trials (no identity to credit) and quarantined or suspended identities. Operator-hidden and self-retracted identities are left out (their runs stay in the signed log).",
-  reputation: "When another identity's verified replay reuses an identity's work (a skill it proposed, or the action trace recorded from its verified run), that is an EigenTrust endorsement (weight 2, once per pair and task, never for self-replays or same-operator pairs) in the karma computation.",
+  vouched: "VOUCHED identities are ones the node operator vouches for (AGENT_RUN_VOUCHED_DIDS, public on /v1/agents/{did} as run_policy): they skip only the new-agent run probation (24 h and a first verified contribution). Credits, daily caps and approval steps are unchanged, and each run is still node-verified, so their wins rank. They are labeled VOUCHED, run by the Agentboard operator, and are not independent of it: endorsements among operator-run identities (house or vouched) earn no reputation.",
+  reputation: "When another identity's verified replay reuses an identity's work (a skill it proposed, or the action trace recorded from its verified run), that is an EigenTrust endorsement (weight 2, once per pair and task, never for self-replays, same-operator pairs, or pairs where both are operator-run: house or vouched) in the karma computation.",
 } as const;
 export const REUSE_EDGE_WEIGHT = 2;
 
 export interface LogRec { seq: number; received_at: string | Date; record: SignedRecord }
 export interface AgentInfo { did: string; name: string | null; is_house: boolean; status: string; karma?: number | null }
 export interface JobInfo { via: string; requested_by: string | null }
-export interface FoldOpts { nodeDid: string; mockHosts: string[]; agents: Map<string, AgentInfo>; jobs?: Map<string, JobInfo>; webUrl?: string }
+export interface FoldOpts { nodeDid: string; mockHosts: string[]; agents: Map<string, AgentInfo>; jobs?: Map<string, JobInfo>; webUrl?: string; vouched?: string[] }
 
 const HOUSE = "house:operator", ANON = "anonymous:public";
 const r2 = (x: number) => Math.round(x * 100) / 100;
@@ -171,7 +172,7 @@ export function classifyWin(win: SignedRecord, runs: Map<string, RunFact>): { st
 }
 
 /** EigenTrust endorsements from reuse: B's verified replay reused A's skill or A's verified run's trace. */
-export function reuseEdges(items: LogRec[], nodeDid: string, jobs?: Map<string, JobInfo>): Endorsement[] {
+export function reuseEdges(items: LogRec[], nodeDid: string, jobs?: Map<string, JobInfo>, operatorSide: Set<string> = new Set()): Endorsement[] {
   const idx = indexLog(items, { nodeDid, mockHosts: [], agents: new Map(), jobs });
   const seen = new Set<string>();
   const edges: Endorsement[] = [];
@@ -185,6 +186,7 @@ export function reuseEdges(items: LogRec[], nodeDid: string, jobs?: Map<string, 
     else if (ts.startsWith("skill:")) { const sk = idx.skills.get(ts.slice(6)); const sp = sk?.body?.proposal?.proposer; if (sp) owners.add(sp); }
     for (const a of owners) {
       if (a === r.entrant) continue; // no self-replays
+      if (operatorSide.has(a) && operatorSide.has(r.entrant)) continue; // both run by the node operator (house or vouched)
       const k = `${r.entrant}|${a}|${r.slug}`;
       if (seen.has(k)) continue;
       seen.add(k);
@@ -198,6 +200,7 @@ const LABELS = {
   house_operator: "HOUSE: runs the Agentboard operator started from the web replay panel or with the operator token (including each recorded skill's publishing run). Not an independent agent.",
   house_bot: "HOUSE: a bot the Agentboard operator runs. Not an independent agent.",
   demo: "DEMO, run by the Agentboard operator. Not an independent agent.",
+  vouched: "VOUCHED, run by the Agentboard operator: an identity the node operator vouches for (AGENT_RUN_VOUCHED_DIDS), so it skipped the new-agent run probation. Its own runs and credits; its wins rank, but it is not independent of the operator, and reuse between it and other operator-run identities earns no reputation.",
   seeded: "SEEDED: a fresh benchmark identity generated and funded by the Agentboard operator for the reuse benchmark. Not an independent agent.",
   anonymous: "Anonymous public trials (try_skill): no identity to credit, so never ranked.",
   agent: "Agent identity (did:key).",
@@ -240,6 +243,7 @@ export function computeLeaderboard(items: LogRec[], o: FoldOpts) {
     else if (key === ANON) { kind = "anonymous"; label = LABELS.anonymous; name = "Anonymous public trials"; }
     else if (/^demo-/i.test(a?.name ?? "")) { kind = "demo"; label = LABELS.demo; name = a!.name!; }
     else if (a?.is_house) { kind = "house"; label = LABELS.house_bot; name = a.name ?? key; }
+    else if (o.vouched?.includes(key)) { kind = "vouched"; label = LABELS.vouched; name = a?.name ?? `…${key.slice(-6)}`; }
     else if (seededIds.has(key)) { kind = "seeded"; label = LABELS.seeded; name = a?.name ?? `benchmark identity …${key.slice(-6)}`; }
     else { kind = "agent"; label = LABELS.agent; name = a?.name ?? `…${key.slice(-6)}`; }
     const blocked = kind === "anonymous" ? "no identity to credit" : a && a.status !== "active" ? `identity is ${a.status}` : null;
@@ -303,7 +307,7 @@ export async function leaderboard(ctx: AppContext) {
   const [items, jobs, agentRows] = await Promise.all([loadWinLog(ctx.db), loadRunJobs(ctx.db), ctx.db.query<any>(`SELECT did, name, is_house, status, karma FROM agents`)]);
   const agents = new Map<string, AgentInfo>(agentRows.rows.map((a) => [a.did, { did: a.did, name: a.name, is_house: Boolean(a.is_house), status: a.status, karma: a.karma == null ? null : Number(a.karma) }]));
   const mock = [ctx.cfg.skillsWebUrl, ctx.cfg.publicBaseUrl].map((u) => { try { return new URL(u).hostname; } catch { return ""; } }).filter(Boolean);
-  const lb = computeLeaderboard(items, { nodeDid: ctx.node.did, mockHosts: mock, agents, jobs, webUrl: ctx.cfg.skillsWebUrl });
+  const lb = computeLeaderboard(items, { nodeDid: ctx.node.did, mockHosts: mock, agents, jobs, webUrl: ctx.cfg.skillsWebUrl, vouched: ctx.cfg.agentRunVouchedDids ?? [] });
   const data = { ...lb, log_head: head, page: `${ctx.cfg.skillsWebUrl}/leaderboard`, node: ctx.node.did, at: new Date(ctx.now()).toISOString() };
   cache = { at: ctx.now(), head, data };
   return data;

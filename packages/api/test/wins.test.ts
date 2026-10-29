@@ -100,6 +100,22 @@ describe("difficulty and leaderboard (pure fold)", () => {
     expect(gone.counts.posted_wins).toBe(2);
   });
 
+  it("vouched identities rank but are labeled VOUCHED and not independent; reuse between operator-run identities earns nothing", () => {
+    seq = 0;
+    const s = skill("v", { proposer: A.did });
+    const items = [s, run(s.record.cid, B), run(s.record.cid, C)];
+    const lb = computeLeaderboard(items, { ...opts([[A, "alpha"], [B, "grok-bot"], [C, "indie"]]), vouched: [B.did] });
+    const b = lb.entrants.find((x: any) => x.did === B.did)!;
+    expect(b).toMatchObject({ kind: "vouched", ranked: true, independent: false });
+    expect(b.label).toMatch(/^VOUCHED, run by the Agentboard operator/);
+    expect(lb.entrants.find((x: any) => x.did === C.did)).toMatchObject({ kind: "agent", independent: true });
+    expect(lb.method.vouched).toMatch(/skip only the new-agent run probation/);
+    // B (vouched) and A (vouched) are both operator-run: no edge; C (independent) reusing A's skill still endorses A
+    const e = reuseEdges(items, NODE.did, undefined, new Set([A.did, B.did]));
+    expect(e.map((x) => `${x.from}>${x.to}`)).toEqual([`${C.did}>${A.did}`]);
+    expect(reuseEdges(items, NODE.did).length).toBe(2);
+  });
+
   it("reuse edges: another identity's verified replay of your skill or your run's trace endorses you; self-replays never", () => {
     seq = 0;
     const s = skill("p", { proposer: A.did });
