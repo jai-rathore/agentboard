@@ -307,7 +307,8 @@ async function replay(m, send, ask, isAborted) {
     const texts = await page.evaluate(pageTextInPage).catch(() => ({ viewport: "", page: "", title: "" }));
     // ---- deterministic value return: read the answer off the page with the trace's extraction recipe
     const extractWith = async (recipe) => (recipe ? pickValue(await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: false }).catch(() => null), recipe) : null);
-    let recipe = trace?.extract ?? null, value = await extractWith(recipe);
+    // an operator run with relearn: true learns the recipe again from the verifier's answer (the old one is the fallback)
+    let recipe = m.relearn ? null : (trace?.extract ?? null), value = await extractWith(recipe);
     if (recipe && value == null) { send({ type: "status", message: `The extraction recipe found no value on this page (${recipe.kind}${recipe.label ? ` "${fillText(recipe.label, params)}"` : ""})` }); recipe = null; }
     // the final screenshot shows the extracted value (scrolled into view) for the record and any verifier call
     if (value != null) await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: true }).catch(() => {});
@@ -340,6 +341,7 @@ async function replay(m, send, ask, isAborted) {
       const got = await extractWith(stored);
       if (stored && got != null) { recipe = stored; value = got; }
     }
+    if (value == null && m.relearn && trace?.extract) { const got = await extractWith(trace.extract); if (got != null) { recipe = trace.extract; value = got; } }
     // no_value only when the model's answer quoted no value at all (else learning is retried on the next replay)
     const noValue = value == null && (verdictFull.model === "deterministic" ? Boolean(trace?.no_value) && !m.relearn : answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params).length === 0);
     const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `infobox/table row "${fillText(recipe.label, params).slice(0, 80)}${recipe.sub ? ` › ${recipe.sub}` : ""}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier", model_text: finalMessage ? finalMessage.slice(0, 400) : null };
