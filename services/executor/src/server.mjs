@@ -335,7 +335,8 @@ async function replay(m, send, ask, isAborted) {
     if (verdictFull.success && value == null) {
       // the verifier's own value first (a version or number inside it before the whole text), then what the answers quote
       const vv = String(verdict.value ?? "").trim().slice(0, 200);
-      const vvParts = vv ? [...answerCandidates(vv, params).filter((x) => /\d/.test(x) && x !== vv), vv] : [];
+      const isInput = Object.values(params).some((x) => String(x).trim().toLowerCase() === vv.toLowerCase());
+      const vvParts = vv && !isInput ? [...answerCandidates(vv, params).filter((x) => /\d/.test(x) && x !== vv), vv] : [];
       const derived = await page.evaluate(deriveRecipeInPage, { candidates: [...new Set([...vvParts, ...answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params)])].slice(0, 14), labels: Object.values(params).filter((x) => String(x).length >= 2) }).catch(() => null);
       const stored = storeRecipe(derived, params);
       const got = await extractWith(stored);
@@ -344,7 +345,10 @@ async function replay(m, send, ask, isAborted) {
     if (value == null && m.relearn && trace?.extract) { const got = await extractWith(trace.extract); if (got != null) { recipe = trace.extract; value = got; } }
     // no_value only when the model's answer quoted no value at all (else learning is retried on the next replay)
     const noValue = value == null && (verdictFull.model === "deterministic" ? Boolean(trace?.no_value) && !m.relearn : answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params).length === 0);
-    const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `infobox/table row "${fillText(recipe.label, params).slice(0, 80)}${recipe.sub ? ` › ${recipe.sub}` : ""}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier", model_text: finalMessage ? finalMessage.slice(0, 400) : null };
+    // the label of the row the value was actually read from (not the recipe's sub-row hint)
+    const matched = value != null && recipe.kind === "row" ? await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: false, withLabel: true }).catch(() => null) : null;
+    const rowLabel = (matched?.label || fillText(recipe?.label ?? "", params)).slice(0, 120);
+    const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `infobox/table row "${rowLabel}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier", model_text: finalMessage ? finalMessage.slice(0, 400) : null };
     // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
     const steps = cleanSteps(recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })));
     const runTrace = verdictFull.success && steps.length ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: finalChecks(texts, params, page.url()), ...(recipe ? { extract: recipe } : noValue ? { no_value: true } : {}) } : null;

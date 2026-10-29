@@ -271,12 +271,14 @@ export const VALUE_RE = {
 export function deriveRecipeInPage({ candidates, labels }) {
   const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
   const low = (s) => norm(s).toLowerCase();
+  // a path that selects exactly this element (checked), anchored on a stable id: not an item id such as "score_50289418"
   const cssPath = (el) => {
     const path = [];
-    for (let n = el; n && n.nodeType === 1 && path.length < 6; n = n.parentElement) {
-      if (n.id && /^[A-Za-z][\w-]*$/.test(n.id)) { path.unshift(`#${n.id}`); break; }
+    for (let n = el; n && n.nodeType === 1 && path.length < 14; n = n.parentElement) {
+      if (n.id && /^[A-Za-z][\w-]*$/.test(n.id) && !/\d{3,}/.test(n.id)) { path.unshift(`#${n.id}`); break; }
       const t = n.tagName.toLowerCase(), sibs = n.parentElement ? [...n.parentElement.children].filter((c) => c.tagName === n.tagName) : [];
       path.unshift(sibs.length > 1 ? `${t}:nth-of-type(${sibs.indexOf(n) + 1})` : t);
+      if (path.length >= 3 && document.querySelector(path.join(" > ")) === el) break;
     }
     return path.join(" > ");
   };
@@ -316,11 +318,11 @@ export function deriveRecipeInPage({ candidates, labels }) {
 }
 
 /** Runs in the page: apply a (filled) recipe; returns the element's text or null. */
-export function applyRecipeInPage({ recipe, scroll }) {
+export function applyRecipeInPage({ recipe, scroll, withLabel }) {
   const show = (el) => { if (scroll && el) el.scrollIntoView({ block: "center", inline: "nearest" }); };
   const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
   const low = (s) => norm(s).toLowerCase();
-  if (recipe.kind === "css") { const el = document.querySelector(recipe.css); show(el); return el ? norm(el.innerText || el.textContent).slice(0, 1000) : null; }
+  if (recipe.kind === "css") { const el = document.querySelector(recipe.css); show(el); const text = el ? norm(el.innerText || el.textContent).slice(0, 1000) : null; return withLabel && text != null ? { text, label: null } : text; }
   if (recipe.kind === "row") {
     // a field that names a sub-row ("Metro population", "urban area population") looks up the header ("Population") and that sub-row
     const SUBWORD = /\b(metro(?:politan)?(?: area)?|urban(?: area)?|city proper|city|municipality|total|land|water|density|rank)\b/;
@@ -353,10 +355,21 @@ export function applyRecipeInPage({ recipe, scroll }) {
       const sideOffset = !named && recipe.offset > 0 && SIDE.test(subName(rows[i + recipe.offset] ?? document.createElement("tr")));
       const tryRows = [i, subRow ? rows.indexOf(subRow) : -1, sideOffset ? -1 : i + (recipe.offset || 0), i + 1, i + 2, i + 3].filter((k, x, a) => k >= i && a.indexOf(k) === x);
       const wantsArea = /density|per /.test(want + " " + (named ?? ""));
-      for (const k of tryRows) { const td = rows[k]?.querySelector("td"); if (k !== i && !wantsArea && rows[k] && perArea(rows[k])) continue; if (td && norm(td.innerText)) { show(td); return norm(td.innerText).slice(0, 1000); } }
+      for (const k of tryRows) {
+        const td = rows[k]?.querySelector("td"); if (k !== i && !wantsArea && rows[k] && perArea(rows[k])) continue;
+        if (td && norm(td.innerText)) {
+          show(td);
+          const text = norm(td.innerText).slice(0, 1000);
+          if (!withLabel) return text;
+          // the row the value came from: its own label, plus the sub-row name only when it is one (a "• City" row below the header)
+          const clean = (x) => norm(x).replace(/\[[^\]]*\]/g, "").replace(/^[•·\-\s]+/, "").trim();
+          const own = clean(rows[k].querySelector("th")?.innerText);
+          return { text, label: k === i ? clean(th.innerText) : block.includes(rows[k]) && own ? `${clean(th.innerText)} › ${own}` : own || clean(th.innerText) };
+        }
+      }
     }
     const dt = pick([...document.querySelectorAll("dt")]);
-    if (dt) { let dd = dt.nextElementSibling; while (dd && dd.tagName !== "DD") dd = dd.nextElementSibling; if (dd) { show(dd); return norm(dd.innerText).slice(0, 1000); } }
+    if (dt) { let dd = dt.nextElementSibling; while (dd && dd.tagName !== "DD") dd = dd.nextElementSibling; if (dd) { show(dd); const text = norm(dd.innerText).slice(0, 1000); return withLabel ? { text, label: norm(dt.innerText) } : text; } }
   }
   return null;
 }
@@ -370,7 +383,7 @@ export function answerCandidates(answer, params = {}) {
   // and a bold "**Special capital region:**" (or "**Region**: …") is a label too
   for (const m of a.matchAll(/\*\*([^*]{1,120})\*\*(:?)/g)) if (!inputsLow.some((v) => m[1].toLowerCase().includes(v)) && !/:\s*$/.test(m[1]) && !m[2]) out.push(m[1].trim());
   for (const m of a.matchAll(new RegExp(VALUE_RE.version, "g"))) { const pre = a.slice(0, m.index); if (!/[A-Za-z]$/.test(pre) || /(^|[^A-Za-z])v$/.test(pre)) out.push(m[0]); } // not "Qwen3.5" ("v1.2.0" is fine)
-  for (const m of a.matchAll(/["“]([^"”\n]{3,160})["”]/g)) out.push(m[1].trim()); // a quoted title ("…") is usually the answer itself
+  for (const m of a.matchAll(/["“]([^"”\n]{3,160})["”]|(?:^|[\s(])'([^'\n]{3,160})'(?=[\s.,;:)]|$)/g)) out.push((m[1] ?? m[2]).trim()); // a quoted title ("…") is usually the answer itself
   // numbers in the order the answer mentions them (the first is usually the one asked for); bare years last
   for (const m of a.matchAll(/\d[\d,]*(?:\.\d+)?/g)) if (!/[A-Za-z]$/.test(a.slice(0, m.index)) && m[0].replace(/\D/g, "").length >= 2) (/^(1[5-9]|20)\d\d$/.test(m[0]) ? years : out).push(m[0]);
   out.push(...years);
