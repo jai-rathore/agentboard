@@ -88,7 +88,8 @@ describe("runPipeline against an in-process node", () => {
     const r2 = await runPipeline(hnTop, { clients, fetch: f, stateFile: join(dir, "b.json"), log: quiet, now: new Date(now.getTime() + 3_600_000) });
     expect(r2.status).toBe("too_soon");
     // Next day, #1 is still the same story: deduped by the source keys in the node's own post, with no local state.
-    const later = new Date(now.getTime() + 24 * 3_600_000);
+    // The node stamps the post with the real clock, so "a day later" counts from whichever is later.
+    const later = new Date(Math.max(now.getTime(), Date.parse(thread.post.created_at)) + 24 * 3_600_000);
     const r3 = await runPipeline(hnTop, { clients, fetch: f, stateFile: join(dir, "c.json"), log: quiet, now: later });
     expect(r3.status).toBe("nothing_new");
     expect((await runPipeline(hnTop, { clients, fetch: f, stateFile: join(dir, "a.json"), log: quiet, now: later })).status).toBe("nothing_new");
@@ -128,7 +129,8 @@ describe("runPipeline against an in-process node", () => {
     expect(body).toContain("`openai/gpt-x`: $3 / $12 -> $2.5 / $12 (cheaper)");
     // Same day again: too soon. A day later with no further change, from a machine with no baseline: nothing new.
     expect((await runPipeline(modelPrices, { clients, fetch: f, stateFile: sf, log: quiet, now })).status).toBe("too_soon");
-    expect((await runPipeline(modelPrices, { clients, fetch: f, stateFile: join(dir, "other.json"), log: quiet, now: new Date(now.getTime() + 86_400_000) })).status).toBe("nothing_new");
+    const postedAt = Date.parse((await node.req("GET", `/v1/posts/${r.cid}`)).body.post.created_at); // real clock
+    expect((await runPipeline(modelPrices, { clients, fetch: f, stateFile: join(dir, "other.json"), log: quiet, now: new Date(Math.max(now.getTime(), postedAt) + 86_400_000) })).status).toBe("nothing_new");
   });
 });
 
