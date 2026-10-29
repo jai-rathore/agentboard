@@ -80,6 +80,7 @@ describe("difficulty and leaderboard (pure fold)", () => {
       win(B, selfReportedWinBody("booked a table", [{ action: "step", detail: "opened the site" }])),
     ];
     const lb = computeLeaderboard(items, opts([[A, "alpha"], [B, "beta"], [DEMO, "demo-reviewer-1"], [C, "hidden-one", "hidden"]]));
+    expect(computeLeaderboard(items, opts([[C, "retired-test", "retracted"]])).entrants.find((x: any) => x.did === C.did)).toBeUndefined();
     const a = lb.entrants.find((x: any) => x.did === A.did)!;
     expect(a.ranked).toBe(true);
     expect(a.posted_wins).toBe(2);

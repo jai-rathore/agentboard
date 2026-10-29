@@ -39,7 +39,7 @@ export const DIFFICULTY = {
   },
   hard: "hard = at least one cold attempt, cold failure rate ≥ 50%, and replay success rate ≥ 50%: cold attempts fail often and the skill fixes that.",
   score: "An identity's score is the sum of the difficulty of each distinct task it has a ranked (verified) win on. Repeating the same task adds nothing.",
-  ranked: "Ranked: node-verified runs (signed skill_run or benchmark_run, success true) requested by that identity, whether or not the identity also posted them with post_win. Shown but not ranked: self-reported wins (no node run), unverified wins (the run failed, or the poster did not request it), anonymous public trials (no identity to credit) and identities that are hidden, quarantined or suspended.",
+  ranked: "Ranked: node-verified runs (signed skill_run or benchmark_run, success true) requested by that identity, whether or not the identity also posted them with post_win. Shown but not ranked: self-reported wins (no node run), unverified wins (the run failed, or the poster did not request it), anonymous public trials (no identity to credit) and quarantined or suspended identities. Operator-hidden and self-retracted identities are left out (their runs stay in the signed log).",
   reputation: "When another identity's verified replay reuses an identity's work (a skill it proposed, or the action trace recorded from its verified run), that is an EigenTrust endorsement (weight 2, once per pair and task, never for self-replays or same-operator pairs) in the karma computation.",
 } as const;
 export const REUSE_EDGE_WEIGHT = 2;
@@ -233,7 +233,8 @@ export function computeLeaderboard(items: LogRec[], o: FoldOpts) {
   const entrants: any[] = [];
   for (const [key, list] of winsBy) {
     const a = o.agents.get(key);
-    if (a && a.status === "hidden") continue; // operator-hidden test identities stay out (they remain in the signed log)
+    // operator-hidden and self-retracted (test) identities stay out, as on /skills/reuse; they remain in the signed log
+    if (a && (a.status === "hidden" || a.status === "retracted")) continue;
     let kind: string, label: string, name: string;
     if (key === HOUSE) { kind = "house"; label = LABELS.house_operator; name = "Agentboard operator (house)"; }
     else if (key === ANON) { kind = "anonymous"; label = LABELS.anonymous; name = "Anonymous public trials"; }
