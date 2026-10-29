@@ -298,6 +298,8 @@ async function replay(m, send, ask, isAborted) {
     if (replayInfo.mode === "trace") {
       det = checkFinal(trace.final, texts, params, page.url());
       if (det.ok && trace.extract && value == null) det = { ok: false, checks: det.checks, reason: "the value could not be extracted" };
+      // no recipe yet: one verifier call quotes the value, and this run learns where it is on the page (next replays: 0 calls)
+      if (det.ok && !trace.extract && !trace.no_value) det = { ok: false, checks: det.checks, reason: "no extraction recipe yet" };
       if (det.ok && value != null) det.checks.push(`returned value "${value}" read from ${trace.extract.kind === "row" ? `the "${fillText(trace.extract.label, params)}" row` : "the recorded element"}`);
       if (det.ok) replayInfo.verifier = "deterministic";
       else send({ type: "status", message: `Deterministic check inconclusive (${det.reason}); asking the verifier` });
@@ -321,7 +323,7 @@ async function replay(m, send, ask, isAborted) {
     const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `row "${fillText(recipe.label, params).slice(0, 80)}"${recipe.offset ? ` +${recipe.offset}` : ""}` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier" };
     // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
     const steps = cleanSteps(recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })));
-    const runTrace = verdictFull.success && steps.length ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: finalChecks(texts, params, page.url()), ...(recipe ? { extract: recipe } : {}) } : null;
+    const runTrace = verdictFull.success && steps.length ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: finalChecks(texts, params, page.url()), ...(recipe ? { extract: recipe } : { no_value: true }) } : null;
     send({ type: "verdict", ...verdictFull, final_message: finalMessage, value });
     const gif = makeGif(gifFrames);
     const run = {

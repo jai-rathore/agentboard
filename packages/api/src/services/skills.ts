@@ -186,6 +186,8 @@ export const TraceZ = z.object({
   v: z.literal(1), start_url: S(520), steps: z.array(TraceStepZ).min(1).max(60),
   final: z.object({ url: S(520), viewport: z.array(S(60)).max(20), page: z.array(S(60)).max(20), title: z.array(S(60)).max(20) }),
   extract: ExtractZ.optional(),
+  /** set when a verified run found no value to extract (the trace then verifies without one) */
+  no_value: z.boolean().optional(),
 });
 export type Trace = z.infer<typeof TraceZ>;
 const ReplayZ = z.object({
