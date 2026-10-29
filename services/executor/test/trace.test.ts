@@ -145,6 +145,8 @@ describe.skipIf(!chromium)("trace: replay in headless Chromium with no model", (
     // zero-call value return on the new input (the header says 2024 here, 2023 in the recording)
     expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, { ...P2, f: "Population" }) }), recipe)).toBe("717,710");
     expect(await r.evaluate(applyRecipeInPage, { recipe: { kind: "row", label: "Area", offset: 0 } })).toBeNull();
+    // a recipe recorded on a page where the value sat on the label's own row still finds it under a header row
+    expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: { kind: "row", label: "Population", offset: 0 } }), { kind: "row", regex: regexFor("139,875") })).toBe("717,710");
     expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: { kind: "row", label: "Elevation", offset: 0, regex: regexFor("12 m") } }), { kind: "row", regex: regexFor("12 m") })).toBe("12 m");
     expect(await locate(r, { tag: "a", role: "link", name: "Nope", text: "Nope", css: "#nope", attrs: {} }, P2, 300)).toBeNull();
     // a recorded name with extra text after the parameter still finds the element by its leading part

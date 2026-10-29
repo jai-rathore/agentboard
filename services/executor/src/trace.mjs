@@ -307,8 +307,9 @@ export function applyRecipeInPage({ recipe }) {
     const th = pick([...document.querySelectorAll("th")]);
     if (th) {
       const rows = [...th.closest("table").querySelectorAll("tr")], i = rows.indexOf(th.closest("tr"));
-      const td = rows[i + (recipe.offset || 0)]?.querySelector("td");
-      if (td) return norm(td.innerText).slice(0, 1000);
+      // the recorded offset first; a header row without a value cell looks a few rows further (infobox sub-rows)
+      const tryRows = [i + (recipe.offset || 0), i, i + 1, i + 2, i + 3].filter((k, x, a) => k >= i && a.indexOf(k) === x);
+      for (const k of tryRows) { const td = rows[k]?.querySelector("td"); if (td && norm(td.innerText)) return norm(td.innerText).slice(0, 1000); }
     }
     const dt = pick([...document.querySelectorAll("dt")]);
     if (dt) { let dd = dt.nextElementSibling; while (dd && dd.tagName !== "DD") dd = dd.nextElementSibling; if (dd) return norm(dd.innerText).slice(0, 1000); }
