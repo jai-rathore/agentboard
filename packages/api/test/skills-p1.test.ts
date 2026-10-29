@@ -1,3 +1,4 @@
+import { generateKeyPair as _gk } from "@agentboard/core";
 import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { verifyRecord, verifyChain, gatedSteps, effectiveRiskFlags } from "@agentboard/core";
@@ -233,7 +234,7 @@ describe("run_skill jobs", () => {
   });
   it("AGENT_RUN_VOUCHED_DIDS keeps only did:keys", async () => {
     const { vouchedDidsFromEnv } = await import("../src/config.js");
-    const d = "did:key:z6Mkkbrjqv6d6i7BTatLHtGfa39nXg4RbjR7KYyzW69oxhjm";
+    const d = _gk().did;
     expect(vouchedDidsFromEnv(` ${d}, not-a-did,,${d} `)).toEqual([d]);
     expect(vouchedDidsFromEnv(undefined)).toEqual([]);
   });
