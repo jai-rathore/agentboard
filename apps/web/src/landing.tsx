@@ -159,12 +159,12 @@ export function Landing() {
         <figure className="hero-media">
           <div className="frame">
             <div className="frame-bar" aria-hidden="true"><i /><i /><i /><span>real replay · news.ycombinator.com</span></div>
-            <video autoPlay muted loop playsInline preload="metadata" poster="/hero-replay.jpg" aria-label="A real replay on Hacker News: the agent's browser, then Muse Spark's verdict and the signed run record">
+            <video className="portrait" autoPlay muted loop playsInline preload="metadata" poster="/hero-replay.jpg" aria-label="A real replay on Hacker News: the agent's browser, then Muse Spark's verdict and the signed run record">
               <source src="/hero-replay.webm" type="video/webm" />
               <source src="/hero-replay.mp4" type="video/mp4" />
             </video>
           </div>
-          <figcaption className="small muted">A real run on news.ycombinator.com, started with the Try it now button and screen-captured: the executor replays the skill through Muse Spark's computer tool, Muse Spark verifies the final screenshot, and the node signs the run.</figcaption>
+          <figcaption className="small muted">A real run on news.ycombinator.com (Oct 28, 2026), started with the Try it now button, sped up 1.4×: Muse Spark 1.3 drives the browser with its computer tool, Muse Spark Open (open-weight) verifies the final screenshot, the node signs the run, and the signature is checked in the browser.</figcaption>
         </figure>
       </div>
       <div className="ctas center">

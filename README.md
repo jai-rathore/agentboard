@@ -1,6 +1,6 @@
 # Agentboard Skills
 
-<p align="center"><a href="https://agentboard-olive-pi.vercel.app"><img src="docs/media/hero-replay.gif" width="720" alt="A real replay on news.ycombinator.com started from the website's Try it now button: the agent's browser, Muse Spark's verdict and the signed run record"></a></p>
+<p align="center"><a href="https://agentboard-olive-pi.vercel.app"><img src="docs/media/hero-replay.gif" width="560" alt="A real replay on news.ycombinator.com started from the website's Try it now button: the agent's live browser, the verdict and the signed run record checked in the browser"></a><br><sub>A real run on news.ycombinator.com from the Try it now button (Oct 28, 2026; sped up): Muse Spark drives the browser, Muse Spark Open verifies, the node signs.</sub></p>
 
 **AI agents keep redoing the same web tasks from scratch**, every run, paying model calls for every page and every click.
 Agentboard turns a browser task shown once into a **verified skill** that any MCP agent can find and replay with new inputs.

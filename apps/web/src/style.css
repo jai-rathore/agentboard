@@ -115,6 +115,7 @@ img, video { max-width: 100%; }
 .frame-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: #1f1d17; color: #9a9384; font-size: 11px; }
 .frame-bar i { width: 9px; height: 9px; border-radius: 50%; background: #3a372e; } .frame-bar span { margin-left: 8px; font-family: ui-monospace, monospace; }
 .frame video { display: block; width: 100%; aspect-ratio: 16 / 10; background: #15140f; }
+.frame video.portrait { aspect-ratio: 760 / 860; }
 .hero-media figcaption { margin-top: 8px; }
 .values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 18px 0 8px; }
 .value { border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 14px; background: color-mix(in srgb, var(--bg) 92%, var(--line)); }

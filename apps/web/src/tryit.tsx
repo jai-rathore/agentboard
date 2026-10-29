@@ -43,7 +43,8 @@ export function TryItNow({ slug: want, params: wantParams, title = true }: { slu
   const [st, setSt] = useState<Status | null>(null);
   const [phase, setPhase] = useState<Phase>({ k: "idle" });
   const [vals, setVals] = useState<Record<string, string>>({});
-  useEffect(() => { get<Status>("/v1/skills/public-replay").then(setSt, () => setSt(null)); }, []);
+  // re-read the caps after a run starts or falls back, so "left today" stays current
+  useEffect(() => { if (phase.k !== "work") get<Status>("/v1/skills/public-replay").then(setSt, () => {}); }, [phase.k]);
   const sk = st?.skills.find((s) => (want ? s.slug === want : s.eligible)) ?? (want ? { slug: want, eligible: true, params: wantParams } : undefined);
   const params = sk?.params ?? wantParams ?? [];
   if (!sk) return null;
