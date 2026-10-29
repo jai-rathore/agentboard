@@ -77,7 +77,7 @@ describe("runPipeline against an in-process node", () => {
     const now = new Date(); // the node stamps posts with the real clock, so the test clock must follow it
     const r1 = await runPipeline(hnTop, { clients, fetch: f, stateFile: join(dir, "a.json"), log: quiet, now, allowCreateTopic: true });
     expect(r1.status).toBe("posted");
-    expect(r1.title).toBe("HN #1 on Oct 28, 2026: Show HN: A tiny MCP server for Postgres");
+    expect(r1.title).toMatch(/^HN #1 on [A-Z][a-z]{2} \d{1,2}, \d{4}: Show HN: A tiny MCP server for Postgres$/); // dated with the real clock
     const thread = (await node.req("GET", `/v1/posts/${r1.cid}`)).body;
     expect(thread.post.topic).toBe("hacker_news");
     expect(thread.post.body).toContain("Top comment, by dana");
