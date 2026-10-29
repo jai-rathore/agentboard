@@ -25,10 +25,12 @@ const jpeg = () => Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.from(String(
 let node: TestNode;
 const museCalls: string[] = [];
 let busy = false;
+/** Fake executor jobs still running; afterAll waits for them so none touches the database after it is closed. */
+const inflight = new Set<Promise<unknown>>();
 // Fake Muse (Responses API) and the executor's /jobs dispatch, for the node's own outbound calls.
 const nodeFetch: typeof fetch = async (url, init) => {
   const u = String(url);
-  if (u.endsWith("/jobs")) { const { job_id } = JSON.parse(String(init?.body)); setTimeout(() => void fakeJob(job_id), 5); return new Response("{}", { status: 202 }); }
+  if (u.endsWith("/jobs")) { const { job_id } = JSON.parse(String(init?.body)); setTimeout(() => { const p = fakeJob(job_id).catch(() => {}); inflight.add(p); void p.finally(() => inflight.delete(p)); }, 5); return new Response("{}", { status: 202 }); }
   museCalls.push((init?.headers as any)?.["x-muse-kind"] ?? "record");
   return new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(WIKI) }] }], usage: { input_tokens: 2000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 100 } }), { status: 200 });
 };
@@ -86,7 +88,10 @@ beforeAll(async () => {
   const pub = await fakeRun({ draft_id: d.body.id }, { place: "Mount Everest", infobox_field: "Elevation" }, WIKI.start_url_hint, 3);
   expect(pub.status).toBe("published");
 });
-afterAll(async () => { await node?.ctx.db.close(); });
+afterAll(async () => {
+  for (let i = 0; i < 50 && inflight.size; i++) await Promise.allSettled([...inflight, new Promise((r) => setTimeout(r, 20))]);
+  await node?.ctx.db.close();
+});
 
 describe("reuse benchmark", () => {
   it("shows nothing before a benchmark exists", async () => {
