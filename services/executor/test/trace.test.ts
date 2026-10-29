@@ -189,3 +189,13 @@ describe.skipIf(!chromium)("trace: replay in headless Chromium with no model", (
     expect(bad.reason).toMatch(/element not found: click link "\{\{q\}\}"/);
   }, 60000);
 });
+
+describe("a start URL that names params", () => {
+  it("is filled per run (URL-encoded) and written back as the template", async () => {
+    const { fillUrl, templ } = await import("../src/trace.mjs");
+    const tpl = "https://pypi.org/project/{{package}}/";
+    expect(fillUrl(tpl, { package: "requests" })).toBe("https://pypi.org/project/requests/");
+    expect(fillUrl(tpl, { package: "a b" })).toBe("https://pypi.org/project/a%20b/");
+    expect(templ(fillUrl(tpl, { package: "flask" }), { package: "flask" })).toBe(tpl);
+  });
+});

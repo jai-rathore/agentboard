@@ -132,9 +132,11 @@ async function loadTarget(m) {
 
 async function replay(m, send, ask, isAborted) {
   const t0 = Date.now();
-  const { skill, start_url, target, trace } = await loadTarget(m);
-  if (!/^https?:\/\//.test(start_url || "")) throw Object.assign(new Error("the skill needs an http(s) start URL"), { code: "start_url" });
+  const { skill, start_url: startTpl, target, trace } = await loadTarget(m);
   const params = Object.fromEntries(skill.params.map((p) => [p.name, String(m.params?.[p.name] ?? p.example)]));
+  // a start URL may name params ("https://pypi.org/project/{{package}}/"): filled (URL-encoded) per run; the template is what gets published
+  const start_url = fillUrl(startTpl, params);
+  if (!/^https?:\/\//.test(start_url || "")) throw Object.assign(new Error("the skill needs an http(s) start URL"), { code: "start_url" });
   const usage = { calls: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, usd: 0 };
   // Names the API job on each Muse call, so the API can count public replays in their reserved daily bucket.
   const jobHeader = m.job_id ? { "x-skills-job": String(m.job_id) } : {};
@@ -356,7 +358,7 @@ async function replay(m, send, ask, isAborted) {
     send({ type: "verdict", ...verdictFull, final_message: finalMessage, value });
     const gif = gifFrames.length ? makeGif(gifFrames) : null;
     const run = {
-      ...target, ...(m.job_id ? { job_id: m.job_id } : {}), start_url, params, success: verdictFull.success, step_changes: stepChanges, human_ms: humanMs, verdict: verdictFull, turns: replayInfo.mode === "trace" ? 0 : Math.min(turn, MAX_TURNS), actions: actions.slice(0, 200), usage, model: replayInfo.mode === "trace" ? "none (recorded trace)" : v.model,
+      ...target, ...(m.job_id ? { job_id: m.job_id } : {}), start_url: /\{\{\s*[a-z0-9_]+\s*\}\}/i.test(startTpl) ? startTpl : start_url, params, success: verdictFull.success, step_changes: stepChanges, human_ms: humanMs, verdict: verdictFull, turns: replayInfo.mode === "trace" ? 0 : Math.min(turn, MAX_TURNS), actions: actions.slice(0, 200), usage, model: replayInfo.mode === "trace" ? "none (recorded trace)" : v.model,
       ...(runTrace ? { trace: runTrace } : {}), ...(target.skill_cid ? { replay: replayInfo } : {}), answer,
       final_jpeg_b64: finalJpg.toString("base64"), ...(gif ? { gif_b64: gif.toString("base64") } : {}),
       executor: { name: "agentboard-executor", chromium: `headless-shell ${browser.version()}`, viewport: `${W}x${H}` }, duration_ms: Date.now() - t0,
