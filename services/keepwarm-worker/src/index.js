@@ -5,9 +5,12 @@
  * Each run:
  *   1. GET <API>/healthz and, inside EXECUTOR_WARM_WINDOWS, GET <EXECUTOR>/healthz (pings only; no secrets).
  *   2. MCP probe on <API>/mcp (stateless JSON-RPC): initialize, tools/list (try_skill must be listed), find_skill.
- *      Every PROBE_TRY_EVERY_MIN minutes also try_skill's first step for PROBE_SLUG: that answers with a challenge
- *      question (or a cached verified run when a cap is hit) and starts no replay, so it spends no Muse calls.
- *   3. Writes the status JSON to KV (key "status", plus a short "history") and serves it at GET /status.json.
+ *      Also try_skill's first step for PROBE_SLUG, every PROBE_TRY_EVERY_MIN minutes inside EXECUTOR_WARM_WINDOWS and
+ *      every PROBE_TRY_OFF_WINDOW_EVERY_MIN minutes outside it: that answers with a challenge question (or a cached
+ *      verified run when a cap is hit) and starts no replay, so it spends no Muse calls. Issuing a challenge makes the
+ *      API wake the executor, so off-window probes are kept rare to save Render free instance-hours.
+ *   3. Writes the status JSON (with a short history) to KV, one write per run (KV free tier: 1,000 writes/day), and
+ *      serves it at GET /status.json.
  *
  * Render free tier: 750 instance-hours per workspace per month, so two services awake 24/7 (~1,490 h) would run out.
  * The API is pinged in API_WARM_WINDOWS and the executor only in EXECUTOR_WARM_WINDOWS (both in America/Los_Angeles
@@ -23,6 +26,7 @@ const DEFAULTS = {
   PROBE_SLUG: "hacker-news-top-story",
   PROBE_PARAMS: "{}",
   PROBE_TRY_EVERY_MIN: "30",
+  PROBE_TRY_OFF_WINDOW_EVERY_MIN: "180",
   TIMEOUT_MS: "70000",
 };
 const HISTORY = 48;
@@ -111,13 +115,20 @@ export async function probeMcp(fetchImpl, c, withTry) {
   return { ok: true, steps };
 }
 
+/** True on the 5-minute cron tick that starts each `everyMin` slot (counted from the Unix epoch, so 180 = every 3 h). 0 or "" = never. */
+export function tryDue(now, everyMin) {
+  const every = Number(everyMin);
+  if (!Number.isFinite(every) || every <= 0) return false;
+  const slots = Math.max(1, Math.round(Math.max(5, every) / 5));
+  return Math.floor(now / 300_000) % slots === 0;
+}
+
 export async function runOnce(env, { fetchImpl = fetch, now = Date.now() } = {}) {
   const c = cfg(env);
   const t = Number(c.TIMEOUT_MS);
-  const { hour, minute } = laTime(now);
+  const { hour } = laTime(now);
   const warmApi = inWindows(c.API_WARM_WINDOWS, hour), warmExec = inWindows(c.EXECUTOR_WARM_WINDOWS, hour);
-  const every = Math.max(5, Number(c.PROBE_TRY_EVERY_MIN) || 30);
-  const withTry = warmApi && Math.floor(minute / 5) % Math.round(every / 5) === 0;
+  const withTry = warmApi && tryDue(now, warmExec ? c.PROBE_TRY_EVERY_MIN : c.PROBE_TRY_OFF_WINDOW_EVERY_MIN);
   const [api, executor] = await Promise.all([
     warmApi ? ping(fetchImpl, c.API_URL, t) : Promise.resolve({ skipped: "outside API_WARM_WINDOWS" }),
     warmExec ? ping(fetchImpl, c.EXECUTOR_URL, t) : Promise.resolve({ skipped: "outside EXECUTOR_WARM_WINDOWS (wakes on demand)" }),
@@ -127,21 +138,23 @@ export async function runOnce(env, { fetchImpl = fetch, now = Date.now() } = {})
   return { ok, checked_at: new Date(now).toISOString(), la_hour: hour, api, executor, mcp };
 }
 
-async function save(env, status) {
+/** One KV write per run: the latest status plus history and last_ok in a single value. */
+export async function save(env, status) {
   if (!env.STATUS) return;
-  let history = [];
-  try { history = JSON.parse((await env.STATUS.get("history")) ?? "[]"); } catch {}
-  history.unshift({ at: status.checked_at, ok: status.ok, api_ms: status.api.ms, executor_ms: status.executor.ms, mcp_ok: status.mcp.ok ?? null });
-  await env.STATUS.put("status", JSON.stringify(status));
-  await env.STATUS.put("history", JSON.stringify(history.slice(0, HISTORY)));
-  if (status.ok) await env.STATUS.put("last_ok", status.checked_at);
+  let prev = {};
+  try { prev = JSON.parse((await env.STATUS.get("status")) ?? "{}") ?? {}; } catch {}
+  const history = [{ at: status.checked_at, ok: status.ok, api_ms: status.api.ms ?? null, executor_ms: status.executor.ms ?? null, mcp_ok: status.mcp.ok ?? null, try_skill: status.mcp.steps?.find((x) => x.name === "try_skill")?.mode ?? null }, ...(Array.isArray(prev.history) ? prev.history : [])].slice(0, HISTORY);
+  const last_ok = status.ok ? status.checked_at : prev.last_ok ?? null;
+  const last_try_skill = status.mcp.steps?.find((x) => x.name === "try_skill") ? { at: status.checked_at, ...status.mcp.steps.find((x) => x.name === "try_skill") } : prev.last_try_skill ?? null;
+  await env.STATUS.put("status", JSON.stringify({ ...status, last_ok, last_try_skill, history }));
 }
 
 const json = (v, status = 200) => new Response(JSON.stringify(v, null, 2), { status, headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "no-store" } });
 
 export default {
-  async scheduled(_event, env, ctx) {
-    ctx.waitUntil((async () => { await save(env, await runOnce(env)); })());
+  async scheduled(event, env, ctx) {
+    const now = Number(event?.scheduledTime) || Date.now();
+    ctx.waitUntil((async () => { await save(env, await runOnce(env, { now })); })());
   },
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -149,10 +162,8 @@ export default {
       const raw = env.STATUS ? await env.STATUS.get("status") : null;
       if (!raw) return json({ ok: null, message: "no run yet; the cron runs every 5 minutes" }, 503);
       const status = JSON.parse(raw);
-      const history = JSON.parse((await env.STATUS.get("history")) ?? "[]");
-      const last_ok = await env.STATUS.get("last_ok");
       const age_s = Math.round((Date.now() - Date.parse(status.checked_at)) / 1000);
-      return json({ ...status, age_s, stale: age_s > 900, last_ok, history });
+      return json({ ...status, age_s, stale: age_s > 900 });
     }
     return json({ error: "not_found", see: "/status.json" }, 404);
   },

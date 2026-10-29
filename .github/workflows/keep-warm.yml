@@ -9,7 +9,9 @@ name: keep-warm
 # covers ~06:00-24:00 Pacific (13-07 UTC, either side of DST) and the executor is pinged only on manual runs.
 on:
   schedule:
-    - cron: "*/10 0-7,13-23 * * *"
+    # Every 5 min at off-peak minutes (:03, :08, ...): GitHub delays or drops scheduled runs most at the top of the
+    # hour, and more slots mean more of them actually fire. Schedules only run from the default branch (main).
+    - cron: "3-58/5 0-7,13-23 * * *"
   workflow_dispatch:
     inputs:
       executor:
