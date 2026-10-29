@@ -126,13 +126,13 @@ if (process.env.SKIP_API !== "1") {
     return "11 tools (10 read-only + try_skill), server card matches";
   });
 
-  await check("API /v1/benchmarks and /v1/benchmarks/latest (latest VERIFIED reuse benchmark; 204 when none)", async () => {
+  await check("API /v1/benchmarks and /v1/benchmarks/latest (latest headline benchmark: verified and reuse cheaper; 204 when none)", async () => {
     const l = await req(`${API}/v1/benchmarks`);
     assert(l.status === 200 && Array.isArray(l.json?.benchmarks) && l.json?.method?.model_call, `/v1/benchmarks -> ${l.status}`);
     const r = await req(`${API}/v1/benchmarks/latest`);
-    const verified = l.json.benchmarks.filter((b) => b.verified);
-    if (r.status === 204) { assert(verified.length === 0, "latest is 204 but the list has a verified benchmark"); return l.json.benchmarks.length ? `no verified benchmark yet (${l.json.benchmarks.length} unverified)` : "no benchmark yet"; }
-    assert(r.json?.verified === true && r.json?.cid === verified[0]?.cid, "latest is not the newest verified benchmark");
+    const verified = l.json.benchmarks.filter((b) => b.headline_eligible);
+    if (r.status === 204) { assert(verified.length === 0, "latest is 204 but the list has a headline-eligible benchmark"); return l.json.benchmarks.length ? `no headline benchmark yet (${l.json.benchmarks.length} listed, none verified with reuse cheaper)` : "no benchmark yet"; }
+    assert(r.json?.headline_eligible === true && r.json?.cid === verified[0]?.cid, "latest is not the newest headline-eligible benchmark");
     assert(r.status === 200 && r.json?.record?.type === "benchmark" && typeof r.json.headline === "string" && r.json.headline, `/v1/benchmarks/latest -> ${r.status}`);
     const b = r.json.record.body;
     assert(b.agents?.a?.did && b.agents?.b?.did && b.agents.a.did !== b.agents.b.did, "two distinct agent identities");

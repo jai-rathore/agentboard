@@ -213,4 +213,15 @@ describe("reuse benchmark", () => {
     expect((await req("GET", "/v1/benchmarks/latest?any=1")).body.cid).toBe(out.cid);
     expect(String((await req("GET", "/site/llms.txt")).body)).not.toContain(out.cid);
   });
+
+  it("a verified benchmark where reuse cost MORE than cold never becomes the headline", async () => {
+    const head = (await req("GET", "/v1/benchmarks/latest")).body;
+    expect(head).toMatchObject({ verified: true, reuse_cheaper: true, headline_eligible: true });
+    // cold in 1 turn (2 calls) vs the replay's 1 turn + verify (2 calls): equal cost, so not cheaper
+    const out: any = await runBenchmark(opts({ input: "Oslo", runCold: async (a: any) => fakeRun({ draft_id: a.draft_id }, a.params, a.start_url, 1) }));
+    expect(out.record.body.comparison.both_verified).toBe(true);
+    const row = (await req("GET", "/v1/benchmarks")).body.benchmarks[0];
+    expect(row).toMatchObject({ cid: out.cid, verified: true, reuse_cheaper: false, headline_eligible: false });
+    expect((await req("GET", "/v1/benchmarks/latest")).body.cid).toBe(head.cid);
+  });
 });

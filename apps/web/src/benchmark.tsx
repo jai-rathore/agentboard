@@ -7,7 +7,7 @@ import { fmtDur, SiteBadge, SignatureCheck, StepFrames } from "./skills";
 const usd = (x?: number | null) => (typeof x === "number" ? `$${x.toFixed(4)}` : "n/a");
 const n = (x?: number | null) => (typeof x === "number" ? x.toLocaleString("en-US") : "n/a");
 
-/** Homepage line: the latest VERIFIED benchmark's headline (the API's /latest skips unverified ones), or nothing. */
+/** Homepage line: the latest headline benchmark (both verified AND reuse cheaper; the API's /latest skips others), or nothing. */
 export function BenchmarkStat({ empty }: { empty?: ReactNode } = {}) {
   const r = useData<any>("/v1/benchmarks/latest");
   const b = r.data;
@@ -24,16 +24,16 @@ export function BenchmarkStat({ empty }: { empty?: ReactNode } = {}) {
 
 export function BenchmarkPage({ id }: { id?: string }) {
   const list = useData<any>("/v1/benchmarks");
-  // The headline is the latest VERIFIED benchmark; unverified ones stay in the history below, labeled.
+  // The headline is the latest benchmark where both runs verified AND reuse was cheaper; others stay in the history, labeled.
   const all: any[] = list.data?.benchmarks ?? [];
-  const latestId = id ?? all.find((x) => x.verified)?.id;
+  const latestId = id ?? all.find((x) => x.headline_eligible)?.id;
   const one = useData<any>(latestId ? `/v1/benchmarks/${latestId}` : null, [latestId]);
   if (!id && list.loading) return <p className="muted">Loading…</p>;
   if (list.error) return <p className="err">{list.error}</p>;
   if (!latestId) return <article>
     <h1>Reuse benchmark</h1>
-    {all.length ? <><p className="muted">No verified benchmark yet (both runs must pass the model's check of the final screenshot). Unverified attempts are listed below.</p><History all={all} /></> : null}
-    <p className="muted">{all.length ? "" : "No benchmark has been published yet. "} When a verified one is, this page shows two agents doing the same task on the same input: one from scratch, one by finding and replaying a published skill, with model calls, tokens, cost and time from the signed run records.</p>
+    {all.length ? <><p className="muted">No headline result yet: a benchmark is headlined only when both runs are verified and reusing the skill cost less than doing it cold. Every attempt is listed below with its result.</p><History all={all} /></> : null}
+    <p className="muted">{all.length ? "" : "No benchmark has been published yet. "} When one qualifies, this page shows two agents doing the same task on the same input: one from scratch, one by finding and replaying a published skill, with model calls, tokens, cost and time from the signed run records.</p>
     <Method m={list.data?.method} />
   </article>;
   if (one.loading) return <p className="muted">Loading…</p>;
@@ -79,7 +79,7 @@ export function BenchmarkPage({ id }: { id?: string }) {
       </div>
       <ol className="steps">{(cold.actions ?? []).map((a: any, i: number) => <li key={i}><span className="act">{a.type}</span> {a.detail}{a.target && <span className="muted"> on "{a.target}"</span>}</li>)}</ol>
     </> : <p className="muted">Cold run record not found.</p>}
-    {!d.verified && <div className="verdict-box badv"><p>✗ Not verified: this benchmark is shown for the record only; headlines use the latest verified benchmark.</p></div>}
+    {!d.headline_eligible && <div className="verdict-box badv"><p>{!d.verified ? "✗ Not verified" : "✗ Reuse was not cheaper than cold"}: this benchmark is shown for the record only; headlines use the latest benchmark where both runs verified and reuse cost less.</p></div>}
     <History all={all} current={d.id} />
     <h2>Signed records</h2>
     <p className="small mono">benchmark {d.cid}<br />cold run {A.record}<br />replay {B.record}<br />signed by the node {d.record.author}</p>
@@ -94,13 +94,13 @@ function Method({ m }: { m?: Record<string, string> }) {
   return <><h2>Method</h2><dl className="method">{items.filter(([, v]) => v).map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl></>;
 }
 
-/** Every published benchmark, newest first, labeled verified or not (unverified ones never make the headline). */
+/** Every published benchmark, newest first, labeled (only verified + reuse-cheaper ones make the headline). */
 function History({ all, current }: { all: any[]; current?: string }) {
   if (!all?.length) return null;
   return <section aria-label="Benchmark history">
     <h2>All benchmarks</h2>
     <ul className="small">{all.map((x) => <li key={x.id}>
-      <span className={x.verified ? "good" : "badv"}>{x.verified ? "✓ verified" : "✗ unverified"}</span>{" "}
+      <span className={x.headline_eligible ? "good" : "badv"}>{!x.verified ? "✗ unverified" : x.reuse_cheaper ? "✓ verified, reuse cheaper" : "✗ verified, reuse not cheaper"}</span>{" "}
       {x.id === current ? <b>{ago(x.created_at)}</b> : <Link to={`/benchmark?id=${x.id}`}>{ago(x.created_at)}</Link>}
       {" · "}{x.record?.body?.task?.slug} <code>{JSON.stringify(x.record?.body?.input ?? {})}</code>
       {" · "}{x.record?.body?.runs?.reuse?.model_calls} vs {x.record?.body?.runs?.cold?.model_calls} model calls
