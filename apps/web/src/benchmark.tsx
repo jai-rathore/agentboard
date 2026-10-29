@@ -16,7 +16,7 @@ export function BenchmarkStat({ empty }: { empty?: ReactNode } = {}) {
   return <section className="bench-stat" aria-label="Reuse benchmark">
     <div className="bench-big">
       <div><b>{n(runs.reuse.model_calls)} vs {n(runs.cold.model_calls)}</b><span>model calls: reusing agent vs cold agent</span></div>
-      <div><b>{usd(runs.reuse.usd)} vs {usd(runs.cold.usd)}</b><span>Muse cost{c.usd_ratio ? ` (${c.usd_ratio}x cheaper)` : ""}</span></div>
+      <div><b>{usd(runs.reuse.usd)} vs {usd(runs.cold.usd)}</b><span>Muse cost{c.usd_ratio ? ` (${c.usd_ratio}x cheaper)` : runs.reuse.model_calls === 0 ? " (no model calls when reusing)" : ""}</span></div>
     </div>
     <p className="small">{b.headline} <Link to={`/benchmark?id=${b.id}`}>Method and both signed runs →</Link></p>
   </section>;
@@ -40,12 +40,14 @@ export function BenchmarkPage({ id }: { id?: string }) {
   if (one.error) return <p className="err">{one.error}</p>;
   const d = one.data, b = d.record.body, A = b.runs.cold, B = b.runs.reuse, c = b.comparison ?? {}, cold = d.cold_run;
   const rows: [string, (x: any) => string][] = [
-    ["Verified by the model's check of the final screenshot", (x) => (x.success ? "✓ yes" : "✗ no")],
+    ["Verified (final check below)", (x) => (x.success ? "✓ yes" : "✗ no")],
     ["Model calls", (x) => n(x.model_calls)],
     ["Input tokens", (x) => n(x.input_tokens)],
     ["Output tokens", (x) => n(x.output_tokens)],
     ["Cost (Muse list price)", (x) => usd(x.usd)],
-    ["Browser turns", (x) => n(x.turns)],
+    ["Browser turns (model turns)", (x) => n(x.turns)],
+    ["How it ran", (x) => (x.replay_mode === "trace" ? "recorded trace, no model" : x.replay_mode === "trace+recovery" ? "recorded trace, model recovered a step" : x.replay_mode === "model" ? "model run with the skill's steps as hints" : "model run from the task")],
+    ["Final check", (x) => (x.verifier === "deterministic" ? "deterministic (page and values)" : "model check of the final screenshot")],
     ["Executor time (browser launch → verified)", (x) => fmtDur(x.executor_ms)],
     ["Wall time (harness: request → result)", (x) => fmtDur(x.client?.wall_ms)],
     ["Muse ledger change during the run (cross-check)", (x) => (x.client?.muse_spend_delta_usd == null ? "n/a" : `${usd(x.client.muse_spend_delta_usd)}, ${n(x.client.muse_spend_delta_calls)} calls`)],
@@ -55,8 +57,8 @@ export function BenchmarkPage({ id }: { id?: string }) {
     <h1>Reuse benchmark: {b.task.name ?? b.task.slug} <SiteBadge kind={b.task.site_kind} /></h1>
     <p className="lead">{d.headline}</p>
     <div className="bench-big">
-      <div><b>{c.model_calls_ratio ? `${c.model_calls_ratio}x` : "n/a"}</b><span>fewer model calls when reusing</span></div>
-      <div><b>{c.usd_ratio ? `${c.usd_ratio}x` : "n/a"}</b><span>cheaper ({usd(c.usd_saved)} saved per run)</span></div>
+      <div><b>{c.model_calls_ratio ? `${c.model_calls_ratio}x` : B.model_calls === 0 ? `${n(A.model_calls)} → 0` : "n/a"}</b><span>{B.model_calls === 0 ? "model calls: cold → reusing (deterministic replay)" : "fewer model calls when reusing"}</span></div>
+      <div><b>{c.usd_ratio ? `${c.usd_ratio}x` : B.usd === 0 && A.usd > 0 ? `${usd(A.usd)} → $0` : "n/a"}</b><span>cheaper ({usd(c.usd_saved)} saved per run)</span></div>
       <div><b>{c.reuses_to_pay_back_recording ?? "n/a"}</b><span>reuses pay back the one-time recording ({usd(c.recording_one_time_usd)})</span></div>
     </div>
     <h2>Same task, same input, two agents</h2>

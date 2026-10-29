@@ -13,6 +13,7 @@ import { chromium } from "playwright-core";
 import { approvalFor, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL, FIND_TOOL } from "./policy.mjs";
 import { makeGif } from "./gif.mjs";
 import { scrollPlan } from "./scroll.mjs";
+import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep } from "./trace.mjs";
 import { probeInPage, scrollToTextInPage, snapPoint, INTERACTIVE, SNAP_RADIUS, addressBarUrl, isAddressBarKey } from "./click.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
@@ -125,13 +126,13 @@ async function runJob(id) {
 
 async function loadTarget(m) {
   if (m.draft_id) { const d = await api(`/v1/skills/drafts/${encodeURIComponent(m.draft_id)}`); return { skill: d.skill, start_url: m.start_url || d.source.start_url || d.skill.start_url_hint, target: { draft_id: d.id } }; }
-  if (m.skill_cid) { const s = await api(`/v1/skills/${encodeURIComponent(m.skill_cid)}`); const b = s.skill.record.body; return { skill: b.skill, start_url: m.start_url || b.source.start_url, target: { skill_cid: m.skill_cid } }; }
+  if (m.skill_cid) { const s = await api(`/v1/skills/${encodeURIComponent(m.skill_cid)}`); const b = s.skill.record.body; return { skill: b.skill, start_url: m.start_url || b.source.start_url, target: { skill_cid: m.skill_cid }, trace: m.no_trace ? null : s.trace ?? null }; }
   throw Object.assign(new Error("send draft_id or skill_cid"), { code: "target" });
 }
 
 async function replay(m, send, ask, isAborted) {
   const t0 = Date.now();
-  const { skill, start_url, target } = await loadTarget(m);
+  const { skill, start_url, target, trace } = await loadTarget(m);
   if (!/^https?:\/\//.test(start_url || "")) throw Object.assign(new Error("the skill needs an http(s) start URL"), { code: "start_url" });
   const params = Object.fromEntries(skill.params.map((p) => [p.name, String(m.params?.[p.name] ?? p.example)]));
   const usage = { calls: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, usd: 0 };
@@ -160,7 +161,42 @@ async function replay(m, send, ask, isAborted) {
       send({ type: "frame", turn, label, jpeg: jpg.toString("base64") });
       return jpg;
     };
-    for (turn = 1; turn <= MAX_TURNS; turn++) {
+    // ---- trace capture: every executed action becomes a step of this run's trace (kept only if the run verifies)
+    const recorded = [];
+    const closePrev = () => { const prev = recorded[recorded.length - 1]; if (prev && prev.changes_url === undefined) prev.changes_url = page.url() !== prev._before; };
+    const rec = (step) => { if (!step || recorded.length >= MAX_TRACE_STEPS) return; closePrev(); step._before = page.url(); recorded.push(step); };
+    const describeAt = (a, focused) => page.evaluate(describeInPage, { x: a.x ?? 0, y: a.y ?? 0, focused, sel: INTERACTIVE }).catch(() => null);
+    const selectOption = (o) => page.evaluate((o) => {
+      const el = document.activeElement?.tagName === "SELECT" ? document.activeElement : window.__abLastSelect;
+      if (!el) return null;
+      const match = [...el.options].find((x) => x.text.trim().toLowerCase() === o.trim().toLowerCase()) ?? [...el.options].find((x) => x.text.toLowerCase().includes(o.trim().toLowerCase()));
+      if (!match) return null;
+      el.value = match.value; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
+      return match.text;
+    }, o);
+
+    // ---- deterministic replay: run the stored trace with no model calls; fall back to the model from the first failing step
+    const replayInfo = { mode: "model", trace_source: trace?.source ?? null, trace_steps: 0, trace_steps_done: 0, failed_step: null, failed_reason: null, verifier: "model" };
+    if (usableTrace(trace)) {
+      replayInfo.mode = "trace"; replayInfo.trace_steps = trace.steps.length;
+      send({ type: "status", message: `Replaying the recorded trace (${trace.steps.length} steps, no model calls)` });
+      for (let i = 0; i < trace.steps.length; i++) {
+        const s = trace.steps[i];
+        if (isAborted()) throw Object.assign(new Error("viewer disconnected"), { code: "aborted" });
+        const r = await runTraceStep(page, s, params, { origin, skill, ask, send, actions, history, index: i, W, H, selectOption, inspect, execute, onHuman: (ms) => { humanMs += ms; } });
+        if (!r.ok) { replayInfo.mode = "trace+recovery"; replayInfo.failed_step = i + 1; replayInfo.failed_reason = r.reason.slice(0, 300); break; }
+        rec({ ...structuredClone(s), changes_url: undefined });
+        recorded[recorded.length - 1]._before = r.before; recorded[recorded.length - 1].changes_url = r.changed;
+        replayInfo.trace_steps_done = i + 1;
+        if (gifFrames.length < 16) gifFrames.push(await page.screenshot({ type: "png" }));
+        await shoot(`trace ${i + 1}`);
+      }
+      if (replayInfo.mode === "trace+recovery") {
+        history.push(`Recorded trace: steps 1-${replayInfo.trace_steps_done} were done without the model; step ${replayInfo.failed_step} (${describeTraceStep(trace.steps[replayInfo.failed_step - 1])}) failed: ${replayInfo.failed_reason}. Continue the task from the current screen.`);
+        send({ type: "status", message: `Trace step ${replayInfo.failed_step} failed (${replayInfo.failed_reason.slice(0, 120)}); recovering with the model` });
+      }
+    }
+    for (turn = 1; replayInfo.mode !== "trace" && turn <= MAX_TURNS; turn++) {
       if (isAborted()) throw Object.assign(new Error("viewer disconnected"), { code: "aborted" });
       const jpg = await shoot("before");
       if (gifFrames.length < 16) gifFrames.push(await page.screenshot({ type: "png" }));
@@ -191,14 +227,8 @@ async function replay(m, send, ask, isAborted) {
       lastSelect = null;
       if (fn) {
         let opt = ""; try { opt = JSON.parse(fn.arguments || "{}").option ?? ""; } catch {}
-        const done = await page.evaluate((o) => {
-          const el = document.activeElement?.tagName === "SELECT" ? document.activeElement : window.__abLastSelect;
-          if (!el) return null;
-          const match = [...el.options].find((x) => x.text.trim().toLowerCase() === o.trim().toLowerCase()) ?? [...el.options].find((x) => x.text.toLowerCase().includes(o.trim().toLowerCase()));
-          if (!match) return null;
-          el.value = match.value; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true }));
-          return match.text;
-        }, opt);
+        const done = await selectOption(opt);
+        if (done) rec(traceStep({ type: "select_option" }, { url: page.url(), params, option: done }));
         const selName = await page.evaluate(() => { const el = document.activeElement?.tagName === "SELECT" ? document.activeElement : window.__abLastSelect; if (!el) return ""; const l = el.labels?.[0] ?? el.closest("label"); return (l?.innerText ?? el.getAttribute("aria-label") ?? "").split("\n")[0].trim().slice(0, 80); }).catch(() => "");
         actions.push({ turn, type: "select_option", detail: done ? `selected "${done}"` : `no option "${opt.slice(0, 60)}"`, approval: "auto", checks: [], target: selName || undefined });
         history.push(`turn ${turn}: select_option "${opt}" -> ${done ? "ok" : "not found"}`);
@@ -206,6 +236,7 @@ async function replay(m, send, ask, isAborted) {
       for (const f of fns.filter((o) => o.name === "scroll_to_text")) {
         let q = ""; try { q = String(JSON.parse(f.arguments || "{}").text ?? ""); } catch {}
         const r = await page.evaluate(scrollToTextInPage, { text: q }).catch(() => ({ found: false }));
+        if (r.found) rec(traceStep({ type: "scroll_to_text", text: q }, { url: page.url(), params }));
         actions.push({ turn, type: "scroll_to_text", detail: `scroll_to_text "${q.slice(0, 60)}" -> ${r.found ? `found on ${r.tag}` : "not found"}`, approval: "auto", checks: [] });
         history.push(`turn ${turn}: scroll_to_text "${q.slice(0, 60)}" -> ${r.found ? "scrolled into view" : "not found on this page"}`);
       }
@@ -222,6 +253,7 @@ async function replay(m, send, ask, isAborted) {
           addressBar = false;
           const url = addressBarUrl(a.text, origin);
           if (url) {
+            rec(traceStep({ type: "navigate", url }, { url: page.url(), params }));
             actions.push({ turn, type: "navigate", detail: url.slice(0, 300), approval: "auto", checks: [] });
             history.push(`turn ${turn}: navigate ${url}`);
             await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch((e) => history.push(`turn ${turn}: navigation failed: ${String(e.message).slice(0, 100)}`));
@@ -244,6 +276,7 @@ async function replay(m, send, ask, isAborted) {
           if (!ok) throw Object.assign(new Error(`Declined by a human: ${p.reason}`), { code: "declined" });
         } else actions.push({ turn, type: a.type, detail, approval: "auto", checks: checks.slice(0, 5), target });
         history.push(`turn ${turn}: ${describeAction(a)}${el ? ` on ${el.tag} "${(nameOf(el) || el.value || "").slice(0, 40)}"` : ""}`);
+        if (a.type !== "wait" && a.type !== "move" && a.type !== "screenshot") rec(traceStep(a, { url: page.url(), params, loc: a.type === "click" || a.type === "double_click" ? await describeAt(a, false) : a.type === "type" ? await describeAt(a, true) : null }));
         await execute(page, a);
         if (el?.tag === "select") lastSelect = el;
         await page.waitForTimeout(250);
@@ -254,19 +287,31 @@ async function replay(m, send, ask, isAborted) {
     const finalJpg = await shoot("final");
     gifFrames.push(await page.screenshot({ type: "png" }));
     const check = fill(skill.success_check, params);
-    const v = await api("/internal/muse/responses", {
+    await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+    closePrev();
+    const texts = await page.evaluate(pageTextInPage).catch(() => ({ viewport: "", page: "", title: "" }));
+    let det = null;
+    if (replayInfo.mode === "trace") {
+      det = checkFinal(trace.final, texts, params, page.url());
+      if (det.ok) replayInfo.verifier = "deterministic";
+      else send({ type: "status", message: `Deterministic check inconclusive (${det.reason}); asking the verifier` });
+    }
+    const v = det?.ok ? { model: "deterministic", usage: null, response: { output: [{ type: "message", content: [{ text: JSON.stringify({ success: true, evidence: `Deterministic checks of the recorded trace passed: ${det.checks.join("; ")}. Final URL ${page.url().slice(0, 200)}.` }) }] }] } } : await api("/internal/muse/responses", {
       reasoning: { effort: "minimal" }, max_output_tokens: 600,
       text: { format: { type: "json_schema", name: "verdict", strict: true, schema: VERIFY_SCHEMA } },
       input: [{ role: "user", content: [{ type: "input_text", text: `Success check: ${check}\nExpected parameters: ${JSON.stringify(params)}\nDoes this final browser screenshot satisfy the success check? Only judge what is visible.` }, { type: "input_image", image_url: `data:image/jpeg;base64,${finalJpg.toString("base64")}` }] }],
     }, { "x-muse-kind": "verify", ...jobHeader });
-    addUsage(v.usage);
+    if (v.usage) addUsage(v.usage);
     let verdict = { success: false, evidence: "verifier returned no verdict" };
     try { verdict = JSON.parse((v.response.output ?? []).filter((o) => o.type === "message").flatMap((o) => o.content ?? []).map((c) => c.text ?? "").join("")); } catch {}
-    const verdictFull = { success: Boolean(verdict.success), evidence: String(verdict.evidence ?? "").slice(0, 1500), model: v.model, capability: "image understanding + structured output" };
+    const verdictFull = { success: Boolean(verdict.success), evidence: String(verdict.evidence ?? "").slice(0, 1500), model: v.model, capability: det?.ok ? "deterministic: trace post-conditions and final-page checks (no model call)" : "image understanding + structured output" };
+    // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
+    const runTrace = verdictFull.success && recorded.length ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps: recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })), final: finalChecks(texts, params, page.url()) } : null;
     send({ type: "verdict", ...verdictFull, final_message: finalMessage });
     const gif = makeGif(gifFrames);
     const run = {
-      ...target, ...(m.job_id ? { job_id: m.job_id } : {}), start_url, params, success: verdictFull.success, step_changes: stepChanges, human_ms: humanMs, verdict: verdictFull, turns: Math.min(turn, MAX_TURNS), actions: actions.slice(0, 200), usage, model: v.model,
+      ...target, ...(m.job_id ? { job_id: m.job_id } : {}), start_url, params, success: verdictFull.success, step_changes: stepChanges, human_ms: humanMs, verdict: verdictFull, turns: replayInfo.mode === "trace" ? 0 : Math.min(turn, MAX_TURNS), actions: actions.slice(0, 200), usage, model: replayInfo.mode === "trace" ? "none (recorded trace)" : v.model,
+      ...(runTrace ? { trace: runTrace } : {}), ...(target.skill_cid ? { replay: replayInfo } : {}),
       final_jpeg_b64: finalJpg.toString("base64"), gif_b64: gif.toString("base64"),
       executor: { name: "agentboard-executor", chromium: `headless-shell ${browser.version()}`, viewport: `${W}x${H}` }, duration_ms: Date.now() - t0,
     };
@@ -276,7 +321,7 @@ async function replay(m, send, ask, isAborted) {
     else if (verdictFull.success && target.skill_cid) send({ type: "healing", message: published.drift?.stale_steps?.length || published.drift?.reported?.length ? "Verified, but the site drifted and the skill could not be healed automatically" : "Verified: the skill's steps still match the site" });
     verdictFull.success ? stats.succeeded++ : stats.failed++;
     stats.last = { at: new Date().toISOString(), success: verdictFull.success, turns: run.turns, usd: Math.round(usage.usd * 1e6) / 1e6 };
-    return { ...published, verdict: verdictFull, turns: run.turns, usage, duration_ms: run.duration_ms };
+    return { ...published, verdict: verdictFull, turns: run.turns, usage, duration_ms: run.duration_ms, replay: run.replay ?? null };
   } catch (e) {
     stats.failed++;
     throw e;

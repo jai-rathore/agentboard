@@ -39,8 +39,8 @@ export const METHOD = {
   same_input: "Both agents get the same skill input (params) and the same start URL, on the same executor (headless Chromium, 960x600), the same model (Muse Spark, Standard mode, through the node's guarded, metered Muse path) and the same 15-turn limit.",
   identities: "Two fresh Ed25519 did:key identities, generated for this benchmark only, each using its own client. Agent A signs the request for the cold run; Agent B signs the request for the replay. The node operator funds both runs (new identities cannot spend run credits during probation).",
   agent_a: "Cold: no skill lookup and no recorded steps. Agent A gets the task statement only (the skill's name, summary and success check, filled with the input) and drives the browser itself with the computer tool.",
-  agent_b: "Reuse: Agent B calls find_skill on the public MCP endpoint (keyword search over published skills; no model call), takes the matching skill and replays it on the same input with its recorded steps.",
-  model_call: "A model call is one Muse Responses API request made for the run: each computer-use turn (screenshot in, actions out), the final verification of the screenshot against the success check, and on a replay any self-heal call. find_skill, the local embedding model and the executor itself make no paid model calls.",
+  agent_b: "Reuse: Agent B calls find_skill on the public MCP endpoint (keyword search over published skills; no model call), takes the matching skill and replays it on the same input. When the skill has a recorded action trace (from an earlier verified run), the executor replays that trace directly in the browser with no model calls and checks the final page deterministically; if a step no longer matches the site, the model takes over from that step (and the recovered trace becomes the next version). Skills without a trace are replayed by the model with the recorded steps as hints.",
+  model_call: "A model call is one Muse Responses API request made for the run: each computer-use turn (screenshot in, actions out), the final verification of the screenshot against the success check, and on a replay any self-heal call. A deterministic trace replay makes none; a deterministic final check makes none (otherwise the open-weight verifier is called once). find_skill, the local embedding model and the executor itself make no paid model calls.",
   cost: "USD at Muse Spark list price (Standard: $1.25 per 1M input tokens, $0.15 cached, $4.25 per 1M output), the same accounting as the node's lifetime Muse spend ledger (GET /v1/muse/spend). The harness also records the ledger's change around each run as a cross-check.",
   time: "executor_ms is measured by the executor from browser launch to the end of verification. wall_ms is measured by the harness from the start request to the result, so it also includes queueing and executor wake-up.",
   not_counted: "The one-time cost of recording the skill (the recorder's Muse call and the publishing run) is not part of Agent B's run; it is shown separately with the number of reuses that pay it back.",
@@ -178,6 +178,8 @@ function metricsOf(body: any, extra?: { calls: number; input_tokens: number; cac
     output_tokens: num(u.output_tokens) + (extra?.output_tokens ?? 0), usd: round6(num(u.usd)),
     approvals: (body.actions ?? []).filter((a: any) => a.approval === "human").length,
     verdict: body.verdict?.evidence ?? null,
+    // skill_run only: how the replay ran (trace = deterministic, no model calls; trace+recovery; model = hinted model run)
+    ...(body.replay ? { replay_mode: String(body.replay.mode), verifier: String(body.replay.verifier ?? "model") } : {}),
   };
 }
 
@@ -199,7 +201,7 @@ export async function finalizeBenchmark(ctx: AppContext, id: string, client: { c
   let heal: { calls: number; input_tokens: number; cached_tokens: number; output_tokens: number; usd: number } | undefined;
   if (reuse.body.drift?.healed) {
     const h = (await ctx.db.query<any>(`SELECT body_text FROM records WHERE type = 'skill' AND body_text LIKE $1 LIMIT 1`, [`%"run":"${reuseCid}"%`])).rows[0];
-    const hu = h ? JSON.parse(h.body_text).healed_from?.usage : null;
+    const hf = h ? JSON.parse(h.body_text).healed_from : null, hu = hf?.kind === "trace" ? null : hf?.usage;
     if (hu) heal = { calls: 1, input_tokens: num(hu.input_tokens), cached_tokens: num(hu.cached_tokens), output_tokens: num(hu.output_tokens), usd: num(hu.usd) };
   }
   const reusedSkillCid = reuse.body.skill as string;
@@ -271,6 +273,10 @@ export function headlineOf(b: any): string {
   if (!A || !B) return "";
   const usd = (x: number) => `$${Number(x).toFixed(4)}`;
   const calls = (k: number) => `${k} model call${k === 1 ? "" : "s"}`;
+  if (B.model_calls === 0 && A.model_calls > 0) {
+    const verified0 = c.both_verified ? "Both runs verified." : `Cold run ${A.success ? "verified" : "not verified"}; replay ${B.success ? "verified" : "not verified"}.`;
+    return `Same task and input, two agents: reusing the ${b.task?.slug} skill replayed its recorded trace with no model calls (${usd(B.usd)}${B.verifier === "deterministic" ? ", checked deterministically" : ""}); doing it cold took ${calls(A.model_calls)} (${usd(A.usd)}). ${verified0}`;
+  }
   const verified = c.both_verified ? "Both runs verified." : `Cold run ${A.success ? "verified" : "not verified"}; replay ${B.success ? "verified" : "not verified"}.`;
   return `Same task and input, two agents: reusing the ${b.task?.slug} skill took ${calls(B.model_calls)} (${usd(B.usd)}); doing it cold took ${calls(A.model_calls)} (${usd(A.usd)})${c.usd_ratio ? `, ${c.usd_ratio}x the cost` : ""}. ${verified}`;
 }

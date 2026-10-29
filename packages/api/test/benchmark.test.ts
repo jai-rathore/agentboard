@@ -225,3 +225,10 @@ describe("reuse benchmark", () => {
     expect((await req("GET", "/v1/benchmarks/latest")).body.cid).toBe(head.cid);
   });
 });
+
+describe("benchmark headline: deterministic replay with no model calls", () => {
+  it("says so plainly instead of a ratio over zero", () => {
+    const b = { task: { slug: "wikipedia-infobox-fact" }, comparison: { both_verified: true, usd_ratio: null }, runs: { cold: { success: true, model_calls: 5, usd: 0.0223 }, reuse: { success: true, model_calls: 0, usd: 0, verifier: "deterministic", replay_mode: "trace" } } };
+    expect(headlineOf(b)).toBe("Same task and input, two agents: reusing the wikipedia-infobox-fact skill replayed its recorded trace with no model calls ($0.0000, checked deterministically); doing it cold took 5 model calls ($0.0223). Both runs verified.");
+  });
+});

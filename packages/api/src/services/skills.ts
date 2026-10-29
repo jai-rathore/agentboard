@@ -171,6 +171,25 @@ export async function getDraft(ctx: AppContext, id: string) {
 
 // ---------------------------------------------------------------- runs -> signed records
 
+/** A verified run's concrete action trace (see services/executor/src/trace.mjs): what deterministic replay executes. */
+const S = (n: number) => z.string().max(n);
+const LocatorZ = z.object({ tag: S(40), role: S(40), name: S(220), text: S(220), css: S(320), attrs: z.record(z.string().max(40), S(140)).default({}) });
+export const TraceStepZ = z.object({
+  action: z.enum(["click", "double_click", "type", "keypress", "scroll", "scroll_to_text", "select_option", "navigate"]),
+  url: S(520), changes_url: z.boolean().default(false),
+  locator: LocatorZ.optional(), text: S(520).optional(), keys: z.array(S(40)).max(6).optional(),
+  scroll_x: z.number().int().optional(), scroll_y: z.number().int().optional(), option: S(520).optional(), to: S(520).optional(),
+});
+export const TraceZ = z.object({
+  v: z.literal(1), start_url: S(520), steps: z.array(TraceStepZ).min(1).max(60),
+  final: z.object({ url: S(520), viewport: z.array(S(60)).max(20), page: z.array(S(60)).max(20), title: z.array(S(60)).max(20) }),
+});
+export type Trace = z.infer<typeof TraceZ>;
+const ReplayZ = z.object({
+  mode: z.enum(["model", "trace", "trace+recovery"]), trace_source: S(120).nullable(), trace_steps: z.number().int().min(0).max(60), trace_steps_done: z.number().int().min(0).max(60),
+  failed_step: z.number().int().nullable(), failed_reason: S(300).nullable(), verifier: z.enum(["model", "deterministic"]),
+});
+
 export const RunZ = z.object({
   draft_id: z.string().uuid().optional(),
   skill_cid: z.string().max(120).optional(),
@@ -189,6 +208,8 @@ export const RunZ = z.object({
   gif_b64: z.string().max(12_000_000).optional(),
   executor: z.object({ name: z.string().max(80), chromium: z.string().max(80), viewport: z.string().max(20) }),
   duration_ms: z.number().int(),
+  trace: TraceZ.optional(),
+  replay: ReplayZ.optional(),
 });
 export type RunInput = z.infer<typeof RunZ>;
 
@@ -313,7 +334,10 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
   const requestedBy = job ? (job.via === "agent" ? { via: "agent", agent: job.requested_by, job: job.id } : job.via === "benchmark" ? { via: "benchmark", agent: job.requested_by, job: job.id, benchmark: await benchmarkForJob(ctx, job.id) } : job.via === "public" ? { via: "public", job: job.id } : { via: "operator", job: job.id }) : { via: "web" };
 
   // ---- drift: verified replays of a published skill whose steps no longer match the site
-  const stale = current && run.success ? [...new Set([...staleSteps(current.body.skill, run.actions), ...run.step_changes.map((c) => c.step)])].sort((a, b) => a - b) : [];
+  // Deterministic replays never call the model to heal: a trace that ran clean needs nothing, and a trace that failed
+  // and was recovered by the model is healed below by publishing the recovered run's trace (no extra model call).
+  const traceMode = run.replay?.mode === "trace" || run.replay?.mode === "trace+recovery";
+  const stale = current && run.success && !traceMode ? [...new Set([...staleSteps(current.body.skill, run.actions), ...run.step_changes.map((c) => c.step)])].sort((a, b) => a - b) : [];
   let heal: Awaited<ReturnType<typeof healSkill>> | null = null;
   let healError: string | null = null;
   if (stale.length && current?.latest) {
@@ -328,14 +352,29 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
     evidence: { final_screenshot: final.sha256, gif: gif?.sha256 ?? null },
     usage: { ...run.usage, usd: round6(run.usage.usd + (heal?.usage.usd ?? 0)) },
     time,
-    ...(current ? { drift: { stale_steps: stale, reported: run.step_changes, healed: Boolean(heal && !heal.unchanged), ...(healError ? { error: healError } : {}) } } : {}),
+    ...(current ? { drift: { stale_steps: stale, reported: run.step_changes, healed: Boolean(heal && !heal.unchanged) || Boolean(current?.latest && run.success && run.trace && run.replay?.mode === "trace+recovery"), ...(healError ? { error: healError } : {}) } } : {}),
     executor: run.executor,
     requested_by: requestedBy,
     trigger: requestedBy.via,
+    ...(run.replay ? { replay: run.replay } : {}),
+    ...(run.success && run.trace ? { trace: run.trace } : {}),
   };
   const runRec = sysRecord(ctx, "skill_run", { skill: published?.cid ?? skillCid!, ...runSummary });
   let healed: SignedRecord | null = null;
-  if (heal && !heal.unchanged && current) {
+  const traceHeal = Boolean(current?.latest && run.success && run.trace && run.replay?.mode === "trace+recovery");
+  if (traceHeal && current) {
+    // Trace self-heal: the stored trace failed at a step, the model recovered and the run verified. Publish the next
+    // version with the same steps and the recovered run's trace, so the next replay is deterministic again.
+    const b = current.body, failed = run.replay!.failed_step ?? 0;
+    healed = sysRecord(ctx, "skill", {
+      slug: b.slug, version: b.version + 1, prev: skillCid,
+      skill: b.skill, source: b.source, recorder: b.recorder, trace: run.trace,
+      healed_from: { kind: "trace", skill: skillCid, run: runRec.cid, stale_steps: failed ? [failed] : [], reported: [], failed_reason: run.replay!.failed_reason,
+        changes: [{ step: failed, field: "trace", before: `trace step ${failed} of ${run.replay!.trace_steps}`, after: `re-recorded from the verified recovery run (${run.trace!.steps.length} steps)`, reason: String(run.replay!.failed_reason ?? "").slice(0, 400) }],
+        model: "none (trace re-recorded from the verified run)", capability: "self-healing: the recovered run's action trace replaces the failed one", reasoning_summary: null, usage: { calls: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, reasoning_tokens: 0, usd: 0, ms: 0 } },
+      draft: b.draft ?? null,
+    });
+  } else if (heal && !heal.unchanged && current) {
     const b = current.body;
     healed = sysRecord(ctx, "skill", {
       slug: b.slug, version: b.version + 1, prev: skillCid,
@@ -368,7 +407,7 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
     status: published ? "published" : healed ? "healed" : "run_recorded", skill_cid: published?.cid ?? skillCid, skill_seq: out.skillSeq, run_cid: runRec.cid, run_seq: out.runSeq,
     evidence: runSummary.evidence, time,
     ...(current ? { drift: runSummary.drift } : {}),
-    ...(healed ? { healed: { cid: healed.cid, seq: out.healedSeq, version: (healed.body as any).version, changes: heal!.changes } } : {}),
+    ...(healed ? { healed: { cid: healed.cid, seq: out.healedSeq, version: (healed.body as any).version, changes: (healed.body as any).healed_from.changes, kind: (healed.body as any).healed_from.kind ?? "model" } } : {}),
   };
 }
 
@@ -471,8 +510,12 @@ export async function getSkill(ctx: AppContext, cidOrSlug: string) {
   const verifiedRuns = runs.filter((r: any) => r.record.body.success);
   const savedTotal = recording == null ? null : verifiedRuns.reduce((t: number, r: any) => t + (r.record.body.time?.saved_ms ?? Math.max(0, recording - APPROVAL_HUMAN_MS * r.record.body.actions.filter((a: any) => a.approval === "human").length)), 0);
   const fastest = verifiedRuns.length ? Math.min(...verifiedRuns.map((r: any) => Number(r.record.body.time?.run_ms ?? r.record.body.duration_ms))) : null;
+  // Deterministic replay: the newest verified run of this version that carries a trace, else a trace-healed version's own.
+  const traceRun = verifiedRuns.find((r: any) => r.record.body.trace);
+  const trace = traceRun ? { ...traceRun.record.body.trace, source: `run:${traceRun.record.cid}` } : body.trace ? { ...body.trace, source: `skill:${cid}` } : null;
   return {
     skill,
+    trace,
     slug: s.slug, version: s.version, latest_version: versions[0]?.version ?? s.version, latest_cid: versions[0]?.cid ?? cid,
     versions, runs,
     prev_skill: prev ? { cid: prev.cid, version: JSON.parse(prev.body_text).version, skill: JSON.parse(prev.body_text).skill } : null,
