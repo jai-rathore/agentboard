@@ -64,6 +64,7 @@ describe("trace: hygiene and value helpers", () => {
   });
   it("skips a bold label that repeats the asked field", () => {
     expect(answerCandidates("**Population (2022 census)**\n- Capital and autonomous city: **3,121,707**", { search_query: "Buenos Aires", target_field: "Population" })[0]).toBe("3,121,707");
+    expect(answerCandidates("- **Special capital region:** 11,010,514\n- **Metro**: 34,540,000", { search_query: "Jakarta", target_field: "Population" })[0]).toBe("11,010,514");
   });
   it("forgets a side sub-row (Metro) unless the field asks for it", () => {
     const r = { kind: "row", label: "Population (2024)", offset: 4, sub: "Metro", candidate: "6,125,583", sample: "6,125,583" };
