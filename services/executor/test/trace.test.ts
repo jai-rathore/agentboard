@@ -25,8 +25,11 @@ describe("trace: parameter templating", () => {
     expect(traceStep({ type: "keypress", keys: ["Enter"] }, { url: "u", params })).toMatchObject({ action: "keypress", keys: ["Enter"] });
     expect(traceStep({ type: "scroll", scroll_y: 4.6 }, { url: "u", params })).toMatchObject({ action: "scroll", scroll_x: 0, scroll_y: 5 });
     expect(traceStep({ type: "navigate", url: "https://x.test/wiki/Reykjav%C3%ADk" }, { url: "u", params })).toMatchObject({ to: "https://x.test/wiki/{{search_query}}" });
-    expect(usableTrace({ v: 1, steps: [{}] })).toBe(true);
-    expect(usableTrace({ v: 1, steps: [] })).toBe(false);
+    const final = { url: "u", viewport: [], page: [], title: [] };
+    expect(usableTrace({ v: 1, steps: [{}], final })).toBe(true);
+    expect(usableTrace({ v: 1, steps: [], final })).toBe(false);
+    // the answer is on the start page (e.g. HN's top story): no steps, but a recipe to read it
+    expect(usableTrace({ v: 1, steps: [], final, extract: { kind: "css", css: "a" } })).toBe(true);
     expect(usableTrace(null)).toBe(false);
   });
 });

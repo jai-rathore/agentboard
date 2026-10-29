@@ -157,7 +157,8 @@ const CSS_escape = (s) => String(s).replace(/["\\]/g, "\\$&");
 export const describeTraceStep = (s) => `${s.action}${s.locator ? ` ${s.locator.role || s.locator.tag} "${locLabel(s.locator, {})}"` : ""}${s.text ? ` "${s.text.slice(0, 60)}"` : ""}${s.keys ? ` ${s.keys.join("+")}` : ""}${s.to ? ` ${s.to.slice(0, 80)}` : ""}`;
 
 /** A trace is usable when it is the current version and has at least one step. */
-export const usableTrace = (t) => Boolean(t && t.v === TRACE_VERSION && Array.isArray(t.steps) && t.steps.length > 0 && t.steps.length <= MAX_TRACE_STEPS);
+// a trace with no steps is usable when the answer is on the start page and the trace knows how to read it
+export const usableTrace = (t) => Boolean(t && t.v === TRACE_VERSION && Array.isArray(t.steps) && t.steps.length <= MAX_TRACE_STEPS && t.final && (t.steps.length > 0 || t.extract));
 
 /**
  * One deterministic trace step: locate the element (role+name, text, attributes, CSS), apply the same approval policy

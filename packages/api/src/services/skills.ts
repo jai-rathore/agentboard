@@ -184,7 +184,7 @@ export const TraceStepZ = z.object({
   scroll_x: z.number().int().optional(), scroll_y: z.number().int().optional(), option: S(520).optional(), to: S(520).optional(),
 });
 export const TraceZ = z.object({
-  v: z.literal(1), start_url: S(520), steps: z.array(TraceStepZ).min(1).max(60),
+  v: z.literal(1), start_url: S(520), steps: z.array(TraceStepZ).max(60), // 0 steps: the answer is on the start page (with an extraction recipe)
   final: z.object({ url: S(520), viewport: z.array(S(60)).max(20), page: z.array(S(60)).max(20), title: z.array(S(60)).max(20) }),
   extract: ExtractZ.optional(),
   /** set when a verified run found no value to extract (the trace then verifies without one) */
