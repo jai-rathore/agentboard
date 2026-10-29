@@ -381,6 +381,7 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
       skill: heal.skill,
       source: b.source,
       recorder: b.recorder,
+      ...(run.success && run.trace ? { trace: run.trace } : {}),
       healed_from: { skill: skillCid, run: runRec.cid, stale_steps: stale, reported: run.step_changes, changes: heal.changes, model: heal.model, capability: heal.capability, reasoning_summary: heal.reasoning_summary, usage: heal.usage },
       draft: b.draft ?? null,
     });
@@ -512,7 +513,9 @@ export async function getSkill(ctx: AppContext, cidOrSlug: string) {
   const fastest = verifiedRuns.length ? Math.min(...verifiedRuns.map((r: any) => Number(r.record.body.time?.run_ms ?? r.record.body.duration_ms))) : null;
   // Deterministic replay: the newest verified run of this version that carries a trace, else a trace-healed version's own.
   const traceRun = verifiedRuns.find((r: any) => r.record.body.trace);
-  const trace = traceRun ? { ...traceRun.record.body.trace, source: `run:${traceRun.record.cid}` } : body.trace ? { ...body.trace, source: `skill:${cid}` } : null;
+  // (a version published by a heal also inherits the trace of the verified run that healed it)
+  const healTrace = healRun ? JSON.parse(healRun.body_text).trace : null;
+  const trace = traceRun ? { ...traceRun.record.body.trace, source: `run:${traceRun.record.cid}` } : body.trace ? { ...body.trace, source: `skill:${cid}` } : healTrace?.v ? { ...healTrace, source: `run:${healRun.cid}` } : null;
   return {
     skill,
     trace,

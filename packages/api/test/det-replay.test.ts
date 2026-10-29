@@ -15,7 +15,9 @@ const skillJson = {
 const calls: any[] = [];
 const fakeMeta: typeof fetch = async (url, init) => {
   calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
-  return new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(skillJson) }] }], usage: { input_tokens: 2000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 500, output_tokens_details: { reasoning_tokens: 0 } } }), { status: 200 });
+  const heal = (init?.headers as any)?.["x-muse-kind"] === "heal";
+  const healed = { success_check: skillJson.success_check, steps: [skillJson.steps[0], { ...skillJson.steps[1], target: "result card" }], changes: [{ step: 2, field: "target", before: "result link", after: "result card", reason: "results are cards now" }] };
+  return new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(heal ? healed : skillJson) }] }], usage: { input_tokens: 2000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 500, output_tokens_details: { reasoning_tokens: 0 } } }), { status: 200 });
 };
 let node: TestNode;
 const op = { "x-skills-token": TOKEN }, ex = { "x-skills-secret": SECRET };
@@ -99,6 +101,17 @@ describe("deterministic replay: traces on signed runs", () => {
     expect(s.trace).toMatchObject({ source: `skill:${r.body.healed.cid}` });
     expect(s.trace.steps[3].locator.name).toBe("{{q}} (city)");
     expect(verifyRecord(s.skill.record).ok).toBe(true);
+  });
+
+  it("a version published by a model heal carries the healing run's trace", async () => {
+    // stale step target -> the model rewrites the steps (LLM heal) on the latest version; the new version keeps the trace
+    const latest = (await node.req("GET", `/v1/skills/${v1}`)).body.latest_cid;
+    const r = await node.req("POST", "/internal/skills/runs", run({ skill_cid: latest }, true, { trace: trace(4), replay: replay("model", { trace_source: null, trace_steps: 0, trace_steps_done: 0, verifier: "model" }), step_changes: [{ turn: 3, step: 2, observed: "the result link is now a card" }] }), ex);
+    if (r.body.status !== "healed") throw new Error(JSON.stringify(r.body).slice(0, 600));
+    expect(r.body.healed.kind).toBe("model");
+    const s = (await node.req("GET", `/v1/skills/${r.body.healed.cid}`)).body;
+    expect(s.skill.record.body.trace.steps).toHaveLength(4);
+    expect(s.trace.source).toBe(`skill:${r.body.healed.cid}`);
   });
 
   it("an old-style run (no trace, no replay info) still works", async () => {
