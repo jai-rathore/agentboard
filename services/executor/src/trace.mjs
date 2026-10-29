@@ -365,7 +365,9 @@ export function applyRecipeInPage({ recipe, scroll }) {
 export function answerCandidates(answer, params = {}) {
   const a = String(answer ?? "");
   const out = [], years = [];
-  for (const m of a.matchAll(/\*\*([^*]{1,120})\*\*/g)) out.push(m[1].trim());
+  const inputsLow = Object.values(params).map((v) => String(v).toLowerCase()).filter((v) => v.length >= 3);
+  // a bold label that repeats an input ("**Population (2022 census)**") is the field's name, not its value
+  for (const m of a.matchAll(/\*\*([^*]{1,120})\*\*/g)) if (!inputsLow.some((v) => m[1].toLowerCase().includes(v))) out.push(m[1].trim());
   for (const m of a.matchAll(/["“]([^"”\n]{3,160})["”]/g)) out.push(m[1].trim()); // a quoted title ("…") is usually the answer itself
   for (const m of a.matchAll(new RegExp(VALUE_RE.version, "g"))) if (!/[A-Za-z]$/.test(a.slice(0, m.index))) out.push(m[0]); // not "Qwen3.5"
   // numbers in the order the answer mentions them (the first is usually the one asked for); bare years last

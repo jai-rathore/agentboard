@@ -238,6 +238,10 @@ describe("benchmark values must match for a headline", () => {
     expect(valuesMatch({ answer_text: "Madrid's population is 3,477,497 (2024)." }, { value: "3,477,497" })).toBe(true);
     expect(valuesMatch({ answer_text: "Madrid's metro population is 6,125,583." }, { value: "3,477,497" })).toBe(false);
     expect(valuesMatch({}, { value: "3,477,497" })).toBe(null);
+    // the cold run's page reading was a label; its answer bolded the number
+    const cold = { value: "Population (2022 census)[5]", answer_text: "**Population (2022 census)**\n- Capital and autonomous city: **3,121,707**\n- Metro: 16,366,641" };
+    expect(valuesMatch(cold, { value: "3,121,707" })).toBe(true);
+    expect(valuesMatch(cold, { value: "16,366,641" })).toBe(false);
   });
   it("a verified, cheaper benchmark whose values differ is not headline-eligible", () => {
     const base = { both_verified: true };

@@ -62,6 +62,9 @@ describe("trace: hygiene and value helpers", () => {
     expect(c[0]).toBe("Qwen3.5 runs on a laptop");
     expect(c).not.toContain("3.5");
   });
+  it("skips a bold label that repeats the asked field", () => {
+    expect(answerCandidates("**Population (2022 census)**\n- Capital and autonomous city: **3,121,707**", { search_query: "Buenos Aires", target_field: "Population" })[0]).toBe("3,121,707");
+  });
   it("forgets a side sub-row (Metro) unless the field asks for it", () => {
     const r = { kind: "row", label: "Population (2024)", offset: 4, sub: "Metro", candidate: "6,125,583", sample: "6,125,583" };
     expect(storeRecipe(r, { target_field: "Population" })).toMatchObject({ label: "{{target_field}}", offset: 0 });

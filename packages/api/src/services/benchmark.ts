@@ -196,12 +196,22 @@ export function normValue(v: unknown): string | null {
   if (n && /\d/.test(t) && n[0].replace(/\D/g, "").length >= 1 && /^[^A-Za-z]*\d/.test(t)) return n[0].replace(/[,\s]/g, "").replace("−", "-");
   return t.toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
 }
+/** The number an answer gives first: a bold one ("**3,121,707**"), else the first plain number that is not a year. */
+export function primaryNumber(text: string): string | null {
+  for (const m of String(text).matchAll(/\*\*([^*]{1,60})\*\*/g)) if (/^[\s$€£~≈]*[-−]?\d[\d,]*(?:\.\d+)?\s*[a-z%²]{0,4}$/i.test(m[1].trim())) return normValue(m[1]);
+  for (const m of String(text).matchAll(/\d[\d,]*(?:\.\d+)?/g)) if (!/^(1[5-9]|20)\d\d$/.test(m[0]) && m[0].replace(/\D/g, "").length >= 2) return normValue(m[0]);
+  return null;
+}
 /**
  * Did both agents get the same answer? Compares the two returned values; when the cold run has no extracted value,
  * checks whether the replay's value appears in the cold agent's final answer. null when it cannot be told.
  */
 export function valuesMatch(A: { value?: string; answer_text?: string }, B: { value?: string; answer_text?: string }): boolean | null {
-  const a = normValue(A.value), b = normValue(B.value);
+  const numeric = (x: string | null) => x != null && /^-?[\d.]+$/.test(x);
+  let a = normValue(A.value), b = normValue(B.value);
+  // the replay read a number but the cold run's page reading is text (a label): use the number the cold agent answered
+  if (numeric(b) && !numeric(a) && A.answer_text) a = primaryNumber(A.answer_text) ?? a;
+  if (numeric(a) && !numeric(b) && B.answer_text) b = primaryNumber(B.answer_text) ?? b;
   if (a != null && b != null) return a === b;
   const other = b ?? a, text = b != null ? A.answer_text : B.answer_text;
   if (other == null || !text) return null;
