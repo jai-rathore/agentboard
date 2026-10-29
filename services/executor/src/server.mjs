@@ -325,7 +325,7 @@ async function replay(m, send, ask, isAborted) {
     const v = det?.ok ? { model: "deterministic", usage: null, response: { output: [{ type: "message", content: [{ text: JSON.stringify({ success: true, evidence: `Deterministic checks of the recorded trace passed: ${det.checks.join("; ")}. Final URL ${page.url().slice(0, 200)}.` }) }] }] } } : await api("/internal/muse/responses", {
       reasoning: { effort: "minimal" }, max_output_tokens: 600,
       text: { format: { type: "json_schema", name: "verdict", strict: true, schema: VERIFY_SCHEMA } },
-      input: [{ role: "user", content: [{ type: "input_text", text: `Success check: ${check}\nExpected parameters: ${JSON.stringify(params)}\nDoes this final browser screenshot satisfy the success check? Only judge what is visible. In evidence, quote the exact value the task asks for as it is shown.` }, { type: "input_image", image_url: `data:image/jpeg;base64,${finalJpg.toString("base64")}` }] }],
+      input: [{ role: "user", content: [{ type: "input_text", text: `Success check: ${check}\nExpected parameters: ${JSON.stringify(params)}\nDoes this final browser screenshot satisfy the success check? Only judge what is visible. In evidence, quote the exact value the task asks for as it is shown; in value, give only that value (no label).` }, { type: "input_image", image_url: `data:image/jpeg;base64,${finalJpg.toString("base64")}` }] }],
     }, { "x-muse-kind": "verify", ...jobHeader });
     if (v.usage) addUsage(v.usage);
     let verdict = { success: false, evidence: "verifier returned no verdict" };
@@ -333,7 +333,10 @@ async function replay(m, send, ask, isAborted) {
     const verdictFull = { success: Boolean(verdict.success), evidence: String(verdict.evidence ?? "").slice(0, 1500), model: v.model, capability: det?.ok ? "deterministic: trace post-conditions and final-page checks (no model call)" : "image understanding + structured output" };
     // No recipe yet (a model run, or an old trace): find the answer the model or verifier quoted on the page and keep how to read it.
     if (verdictFull.success && value == null) {
-      const derived = await page.evaluate(deriveRecipeInPage, { candidates: answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params), labels: Object.values(params).filter((x) => String(x).length >= 2) }).catch(() => null);
+      // the verifier's own value first (a version or number inside it before the whole text), then what the answers quote
+      const vv = String(verdict.value ?? "").trim().slice(0, 200);
+      const vvParts = vv ? [...answerCandidates(vv, params).filter((x) => /\d/.test(x) && x !== vv), vv] : [];
+      const derived = await page.evaluate(deriveRecipeInPage, { candidates: [...new Set([...vvParts, ...answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params)])].slice(0, 14), labels: Object.values(params).filter((x) => String(x).length >= 2) }).catch(() => null);
       const stored = storeRecipe(derived, params);
       const got = await extractWith(stored);
       if (stored && got != null) { recipe = stored; value = got; }

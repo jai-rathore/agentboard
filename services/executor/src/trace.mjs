@@ -369,8 +369,8 @@ export function answerCandidates(answer, params = {}) {
   // a bold label that repeats an input ("**Population (2022 census)**") is the field's name, not its value
   // and a bold "**Special capital region:**" (or "**Region**: …") is a label too
   for (const m of a.matchAll(/\*\*([^*]{1,120})\*\*(:?)/g)) if (!inputsLow.some((v) => m[1].toLowerCase().includes(v)) && !/:\s*$/.test(m[1]) && !m[2]) out.push(m[1].trim());
+  for (const m of a.matchAll(new RegExp(VALUE_RE.version, "g"))) { const pre = a.slice(0, m.index); if (!/[A-Za-z]$/.test(pre) || /(^|[^A-Za-z])v$/.test(pre)) out.push(m[0]); } // not "Qwen3.5" ("v1.2.0" is fine)
   for (const m of a.matchAll(/["“]([^"”\n]{3,160})["”]/g)) out.push(m[1].trim()); // a quoted title ("…") is usually the answer itself
-  for (const m of a.matchAll(new RegExp(VALUE_RE.version, "g"))) if (!/[A-Za-z]$/.test(a.slice(0, m.index))) out.push(m[0]); // not "Qwen3.5"
   // numbers in the order the answer mentions them (the first is usually the one asked for); bare years last
   for (const m of a.matchAll(/\d[\d,]*(?:\.\d+)?/g)) if (!/[A-Za-z]$/.test(a.slice(0, m.index)) && m[0].replace(/\D/g, "").length >= 2) (/^(1[5-9]|20)\d\d$/.test(m[0]) ? years : out).push(m[0]);
   out.push(...years);

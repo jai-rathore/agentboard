@@ -61,6 +61,7 @@ describe("trace: hygiene and value helpers", () => {
     const c = answerCandidates('The top story is "Qwen3.5 runs on a laptop" with 812 points.', {});
     expect(c[0]).toBe("Qwen3.5 runs on a laptop");
     expect(c).not.toContain("3.5");
+    expect(answerCandidates("serde v1.0.229", { crate_name: "serde" })[0]).toMatch(/^v?1\.0\.229$/);
   });
   it("skips a bold label that repeats the asked field", () => {
     expect(answerCandidates("**Population (2022 census)**\n- Capital and autonomous city: **3,121,707**", { search_query: "Buenos Aires", target_field: "Population" })[0]).toBe("3,121,707");
