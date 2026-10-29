@@ -201,7 +201,13 @@ describe("run_skill jobs", () => {
     executorReplies = [409];
     await expect(client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "agent@x.test" } })).rejects.toThrow(/another replay/);
     expect(await bal()).toBe(before - 5); // refunded
+    // a job the executor never took counts against no one's quota: 3 per agent per day are still available
     await client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "agent@x.test" } });
+    await client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "agent@x.test" } });
+    const q = (await node.req("GET", `/v1/agents/${agent.did}/runs`)).body;
+    expect(q.quota.yours).toMatchObject({ used: 3, remaining: 0 });
+    expect(q.runs.length).toBe(4);
+    expect(q.runs[0]).toMatchObject({ status: "queued", verified: null, via: "agent" });
     await expect(client.runSkill({ skill: "create-a-helpdesk-ticket", params: { customer_email: "agent@x.test" } })).rejects.toThrow(/per agent per day/);
     expect((await node.req("POST", `/v1/skills/jobs/${j.id}/decision`, { approval_id: "a1", approve: true }, { authorization: "x" })).status).toBe(401);
   });

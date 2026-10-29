@@ -17,6 +17,9 @@ import { openBenchmark, startColdRun, startReuseRun, finalizeBenchmark, listBenc
 const same = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
 
 /** Agentboard Skills routes. Paid or state-changing ones need the operator token (humans) or the executor secret. */
+/** How long POST /v1/skills/run waits for the executor to accept a job before answering 202 with the job still starting. */
+export const RUN_DISPATCH_WAIT_MS = 40_000;
+
 export function mountSkills(app: Hono, ctx: AppContext) {
   const operator = (h: string | undefined) => {
     if (!ctx.cfg.skillsOperatorToken) throw new HttpError(503, "skills_disabled", "recording is not enabled on this node");
@@ -170,13 +173,15 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     let job: { id: string };
     if (by.via === "agent") { const r = await createAgentFundedJob(ctx, by.requested_by, jobReq); job = r.job; charged = r.cost; }
     else job = await createJob(ctx, jobReq, by);
-    try {
-      await dispatchJob(ctx, job.id);
-      return c.json(await getJob(ctx, job.id), 202);
-    } catch (e) {
-      if (charged) await refundAgentRun(ctx, by.requested_by, charged);
-      throw e;
-    }
+    // Answer within RUN_DISPATCH_WAIT_MS even when the executor is slow to wake: the dispatch keeps going in the
+    // background (it marks the job failed if the executor never takes it, and the agent's credits come back).
+    const requester = by.requested_by;
+    const dispatched = dispatchJob(ctx, job.id).then(() => "ok" as const, async (e) => { if (charged) await refundAgentRun(ctx, requester, charged).catch(() => {}); throw e; });
+    dispatched.catch(() => {}); // handled below or after the response
+    const timer = new Promise<"slow">((r) => setTimeout(() => r("slow"), RUN_DISPATCH_WAIT_MS).unref?.());
+    const first = await Promise.race([dispatched, timer]);
+    const view = await getJob(ctx, job.id);
+    return c.json(first === "slow" ? { ...view, message: view.message ?? "Waking the executor", still_starting: true, next: "The executor is still waking up; poll GET /v1/skills/jobs/{id} (skill_run_status)." } : view, 202);
   });
   app.get("/v1/skills/jobs/:id", async (c) => c.json(await getJob(ctx, c.req.param("id"))));
   app.get("/v1/skills/jobs/:id/frame", async (c) => c.body(await getJobFrame(ctx, c.req.param("id")) as unknown as ArrayBuffer, 200, { "content-type": "image/jpeg", "cache-control": "no-store", "x-content-type-options": "nosniff" }));

@@ -26,7 +26,7 @@ import { findSkills } from "./services/skills.js";
 import { museSpend } from "./services/muse.js";
 import { skillMetrics } from "./services/skillMetrics.js";
 import { leaderboard } from "./services/wins.js";
-import { agentRunEligibility } from "./services/skillJobs.js";
+import { agentRunEligibility, agentRuns, runQuota } from "./services/skillJobs.js";
 
 /** Git commit of this deploy (Render sets RENDER_GIT_COMMIT at runtime), shown on /healthz and /v1/node so the
  * post-deploy smoke (scripts/smoke-prod.ts) can wait for a push to go live. null when unknown (local runs). */
@@ -201,6 +201,12 @@ export function createApp(ctx: AppContext) {
     return c.json(untrusted({ agents: rows }));
   });
 
+  app.get("/v1/agents/:did/runs", async (c) => {
+    const did = c.req.param("did");
+    const a = (await db.query<any>(`SELECT did FROM agents WHERE did = $1`, [did])).rows[0];
+    if (!a) throw new HttpError(404, "agent_not_found", "no such agent");
+    return c.json({ did, runs: await agentRuns(ctx, did, Number(c.req.query("limit") ?? 20) || 20), quota: await runQuota(ctx, did) });
+  });
   app.get("/v1/agents/:did", async (c) => {
     const did = c.req.param("did");
     const a = (await db.query<any>(`SELECT did, name, description, homepage, operator, register_cid, registered_at, verified_domain, verified_at, is_house, karma, trust, status FROM agents WHERE did = $1`, [did])).rows[0];

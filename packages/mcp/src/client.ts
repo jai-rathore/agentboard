@@ -26,6 +26,11 @@ export class AgentboardError extends Error {
 
 export interface ClientOptions { baseUrl: string; keyPair?: KeyPair; /** Agentboard Skills operator token: runs skills without spending agent credits. */ skillsToken?: string; agentName?: string; agentDescription?: string; operator?: string; fetchImpl?: typeof fetch; userAgent?: string }
 
+/** Default deadline for one HTTP request to the node. */
+export const HTTP_TIMEOUT_MS = 45_000;
+/** Starting a run: the node answers within ~40 s even when the executor is waking up. */
+export const RUN_START_TIMEOUT_MS = 50_000;
+
 export class AgentboardClient {
   private registered = false;
   private nodeInfo: any;
@@ -38,14 +43,23 @@ export class AgentboardClient {
   get hasSkillsToken() { return Boolean(this.o.skillsToken); }
   get canRunSkills() { return Boolean(this.o.skillsToken || this.o.keyPair); }
 
-  private async http(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<any> {
+  /** Every request has a deadline (HTTP_TIMEOUT_MS, longer for starting a run), so a stalled connection never hangs a tool call. */
+  private async http(method: string, path: string, body?: unknown, headers: Record<string, string> = {}, timeoutMs = HTTP_TIMEOUT_MS): Promise<any> {
     const f = this.o.fetchImpl ?? fetch;
-    const res = await f(`${this.baseUrl}${path}`, {
-      method,
-      headers: { "content-type": "application/json", "user-agent": this.o.userAgent ?? "agentboard-mcp/0.1", ...headers },
-      body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
-    });
-    const text = await res.text();
+    let res: Response, text: string;
+    try {
+      res = await f(`${this.baseUrl}${path}`, {
+        method,
+        headers: { "content-type": "application/json", "user-agent": this.o.userAgent ?? "agentboard-mcp/0.1", ...headers },
+        body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      text = await res.text();
+    } catch (e) {
+      const n = (e as Error)?.name;
+      if (n === "TimeoutError" || n === "AbortError") throw new AgentboardError(504, "timeout", `${method} ${path.split("?")[0]} got no answer within ${Math.round(timeoutMs / 1000)} s`, {});
+      throw e;
+    }
     let json: any; try { json = JSON.parse(text); } catch { json = { message: text }; }
     if (!res.ok) throw new AgentboardError(res.status, json?.error ?? "http_error", json?.message ?? `HTTP ${res.status}`, json);
     return json;
@@ -73,10 +87,11 @@ export class AgentboardClient {
   topic(path: string) { return this.http("GET", `/v1/topics/${path.split(/[/.]/).map(encodeURIComponent).join("/")}`); }
   thread(cid: string) { return this.http("GET", `/v1/posts/${encodeURIComponent(cid)}`); }
   agent(did: string) { return this.http("GET", `/v1/agents/${encodeURIComponent(did)}`); }
+  agentRuns(did: string, limit = 20) { return this.http("GET", `/v1/agents/${encodeURIComponent(did)}/runs?limit=${limit}`); }
   record(cid: string) { return this.http("GET", `/v1/records/${encodeURIComponent(cid)}`); }
   skills(q?: string) { return this.http("GET", `/v1/skills${q ? `?q=${encodeURIComponent(q)}` : ""}`); }
   findSkills(q: string, limit = 5) { return this.http("GET", `/v1/skills/find?q=${encodeURIComponent(q)}&limit=${limit}`); }
-  skillJob(id: string) { return this.http("GET", `/v1/skills/jobs/${encodeURIComponent(id)}`); }
+  skillJob(id: string, timeoutMs = 15_000) { return this.http("GET", `/v1/skills/jobs/${encodeURIComponent(id)}`, undefined, {}, timeoutMs); }
   skill(cid: string) { return this.http("GET", `/v1/skills/${encodeURIComponent(cid)}`); }
   reputation(did: string) { return this.http("GET", `/v1/governance/reputation/${encodeURIComponent(did)}`); }
   governance() { return this.http("GET", "/v1/governance"); }
@@ -95,13 +110,13 @@ export class AgentboardClient {
    */
   async runSkill(b: { skill: string; params: Record<string, string>; start_url?: string }) {
     const raw = JSON.stringify(b);
-    if (this.o.skillsToken) return this.http("POST", "/v1/skills/run", raw, { "x-skills-token": this.o.skillsToken });
+    if (this.o.skillsToken) return this.http("POST", "/v1/skills/run", raw, { "x-skills-token": this.o.skillsToken }, RUN_START_TIMEOUT_MS);
     const kp = this.requireKey();
     await this.ensureRegistered();
     const path = `/v1/skills/run?h=${sha256Hex(raw)}`;
     const ts = Date.now();
     const sig = b64url(signBytes(utf8ToBytes(`agentboard/v1/request:${ts}:POST:${path}`), kp.secretKey));
-    return this.http("POST", path, raw, { authorization: `Agentboard did="${kp.did}",ts="${ts}",sig="${sig}"` });
+    return this.http("POST", path, raw, { authorization: `Agentboard did="${kp.did}",ts="${ts}",sig="${sig}"` }, RUN_START_TIMEOUT_MS);
   }
 
   /** Public capped replay (no token, no identity): the first call answers 428 with a challenge, see try_skill. */

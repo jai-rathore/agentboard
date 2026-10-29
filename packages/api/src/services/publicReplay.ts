@@ -63,13 +63,11 @@ async function counts(ctx: AppContext, db: AppContext["db"], ipH: string | null)
   return {
     ip: ipH ? await n(`SELECT count(*)::int AS n FROM skill_jobs WHERE via = 'public' AND client_ip_hash = $1 AND created_at >= $2::date AND ${COUNTED}`, [ipH, d]) : 0,
     all: await n(`SELECT count(*)::int AS n FROM skill_jobs WHERE via = 'public' AND created_at >= $1::date AND ${COUNTED}`, [d]),
-    node: await n(`SELECT count(*)::int AS n FROM skill_jobs WHERE via IN ('agent', 'public') AND created_at >= $1::date AND ${COUNTED}`, [d]),
   };
 }
-function checkCaps(ctx: AppContext, c: { ip: number; all: number; node: number }) {
+function checkCaps(ctx: AppContext, c: { ip: number; all: number }) {
   if (c.ip >= ctx.cfg.publicReplayPerIpPerDay) throw new HttpError(429, "public_replay_ip_limit", `at most ${ctx.cfg.publicReplayPerIpPerDay} public replays per network per day (UTC); try again tomorrow`);
   if (c.all >= ctx.cfg.publicReplayDailyCap) throw new HttpError(429, "public_replay_daily_cap", `today's public replay budget (${ctx.cfg.publicReplayDailyCap}) is used up; it resets at 00:00 UTC`);
-  if (c.node >= ctx.cfg.skillsAgentRunsPerDay) throw new HttpError(429, "node_run_quota", "this node's daily budget for non-operator skill runs is used up");
 }
 
 export async function publicReplayStatus(ctx: AppContext) {

@@ -189,12 +189,12 @@ describe("public replay: caps", () => {
     now = Date.parse("2026-10-30T00:00:01Z");
     expect((await replay("search-hn", { query: "c" }, ip("10.0.0.1"))).status).toBe(202);
   });
-  it("shares the node's daily budget for non-operator runs and respects Muse caps", async () => {
+  it("does not use the agent-funded run budget (it has its own cap) and respects Muse caps", async () => {
     now = Date.parse("2026-10-31T00:10:00Z");
-    node.ctx.cfg.skillsAgentRunsPerDay = 1;
+    node.ctx.cfg.skillsAgentRunsPerDay = 0; node.ctx.cfg.skillsAgentRunsCeiling = 0;
     expect((await replay("search-hn", { query: "a" }, ip("10.1.0.1"))).status).toBe(202);
-    expect((await replay("search-hn", { query: "b" }, ip("10.1.0.2"))).body.reason.error).toBe("node_run_quota");
-    node.ctx.cfg.skillsAgentRunsPerDay = 50;
+    expect((await replay("search-hn", { query: "b" }, ip("10.1.0.2"))).status).toBe(202);
+    node.ctx.cfg.skillsAgentRunsPerDay = 50; node.ctx.cfg.skillsAgentRunsCeiling = 100;
     const cap = node.ctx.cfg.museSpendCapUsd;
     node.ctx.cfg.museSpendCapUsd = 0.05; // lifetime spend so far plus a run's headroom would cross it
     expect((await post("search-hn", { params: { query: "b" } }, ip("10.1.0.3"))).body.reason.error).toBe("muse_spend_cap");
@@ -331,6 +331,7 @@ describe("try_skill on the remote /mcp", () => {
     await c.connect(new StreamableHTTPClientTransport(new URL("http://agentboard.test/mcp"), { fetch: fetchImpl, requestInit: { headers } }));
     return c;
   };
+  // the summary is the last content item (the first is the JSON result)
   const txt = (r: any) => r.content.map((x: any) => x.text).join("\n");
   it("challenge question first, then a real run under the caller's IP limit; run_skill is never offered", async () => {
     now = Date.parse("2026-11-02T00:10:00Z");
@@ -355,9 +356,10 @@ describe("try_skill on the remote /mcp", () => {
     expect(txt(ok)).toMatch(/"trigger": "public"/);
     expect(txt(ok)).toMatch(/skill_run_status\(\{run_id: /);
     expect((await ask("mcp two")).isError).toBeFalsy();
-    const limited = await c.callTool({ name: "try_skill", arguments: { slug: "search-hn", inputs: { query: "three" } } });
+    const limited: any = await c.callTool({ name: "try_skill", arguments: { slug: "search-hn", inputs: { query: "three" } } });
     expect(limited.isError).toBeFalsy();
-    expect(txt(limited)).toMatch(/^CACHED VERIFIED RUN \(not a new replay\): live replay is paused \(public_replay_ip_limit\)/);
+    expect(JSON.parse(limited.content[0].text)).toEqual(limited.structuredContent);
+    expect(limited.content.at(-1).text).toMatch(/^CACHED VERIFIED RUN \(not a new replay\): live replay is paused \(public_replay_ip_limit\)/);
     expect(txt(limited)).toMatch(/"status": "cached"/);
     expect(txt(limited)).toMatch(/"run_record_page": "https:\/\/web\.test\/skills\/runs\/bag/);
     // an HTTP proof-of-work challenge does not work for the MCP path and vice versa

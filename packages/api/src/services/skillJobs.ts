@@ -153,6 +153,11 @@ export async function verifiedContributions(db: AppContext["db"], did: string): 
  * approval steps are unchanged, and the leaderboard labels them VOUCHED (not independent of the operator).
  */
 export async function agentRunEligibility(ctx: AppContext, did: string, agent?: { status: string; registered_at: string | Date }) {
+  const el = await probationCheck(ctx, did, agent);
+  const quota = await runQuota(ctx, did);
+  return { ...el, runs_left_today: el.eligible ? quota.yours.remaining : 0, quota };
+}
+async function probationCheck(ctx: AppContext, did: string, agent?: { status: string; registered_at: string | Date }) {
   const a = agent ?? (await ctx.db.query<any>(`SELECT status, registered_at FROM agents WHERE did = $1`, [did])).rows[0];
   const vouched = (ctx.cfg.agentRunVouchedDids ?? []).includes(did);
   const base = { vouched, probation_hours: ctx.cfg.agentRunProbationHours, contributions_required: ctx.cfg.agentRunMinContributions, run_cost_credits: ctx.cfg.skillsAgentRunCredits, runs_per_agent_day: ctx.cfg.skillsAgentRunsPerAgentDay };
@@ -181,12 +186,9 @@ export async function createAgentFundedJob(ctx: AppContext, did: string, req: Jo
   const cost = Math.round(ctx.cfg.skillsAgentRunCredits * 1000);
   const job = await ctx.db.tx(async (tx) => {
     await tx.query(`SELECT pg_advisory_xact_lock(7240311)`);
-    const day = new Date(ctx.now()).toISOString().slice(0, 10);
-    const mine = Number((await tx.query<any>(`SELECT count(*)::int AS n FROM skill_jobs WHERE requested_by = $1 AND created_at >= $2::date`, [did, day])).rows[0].n);
-    if (mine >= ctx.cfg.skillsAgentRunsPerAgentDay) throw new HttpError(429, "agent_run_quota", `at most ${ctx.cfg.skillsAgentRunsPerAgentDay} skill runs per agent per day`);
-    // node-wide budget for non-operator runs, shared with the public replay trigger (services/publicReplay.ts)
-    const all = Number((await tx.query<any>(`SELECT count(*)::int AS n FROM skill_jobs WHERE via IN ('agent', 'public') AND created_at >= $1::date`, [day])).rows[0].n);
-    if (all >= ctx.cfg.skillsAgentRunsPerDay) throw new HttpError(429, "node_run_quota", "this node's daily budget for agent-funded skill runs is used up");
+    const q = await runQuota({ ...ctx, db: tx }, did);
+    if (q.yours.remaining <= 0) throw new HttpError(429, "agent_run_quota", `at most ${q.yours.limit} skill runs per agent per day (resets ${q.resets_at})`, { quota: q });
+    if (q.node.remaining <= 0) throw new HttpError(429, "node_run_quota", `this node's daily budget for agent-funded runs that use the model (${q.node.model_runs_limit}) or its overall safety ceiling (${q.node.ceiling}) is used up; resets ${q.resets_at}`, { quota: q });
     const bal = Number((await tx.query<any>(`SELECT COALESCE(SUM(delta_milli),0)::float8 AS b FROM credit_ledger WHERE did = $1`, [did])).rows[0]?.b ?? 0);
     if (bal < cost) throw new HttpError(402, "insufficient_credits", `a skill run costs ${cost / 1000} credits, you have ${bal / 1000}`);
     await tx.query(`INSERT INTO credit_ledger (did, delta_milli, reason, ref_cid, seq, received_at) VALUES ($1,$2,'skill_run',NULL,NULL,$3)`, [did, -cost, new Date(ctx.now())]);
@@ -194,6 +196,51 @@ export async function createAgentFundedJob(ctx: AppContext, did: string, req: Jo
   });
   return { job, cost };
 }
+/** Jobs that never reached the executor (it was busy or unreachable) count against no one's cap. */
+export const COUNTED_JOB = `NOT (j.status = 'failed' AND j.turns = '[]'::jsonb AND j.verdict IS NULL AND j.result IS NULL)`;
+
+/**
+ * Agent-funded run budget for the current UTC day (resets 00:00 UTC, 5 PM PT). Per identity:
+ * SKILLS_AGENT_RUNS_PER_AGENT_DAY. Node-wide, for agent-funded runs only (public try_skill trials have their own
+ * PUBLIC_REPLAY_DAILY_CAP and no longer use this budget): SKILLS_AGENT_RUNS_PER_DAY counts runs that used the model
+ * (a run still in progress, or one without a signed record, counts as using it); a deterministic trace replay that
+ * finished with 0 model calls counts only against the safety ceiling SKILLS_AGENT_RUNS_CEILING. Muse spend stays under
+ * MUSE_DAILY_CALL_CAP and the lifetime MUSE_SPEND_CAP_USD either way: every model call is reserved one by one.
+ */
+export async function runQuota(ctx: AppContext, did: string | null) {
+  const day = new Date(ctx.now()).toISOString().slice(0, 10);
+  const r = (await ctx.db.query<any>(`SELECT
+      count(*) FILTER (WHERE j.requested_by = $2)::int AS mine,
+      count(*)::int AS all_runs,
+      count(*) FILTER (WHERE COALESCE((
+        SELECT (rec.body->'usage'->>'calls')::int FROM records rec WHERE rec.type = 'skill_run' AND rec.body->'requested_by'->>'job' = j.id LIMIT 1
+      ), 1) > 0)::int AS model_runs
+    FROM skill_jobs j WHERE j.via = 'agent' AND j.created_at >= $1::date AND ${COUNTED_JOB}`, [day, did ?? ""])).rows[0] ?? {};
+  const mine = Number(r.mine ?? 0), all = Number(r.all_runs ?? 0), model = Number(r.model_runs ?? 0);
+  const perAgent = ctx.cfg.skillsAgentRunsPerAgentDay, modelLimit = ctx.cfg.skillsAgentRunsPerDay, ceiling = ctx.cfg.skillsAgentRunsCeiling;
+  const nodeLeft = Math.max(0, Math.min(modelLimit - model, ceiling - all));
+  return {
+    day, resets_at: `${new Date(Date.parse(day) + 86_400_000).toISOString().slice(0, 10)}T00:00:00Z`,
+    yours: { used: mine, limit: perAgent, remaining: did ? Math.max(0, Math.min(perAgent - mine, nodeLeft)) : 0 },
+    node: { model_runs_used: model, model_runs_limit: modelLimit, runs_used: all, ceiling, remaining: nodeLeft, zero_model_replays_count_only_toward_ceiling: true },
+  };
+}
+
+/** The caller's recent runs (agent-funded or benchmark), newest first: run_id, run record cid, skill, status, verified. */
+export async function agentRuns(ctx: AppContext, did: string, limit = 20) {
+  const rows = (await ctx.db.query<any>(`SELECT j.id, j.status, j.via, j.created_at, j.updated_at, j.message, s.slug, s.version,
+      (SELECT rec.cid FROM records rec WHERE rec.type = 'skill_run' AND rec.body->'requested_by'->>'job' = j.id LIMIT 1) AS run_cid,
+      (SELECT (rec.body->>'success') FROM records rec WHERE rec.type = 'skill_run' AND rec.body->'requested_by'->>'job' = j.id LIMIT 1) AS ok
+    FROM skill_jobs j LEFT JOIN skills s ON s.cid = j.skill_cid WHERE j.requested_by = $1 AND j.via IN ('agent', 'benchmark')
+    ORDER BY j.created_at DESC LIMIT $2`, [did, Math.min(Math.max(limit, 1), 50)])).rows;
+  return rows.map((r) => ({
+    run_id: r.id, run_cid: r.run_cid ?? null, skill: r.slug ?? null, version: r.version ?? null, status: r.status,
+    verified: r.run_cid ? r.ok === "true" : null, via: r.via, created_at: new Date(r.created_at).toISOString(),
+    ...(r.status === "failed" && r.message ? { message: String(r.message).slice(0, 200) } : {}),
+    run_page: r.run_cid ? `${ctx.cfg.skillsWebUrl}/skills/runs/${r.run_cid}` : jobUrl(ctx, r.id),
+  }));
+}
+
 export async function refundAgentRun(ctx: AppContext, did: string, cost: number) {
   await ctx.db.query(`INSERT INTO credit_ledger (did, delta_milli, reason, ref_cid, seq, received_at) VALUES ($1,$2,'skill_run_refund',NULL,NULL,$3)`, [did, cost, new Date(ctx.now())]);
 }

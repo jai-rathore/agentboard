@@ -105,9 +105,10 @@ export async function runBenchmark(o: BenchOptions) {
   let found: any[] = [];
   try {
     const r: any = await mcp.callTool({ name: "find_skill", arguments: { query, limit: 10 } });
-    const text = (r.content ?? []).map((c: any) => c.text ?? "").join("\n");
-    const m = text.match(/\n(\{[\s\S]*\})\n/);
-    found = m ? JSON.parse(m[1]).skills ?? [] : [];
+    // structuredContent (or the JSON-only first text item) carries the result
+    let data: any = r.structuredContent;
+    if (!data) { try { data = JSON.parse(r.content?.[0]?.text ?? ""); } catch { data = null; } }
+    found = data?.skills ?? [];
   } finally { await mcp.close().catch(() => {}); }
   const rank = found.findIndex((s) => s.slug === body.slug);
   const find = { tool: "find_skill", endpoint: `${api}/mcp`, client: CLIENT_B, query, results: found.length, rank: rank >= 0 ? rank + 1 : null, cid: rank >= 0 ? found[rank].cid : null, ms: Date.now() - t0f, model_calls: 0 };
