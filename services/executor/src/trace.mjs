@@ -297,10 +297,11 @@ export function deriveRecipeInPage({ candidates, labels }) {
 }
 
 /** Runs in the page: apply a (filled) recipe; returns the element's text or null. */
-export function applyRecipeInPage({ recipe }) {
+export function applyRecipeInPage({ recipe, scroll }) {
+  const show = (el) => { if (scroll && el) el.scrollIntoView({ block: "center", inline: "nearest" }); };
   const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
   const low = (s) => norm(s).toLowerCase();
-  if (recipe.kind === "css") { const el = document.querySelector(recipe.css); return el ? norm(el.innerText || el.textContent).slice(0, 1000) : null; }
+  if (recipe.kind === "css") { const el = document.querySelector(recipe.css); show(el); return el ? norm(el.innerText || el.textContent).slice(0, 1000) : null; }
   if (recipe.kind === "row") {
     const want = low(recipe.label);
     const pick = (list) => list.find((x) => low(x.innerText) === want) ?? list.find((x) => low(x.innerText).startsWith(want)) ?? list.find((x) => low(x.innerText).includes(want));
@@ -309,10 +310,10 @@ export function applyRecipeInPage({ recipe }) {
       const rows = [...th.closest("table").querySelectorAll("tr")], i = rows.indexOf(th.closest("tr"));
       // the recorded offset first; a header row without a value cell looks a few rows further (infobox sub-rows)
       const tryRows = [i + (recipe.offset || 0), i, i + 1, i + 2, i + 3].filter((k, x, a) => k >= i && a.indexOf(k) === x);
-      for (const k of tryRows) { const td = rows[k]?.querySelector("td"); if (td && norm(td.innerText)) return norm(td.innerText).slice(0, 1000); }
+      for (const k of tryRows) { const td = rows[k]?.querySelector("td"); if (td && norm(td.innerText)) { show(td); return norm(td.innerText).slice(0, 1000); } }
     }
     const dt = pick([...document.querySelectorAll("dt")]);
-    if (dt) { let dd = dt.nextElementSibling; while (dd && dd.tagName !== "DD") dd = dd.nextElementSibling; if (dd) return norm(dd.innerText).slice(0, 1000); }
+    if (dt) { let dd = dt.nextElementSibling; while (dd && dd.tagName !== "DD") dd = dd.nextElementSibling; if (dd) { show(dd); return norm(dd.innerText).slice(0, 1000); } }
   }
   return null;
 }

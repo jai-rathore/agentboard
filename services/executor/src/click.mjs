@@ -64,7 +64,9 @@ export function scrollToTextInPage({ text }) {
   // Prefer a label that IS the text (a heading or row label), then one that starts with it, then label cells, then the first.
   const own = (el) => (el.innerText || el.textContent || "").trim().toLowerCase();
   const labelish = (el) => Boolean(el.closest("th, dt, label, h1, h2, h3, h4, h5, h6, .infobox-label"));
-  const score = (el) => (own(el) === want ? 4 : 0) + (own(el).startsWith(want) ? 2 : 0) + (labelish(el) ? 1 : 0);
+  // a fact box (infobox / sidebar) beats a later table that happens to have the same column label
+  const factBox = (el) => Boolean(el.closest(".infobox, [class*='infobox'], aside, [role=complementary]"));
+  const score = (el) => (factBox(el) ? 8 : 0) + (own(el) === want ? 4 : 0) + (own(el).startsWith(want) ? 2 : 0) + (labelish(el) ? 1 : 0);
   const label = hits.reduce((best, el) => (score(el) > score(best) ? el : best), hits[0]);
   label.scrollIntoView({ block: "center", inline: "nearest" });
   return { found: true, tag: label.tagName.toLowerCase(), text: (label.innerText || "").trim().slice(0, 80) };

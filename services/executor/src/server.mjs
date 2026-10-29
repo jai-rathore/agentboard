@@ -284,16 +284,18 @@ async function replay(m, send, ask, isAborted) {
       await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
     }
     // ---- verify: Spark reads the final screenshot against the success check
-    const finalJpg = await shoot("final");
-    gifFrames.push(await page.screenshot({ type: "png" }));
     const check = fill(skill.success_check, params);
     await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
     closePrev();
     const texts = await page.evaluate(pageTextInPage).catch(() => ({ viewport: "", page: "", title: "" }));
     // ---- deterministic value return: read the answer off the page with the trace's extraction recipe
-    const extractWith = async (recipe) => (recipe ? pickValue(await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params) }).catch(() => null), recipe) : null);
+    const extractWith = async (recipe) => (recipe ? pickValue(await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: false }).catch(() => null), recipe) : null);
     let recipe = trace?.extract ?? null, value = await extractWith(recipe);
     if (recipe && value == null) { send({ type: "status", message: `The extraction recipe found no value on this page (${recipe.kind}${recipe.label ? ` "${fillText(recipe.label, params)}"` : ""})` }); recipe = null; }
+    // the final screenshot shows the extracted value (scrolled into view) for the record and any verifier call
+    if (value != null) await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: true }).catch(() => {});
+    const finalJpg = await shoot("final");
+    gifFrames.push(await page.screenshot({ type: "png" }));
     let det = null;
     if (replayInfo.mode === "trace") {
       det = checkFinal(trace.final, texts, params, page.url());
