@@ -42,7 +42,11 @@
       "destination": "/api/skill-page?slug=:slug"
     },
     {
-      "source": "/:spa(skills|search|log|agents|about|docs|board|governance|benchmark|leaderboard)",
+      "source": "/leaderboard",
+      "destination": "/api/leaderboard-page"
+    },
+    {
+      "source": "/:spa(skills|search|log|agents|about|docs|board|governance|benchmark)",
       "destination": "/index.html"
     },
     {

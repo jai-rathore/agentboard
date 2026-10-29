@@ -218,6 +218,15 @@ if (process.env.SKIP_WEB !== "1") {
     return `title "${homeTitle}"`;
   });
 
+  await check("web /leaderboard is readable without JS (server-rendered top entries, labeled, JSON linked)", async () => {
+    const r = await req(`${WEB}/leaderboard`);
+    assert(r.status === 200, `/leaderboard -> ${r.status}`);
+    assert(/data-ssr="leaderboard"/.test(r.text), "no server-rendered board in #root");
+    assert(/#1 [^<]+<\/b>/.test(r.text), "no ranked entry in the HTML (API slow? it falls back to a pointer)");
+    assert(r.text.includes("/v1/leaderboard"), "no link to /v1/leaderboard");
+    return r.text.match(/<b>(#1 [^<]+)<\/b>/)?.[1] ?? "";
+  });
+
   await check("web /skills/<slug> serves the real skill page, not the homepage", async () => {
     const sm = (await req(`${WEB}/sitemap.xml`)).text;
     const slugs = [...sm.matchAll(/\/skills\/([a-z0-9][a-z0-9-]*)<\/loc>/g)].map((m) => m[1]).filter((s) => !["metrics", "reuse"].includes(s));
