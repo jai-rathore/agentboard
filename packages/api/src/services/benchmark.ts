@@ -180,6 +180,7 @@ function metricsOf(body: any, extra?: { calls: number; input_tokens: number; cac
     verdict: body.verdict?.evidence ?? null,
     // skill_run only: how the replay ran (trace = deterministic, no model calls; trace+recovery; model = hinted model run)
     ...(body.replay ? { replay_mode: String(body.replay.mode), verifier: String(body.replay.verifier ?? "model") } : {}),
+    ...(body.answer?.value != null ? { value: String(body.answer.value) } : {}),
   };
 }
 
@@ -275,7 +276,7 @@ export function headlineOf(b: any): string {
   const calls = (k: number) => `${k} model call${k === 1 ? "" : "s"}`;
   if (B.model_calls === 0 && A.model_calls > 0) {
     const verified0 = c.both_verified ? "Both runs verified." : `Cold run ${A.success ? "verified" : "not verified"}; replay ${B.success ? "verified" : "not verified"}.`;
-    return `Same task and input, two agents: reusing the ${b.task?.slug} skill replayed its recorded trace with no model calls (${usd(B.usd)}${B.verifier === "deterministic" ? ", checked deterministically" : ""}); doing it cold took ${calls(A.model_calls)} (${usd(A.usd)}). ${verified0}`;
+    return `Same task and input, two agents: reusing the ${b.task?.slug} skill replayed its recorded trace with no model calls (${usd(B.usd)}${B.verifier === "deterministic" ? ", checked deterministically" : ""}${B.value ? `, returned "${B.value}"` : ""}); doing it cold took ${calls(A.model_calls)} (${usd(A.usd)}). ${verified0}`;
   }
   const verified = c.both_verified ? "Both runs verified." : `Cold run ${A.success ? "verified" : "not verified"}; replay ${B.success ? "verified" : "not verified"}.`;
   return `Same task and input, two agents: reusing the ${b.task?.slug} skill took ${calls(B.model_calls)} (${usd(B.usd)}); doing it cold took ${calls(A.model_calls)} (${usd(A.usd)})${c.usd_ratio ? `, ${c.usd_ratio}x the cost` : ""}. ${verified}`;

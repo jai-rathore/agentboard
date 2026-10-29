@@ -39747,6 +39747,10 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
     if (j.status === "completed") return {
       ...base,
       success: res.verdict?.success ?? j.verdict?.success,
+      ...res.answer ? { value: res.answer.value, value_source: res.answer.source } : {},
+      model_calls: res.usage?.calls ?? null,
+      replay_mode: res.replay?.mode ?? null,
+      verified_by: res.verdict?.model === "deterministic" ? "deterministic checks (no model)" : res.verdict?.model,
       verdict: res.verdict?.evidence ?? j.verdict?.evidence,
       turns: res.turns,
       run_record: res.run_cid,
@@ -39768,11 +39772,11 @@ function createAgentboardMcpServer({ client: client2, readOnly = !client2.canWri
     }
     return j;
   };
-  const summary = (j) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${j.result?.verdict?.success ?? j.verdict?.success ? "verified success" : "not verified"}; no human clicks${j.result?.time ? ` except ${j.result.time.human_approvals} approval(s) of risky steps` : ""}.${j.result?.run_cid ? ` Signed run record ${j.result.run_cid}: check it with verify_record.` : ""}${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;
+  const summary = (j) => j.status === "pending_approval" ? `Paused for human approval: ${j.approval?.reason}. Approve or decline at ${j.url}` : j.status === "completed" ? `Run finished: ${j.result?.verdict?.success ?? j.verdict?.success ? "verified success" : "not verified"}${j.result?.answer?.value != null ? `; returned value: ${j.result.answer.value}` : ""}; ${j.result?.usage?.calls ?? "?"} model call${j.result?.usage?.calls === 1 ? "" : "s"}${j.result?.replay?.mode === "trace" ? " (deterministic replay of the recorded trace)" : ""}; no human clicks${j.result?.time ? ` except ${j.result.time.human_approvals} approval(s) of risky steps` : ""}.${j.result?.run_cid ? ` Signed run record ${j.result.run_cid}: check it with verify_record.` : ""}${j.result?.healed ? ` The skill self-healed into v${j.result.healed.version}.` : ""}` : `Run ${j.status}. Live view: ${j.url}`;
   if (remote) {
     server2.registerTool("try_skill", {
       title: "Try a skill: real capped public replay",
-      description: "Runs a real browser replay on a public site; capped; non-destructive allowlisted skills only. No token or identity needed. Two calls: the first returns a short challenge question (challenge_id); call again with the same slug and inputs plus challenge_id and answer. Returns run_id, the run page and a poll hint; when the run completes, run_record is the signed run record cid (check it with verify_record). Limits: a few runs per network per day and a small node-wide daily budget. When a limit is reached (or public replay is switched off) it returns the latest verified run of that skill instead, marked status: cached (not a new replay), with its signed record cid and run page. For your own uncapped runs use run_skill in the local server.",
+      description: "Runs a real browser replay on a public site; capped; non-destructive allowlisted skills only. No token or identity needed. Two calls: the first returns a short challenge question (challenge_id); call again with the same slug and inputs plus challenge_id and answer. Returns run_id, the run page and a poll hint; when the run completes, run_record is the signed run record cid (check it with verify_record). Skills with a recorded action trace replay deterministically: 0 model calls, and the result includes value (the answer read off the page) and model_calls. Limits: a few runs per network per day and a small node-wide daily budget. When a limit is reached (or public replay is switched off) it returns the latest verified run of that skill instead, marked status: cached (not a new replay), with its signed record cid and run page. For your own uncapped runs use run_skill in the local server.",
       inputSchema: {
         slug: external_exports.string().min(1).max(80).describe("skill slug from find_skill (only skills with public_replay: true)"),
         inputs: external_exports.record(external_exports.string(), external_exports.string()).optional().describe("a value for every param the skill lists (see get_skill); new values are welcome"),

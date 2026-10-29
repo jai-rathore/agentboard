@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 // @ts-expect-error plain ESM module without types
-import { templ, fillUrl, finalChecks, checkFinal, traceStep, usableTrace, describeInPage, pageTextInPage, locate, runTraceStep } from "../src/trace.mjs";
+import { templ, fillUrl, finalChecks, checkFinal, traceStep, usableTrace, describeInPage, pageTextInPage, locate, runTraceStep, cleanSteps, locLabel, answerCandidates, deriveRecipeInPage, applyRecipeInPage, storeRecipe, fillRecipe, pickValue, regexFor } from "../src/trace.mjs";
 // @ts-expect-error plain ESM module without types
 import { INTERACTIVE } from "../src/click.mjs";
 
@@ -31,6 +31,34 @@ describe("trace: parameter templating", () => {
   });
 });
 
+describe("trace: hygiene and value helpers", () => {
+  it("drops scrolls, no-op clicks and repeats; keeps only the parameter of a stale link name", () => {
+    const link = { tag: "a", role: "link", name: "{{q}} 8.1.4 Full-stack web application framework.", text: "{{q}} 8.1.4 Full-stack", css: "main > a", attrs: {} };
+    const box = { tag: "input", role: "searchbox", name: "Search", text: "", css: "#s", attrs: { id: "s" } };
+    const out = cleanSteps([
+      { url: "u", action: "scroll", scroll_x: 0, scroll_y: 5, changes_url: false },
+      { url: "u", action: "click", locator: { tag: "div", role: "", name: "", text: "", css: "div", attrs: {} }, changes_url: false },
+      { url: "u", action: "click", locator: box, changes_url: false },
+      { url: "u", action: "click", locator: box, changes_url: false },
+      { url: "u", action: "type", text: "{{q}}", locator: box, changes_url: false },
+      { url: "u", action: "keypress", keys: ["Enter"], changes_url: true },
+      { url: "u", action: "click", locator: link, changes_url: true },
+    ]);
+    expect(out.map((x: any) => x.action)).toEqual(["click", "type", "keypress", "click"]);
+    expect(out[3].locator).toMatchObject({ name: "{{q}}", text: "{{q}}", match: "prefix", css: "main > a" });
+    expect(locLabel(out[3].locator, { q: "sinatra" })).toBe("sinatra");
+    expect(locLabel(link, { q: "sinatra" })).toBe("sinatra");
+  });
+  it("finds value candidates in an answer and generalizes their regex", () => {
+    expect(answerCandidates("Latest version: **4.2.1** (released October 10)", { gem_name: "sinatra" })[0]).toBe("4.2.1");
+    expect(regexFor("4.2.1")).toMatch(/\\d\+/);
+    expect(pickValue("Version 4.2.1 · MIT", { kind: "css", regex: regexFor("8.1.4") })).toBe("4.2.1");
+    expect(pickValue("717,710 (city)", { kind: "row", regex: regexFor("139,875") })).toBe("717,710");
+    expect(pickValue("8,848.86 m (29,031.7 ft) Ranked 1st", { kind: "row", regex: regexFor("8,848.86 m (29,031.7 ft)") })).toBe("8,848.86 m");
+    expect(pickValue("Python", { kind: "css" })).toBe("Python");
+  });
+});
+
 describe("trace: deterministic final check", () => {
   const final = finalChecks({ viewport: "Reykjavík Population 139,875", page: "…", title: "Reykjavík - Wikipedia" }, params, "https://en.wikipedia.org/wiki/Reykjav%C3%ADk");
   it("records where the parameter values showed and the templated final URL", () => {
@@ -57,7 +85,7 @@ const SITE = "https://site.test";
 const pages: Record<string, (q: URLSearchParams, path: string) => string> = {
   "/": () => `<title>Home</title><form action="/search"><input type="search" name="q" aria-label="Search the wiki"><button>Search</button></form><p>Welcome</p>`,
   "/search": (q) => `<title>Search</title><h1>Results</h1><ul><li><a href="/wiki/Noise">Noise article</a></li><li><a href="/wiki/${encodeURIComponent(q.get("q") ?? "")}">${q.get("q")}</a></li></ul>`,
-  "/wiki": (_q, path) => { const t = decodeURIComponent(path.slice(6)); return `<title>${t} - Wiki</title><h1>${t}</h1><table><tr><th>Population</th><td>123</td></tr></table>`; },
+  "/wiki": (_q, path) => { const t = decodeURIComponent(path.slice(6)); const pop = t === "Oslo" ? "717,710" : "139,875"; return `<title>${t} - Wiki</title><h1>${t}</h1><table class="infobox"><tr><th>Country</th><td>Somewhere</td></tr><tr><th colspan="2">Population (${t === "Oslo" ? 2024 : 2023})</th></tr><tr><th>• City</th><td>${pop}</td></tr><tr><th>Elevation</th><td>12 m</td></tr></table><p>Population figures are estimates.</p>`; },
 };
 async function newPage() {
   const page = await (await browser.newContext({ viewport: { width: 960, height: 600 } })).newPage();
@@ -99,6 +127,10 @@ describe.skipIf(!chromium)("trace: replay in headless Chromium with no model", (
     const final = finalChecks(await p.evaluate(pageTextInPage), { ...P1, target_field: "Population" }, p.url());
     expect(steps[0].locator).toMatchObject({ role: "searchbox", name: "Search the wiki" });
     expect(steps[3].locator).toMatchObject({ role: "link", name: "{{q}}" });
+    // the extraction recipe: where the model's answer ("**139,875**") is on the page, as a row under the {{f}} header
+    const derived = await p.evaluate(deriveRecipeInPage, { candidates: answerCandidates("The population is **139,875**.", { ...P1, f: "Population" }), labels: ["Reykjavík", "Population"] });
+    const recipe = storeRecipe(derived, { ...P1, f: "Population" });
+    expect(recipe).toMatchObject({ kind: "row", label: "{{f}}", offset: 1, sample: "139,875" });
 
     // replay on a new input: zero model calls, every step located and its post-condition met
     const r = await newPage();
@@ -107,9 +139,13 @@ describe.skipIf(!chromium)("trace: replay in headless Chromium with no model", (
     for (const [i, s] of steps.entries()) expect(await runTraceStep(r, s, P2, { ...c, index: i })).toMatchObject({ ok: true });
     expect(new URL(r.url()).pathname).toBe("/wiki/Oslo");
     expect(await runTraceStep(r, { url: "x", action: "scroll_to_text", text: "{{f}}", changes_url: false }, { ...P2, f: "Population" }, c)).toMatchObject({ ok: true });
-    expect(await runTraceStep(r, { url: "x", action: "scroll_to_text", text: "Elevation", changes_url: false }, P2, c)).toMatchObject({ ok: false });
+    expect(await runTraceStep(r, { url: "x", action: "scroll_to_text", text: "Area code", changes_url: false }, P2, c)).toMatchObject({ ok: false });
     expect(checkFinal(final, await r.evaluate(pageTextInPage), { ...P2, target_field: "Population" }, r.url())).toMatchObject({ ok: true });
     expect(c.actions.every((a: any) => a.turn === 0)).toBe(true);
+    // zero-call value return on the new input (the header says 2024 here, 2023 in the recording)
+    expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, { ...P2, f: "Population" }) }), recipe)).toBe("717,710");
+    expect(await r.evaluate(applyRecipeInPage, { recipe: { kind: "row", label: "Area", offset: 0 } })).toBeNull();
+    expect(pickValue(await r.evaluate(applyRecipeInPage, { recipe: { kind: "row", label: "Elevation", offset: 0, regex: regexFor("12 m") } }), { kind: "row", regex: regexFor("12 m") })).toBe("12 m");
     expect(await locate(r, { tag: "a", role: "link", name: "Nope", text: "Nope", css: "#nope", attrs: {} }, P2, 300)).toBeNull();
     // a recorded name with extra text after the parameter still finds the element by its leading part
     expect(await locate(r, { tag: "h1", role: "heading", name: "{{q}} 8.1.4 Full-stack web application framework", text: "", css: "#nope", attrs: {} }, P2, 300)).toMatchObject({ how: "role+name-prefix" });

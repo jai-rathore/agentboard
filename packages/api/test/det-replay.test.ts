@@ -114,6 +114,22 @@ describe("deterministic replay: traces on signed runs", () => {
     expect(s.trace.source).toBe(`skill:${r.body.healed.cid}`);
   });
 
+  it("stores the returned value and the extraction recipe; the run view shows value and model calls", async () => {
+    const latest = (await node.req("GET", `/v1/skills/${v1}`)).body.latest_cid;
+    const t = { ...trace(4), extract: { kind: "row", label: "{{q}}", offset: 1, regex: "\\d[\\d,.]*", sample: "139,875" } };
+    const r = await node.req("POST", "/internal/skills/runs", run({ skill_cid: latest }, true, {
+      turns: 0, model: "none (recorded trace)", usage: { calls: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, usd: 0 },
+      verdict: { success: true, evidence: "Deterministic checks passed; returned value 717,710", model: "deterministic", capability: "deterministic" },
+      trace: t, replay: replay("trace"), answer: { value: "717,710", method: "deterministic", source: 'row "Population" +1', verified_by: "deterministic" },
+    }), ex);
+    expect(r.status).toBe(201);
+    const view = (await node.req("GET", `/v1/skills/runs/${r.body.run_cid}`)).body;
+    expect(view).toMatchObject({ answer: { value: "717,710", method: "deterministic" }, model_calls: 0, replay: { mode: "trace" } });
+    expect((await node.req("GET", `/v1/skills/${latest}`)).body.trace.extract).toMatchObject({ kind: "row", offset: 1 });
+    const bad = await node.req("POST", "/internal/skills/runs", run({ skill_cid: latest }, true, { trace: { ...t, extract: { kind: "xpath" } } }), ex);
+    expect(bad.status).toBe(400);
+  });
+
   it("an old-style run (no trace, no replay info) still works", async () => {
     const r = await node.req("POST", "/internal/skills/runs", run({ skill_cid: v1 }, true), ex);
     expect(r.status).toBe(201);

@@ -208,6 +208,7 @@ export async function runDetail(ctx: AppContext, id: string) {
     models: { loop: b.loop?.model ?? null, loop_capability: b.loop?.capability ?? null, verifier: b.verdict?.model ?? null, verifier_capability: b.verdict?.capability ?? null },
     evidence: { final_screenshot: b.evidence?.final_screenshot ? artifactUrl(ctx, b.evidence.final_screenshot) : null, gif: b.evidence?.gif ? artifactUrl(ctx, b.evidence.gif) : null, sha256: b.evidence },
     usage: b.usage, turns: b.turns, actions: b.actions, time: b.time,
+    answer: b.answer ?? null, replay: b.replay ?? null, model_calls: Number(b.usage?.calls ?? 0),
     signature: { cid: rec.cid, sig: rec.sig, signed_by: rec.author, node: ctx.node.did, verify: `GET ${ctx.cfg.publicBaseUrl}/v1/records/${rec.cid}, or the MCP verify_record tool` },
     page: `${ctx.cfg.skillsWebUrl}/skills/runs/${rec.cid}`,
   };

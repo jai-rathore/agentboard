@@ -345,6 +345,7 @@ export function JobPage({ id }: { id: string }) {
     <div className="crumbs"><Link to="/skills">skills</Link> / run</div>
     <h1>Skill run <span className={`draft-tag st-${job.status}`}>{job.status.replace("_", " ")}</span></h1>
     <div className="meta"><span className="badge replay">Replay</span> {job.via === "public" ? <span className="badge try">trigger: public</span> : null} requested by {job.via === "agent" ? <>{job.agent ? <Link to={`/a/${job.agent}`}>an agent</Link> : "an agent"} (signed, paid in credits) through MCP <code>run_skill</code></> : job.via === "public" ? <>the public trigger (no token; capped, allowlisted non-destructive skills only)</> : <>the operator through MCP <code>run_skill</code></>} · <Link to={`/s/${job.skill_cid}`}>skill</Link> · started {ago(job.created_at)}</div>
+    {res && <ReturnedValue answer={res.answer} calls={res.usage?.calls} mode={res.replay?.mode} />}
     {job.run_record && <p><Link to={`/skills/runs/${job.run_record}`}>→ Signed run record and evidence</Link></p>}
     <p className="small mono">{Object.entries(job.params).map(([k, v]) => `${k}=${v}`).join(" · ")} · {job.start_url}</p>
     {job.status === "pending_approval" && job.approval && <div className="approval big">
@@ -572,6 +573,15 @@ export function StepFrames({ gif }: { gif: string }) {
   return <ol className="step-frames">{frames.map((f, i) => <li key={i}><img src={f} alt={`step screenshot ${i + 1}`} loading="lazy" /><span className="small muted">{i === frames.length - 1 ? "final" : `screenshot ${i + 1}`}</span></li>)}</ol>;
 }
 
+/** The value a run returned (read off the final page without a model) and how many model calls the run made. */
+export function ReturnedValue({ answer, calls, mode }: { answer?: any; calls?: number; mode?: string }) {
+  if (calls == null && !answer) return null;
+  return <div className="returned-value">
+    {answer?.value != null && <div><span className="small muted">Returned value</span> <b className="big-value">{answer.value}</b> <span className="small muted">read from the page ({answer.source}), no model</span></div>}
+    <div className="small"><b>{calls ?? "?"} model call{calls === 1 ? "" : "s"}</b>{mode === "trace" ? " · deterministic replay of the recorded trace" : mode === "trace+recovery" ? " · recorded trace, the model recovered a step" : mode === "model" ? " · model-driven replay (no trace yet)" : ""}{answer?.verified_by === "deterministic" ? " · verified by deterministic checks" : ""}</div>
+  </div>;
+}
+
 export function RunPage({ id }: { id: string }) {
   const r = useData<any>(`/v1/skills/runs/${id}`, [id]);
   if (r.loading) return <p className="muted">Loading…</p>;
@@ -589,6 +599,7 @@ export function RunPage({ id }: { id: string }) {
       : <>The first verified run of the recording, signed together with <Link to={`/s/${d.skill.cid}`}>v{d.skill.version}</Link>. It is part of publishing the skill and is <b>not counted as reuse</b>.{d.recording.video ? <> <a href={d.recording.video} target="_blank" rel="noreferrer">The recording</a>.</> : null}</>}</p>
     {d.site_kind === "mock" && <p className="small demo-note">This ran on an Agentboard demo page (a mock site we host), not a real-world site.</p>}
     <div className="meta">trigger: <b>{d.trigger}</b> ({triggerLabel(d.trigger)}){d.agent && <> · <Link to={`/a/${d.agent}`}>{short(d.agent)}</Link></>} · {ago(d.run.record.created_at)} · log #{d.run.seq}{d.job && <> · <Link to={`/skills/r/${d.job.id}`}>live run page</Link></>}{d.skill.latest_version !== d.skill.version && <> · latest is <Link to={`/s/${d.skill.latest_cid}`}>v{d.skill.latest_version}</Link></>}</div>
+    <ReturnedValue answer={d.answer} calls={d.model_calls} mode={d.replay?.mode} />
     <div className={`verdict-box ${d.success ? "good" : "badv"}`}><ModelCall model={d.models.verifier} capability={`verified with ${d.models.verifier_capability ?? "image understanding"}`} /><p>{d.success ? "✓ Verified" : "✗ Not verified"}: {d.verdict?.evidence}</p></div>
     <h2>Inputs</h2>
     {names.length ? <table className="tbl cards"><thead><tr><th>param</th><th>this run</th><th>in the recording</th></tr></thead><tbody>

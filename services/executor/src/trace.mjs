@@ -92,7 +92,8 @@ export function checkFinal(final, texts, params, url) {
     (path(want) === path(url) ? checks : fails).push(`final page ${want.slice(0, 160)}`);
   }
   const one = (list, hay, label) => { for (const k of list ?? []) { if (!(k in params)) continue; const v = params[k]; (has(hay, v) ? checks : fails).push(`"${v}" ${label}`); } };
-  one(final.viewport, texts.viewport, "visible on screen");
+  // viewport-recorded values are checked on the page: idle scrolls are dropped from saved traces
+  one(final.viewport, `${texts.viewport}\n${texts.page}`, "on the page");
   one(final.page, texts.page, "in the page");
   one(final.title, texts.title, "in the page title");
   if (checks.length + fails.length <= 1) return { ok: false, checks, reason: "the trace's final page showed none of the parameter values" };
@@ -120,18 +121,18 @@ const tplLoc = (l, p) => ({ tag: l.tag, role: l.role, name: templ(l.name, p).sli
 export async function locate(page, loc, params, timeout = 6000) {
   const name = fillText(loc.name, params), text = fillText(loc.text, params);
   const tries = [];
-  if (loc.role && name) tries.push(["role+name", () => page.getByRole(loc.role, { name, exact: true })]);
+  // role + name first (a prefix match when the recorded name was a parameter plus stale text), then visible text,
+  // then stable attributes; the CSS path is only the last resort.
+  const lead = String(loc.name ?? "").match(/^(.*?\{\{\s*[a-z0-9_]+\s*\}\})/i)?.[1];
+  const prefix = loc.role && (loc.match === "prefix" ? name : lead && lead.length < String(loc.name).length ? fillText(lead, params) : null);
+  const prefixTry = prefix ? [["role+name-prefix", () => page.getByRole(loc.role, { name: new RegExp(`^\\s*${esc(prefix)}(\\s|$)`, "i") })]] : [];
+  if (loc.match === "prefix") tries.push(...prefixTry);
+  if (loc.role && name && loc.match !== "prefix") tries.push(["role+name", () => page.getByRole(loc.role, { name, exact: true })]);
+  if (loc.match !== "prefix") tries.push(...prefixTry);
   if (loc.role && name) tries.push(["role+name~", () => page.getByRole(loc.role, { name })]);
   if (text && text.length <= 120) tries.push(["text", () => page.getByText(text, { exact: true })]);
   if (loc.attrs?.id) tries.push(["id", () => page.locator(`[id="${CSS_escape(loc.attrs.id)}"]`)]);
   if (loc.attrs?.name) tries.push(["name", () => page.locator(`${loc.tag}[name="${CSS_escape(loc.attrs.name)}"]`)]);
-  // The recorded name had more than the parameter (e.g. a search result "rails 8.1.4 Full-stack web…"): match the
-  // element whose accessible name starts with the filled leading part ("sinatra …").
-  const lead = String(loc.name ?? "").match(/^(.*?\{\{\s*[a-z0-9_]+\s*\}\})/i)?.[1];
-  if (loc.role && lead && lead.length < String(loc.name).length) {
-    const re = new RegExp(`^\\s*${esc(fillText(lead, params))}(\\s|$)`, "i");
-    tries.push(["role+name-prefix", () => page.getByRole(loc.role, { name: re })]);
-  }
   if (loc.css) tries.push(["css", () => page.locator(loc.css)]);
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -149,7 +150,7 @@ export async function locate(page, loc, params, timeout = 6000) {
 const CSS_escape = (s) => String(s).replace(/["\\]/g, "\\$&");
 
 /** Summary of a trace for logs and records. */
-export const describeTraceStep = (s) => `${s.action}${s.locator ? ` ${s.locator.role || s.locator.tag} "${(s.locator.name || s.locator.text || s.locator.css || "").slice(0, 60)}"` : ""}${s.text ? ` "${s.text.slice(0, 60)}"` : ""}${s.keys ? ` ${s.keys.join("+")}` : ""}${s.to ? ` ${s.to.slice(0, 80)}` : ""}`;
+export const describeTraceStep = (s) => `${s.action}${s.locator ? ` ${s.locator.role || s.locator.tag} "${locLabel(s.locator, {})}"` : ""}${s.text ? ` "${s.text.slice(0, 60)}"` : ""}${s.keys ? ` ${s.keys.join("+")}` : ""}${s.to ? ` ${s.to.slice(0, 80)}` : ""}`;
 
 /** A trace is usable when it is the current version and has at least one step. */
 export const usableTrace = (t) => Boolean(t && t.v === TRACE_VERSION && Array.isArray(t.steps) && t.steps.length > 0 && t.steps.length <= MAX_TRACE_STEPS);
@@ -184,7 +185,7 @@ export async function runTraceStep(page, s, params, c) {
         await f.locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
         const box = await f.locator.boundingBox();
         if (!box) return fail(`element has no box: ${describeTraceStep(s)}`);
-        await act({ type: s.action, x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2), button: "left" }, `${s.action} ${s.locator.role || s.locator.tag} "${fillText(s.locator.name || s.locator.text, params).slice(0, 60)}" (by ${f.how})`);
+        await act({ type: s.action, x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2), button: "left" }, `${s.action} ${s.locator.role || s.locator.tag} "${locLabel(s.locator, params)}" (by ${f.how})`);
         break;
       }
       case "type": {
@@ -234,3 +235,156 @@ export async function runTraceStep(page, s, params, c) {
   return { ok: true, before, changed: page.url() !== before };
 }
 
+
+// ---------------------------------------------------------------- deterministic value return
+/**
+ * Extraction recipe: how to read the task's answer off the final page without a model.
+ *   { kind: "row", label, offset, regex }  the table row (th) or dt whose label matches {{param}}/text, `offset` rows
+ *                                         below it (infobox header rows like "Population" with the value one row down)
+ *   { kind: "css", css, regex }            an element by CSS path (id-anchored when possible)
+ * `regex` (optional) picks the value out of the element's text; `sample` is what the recording run read.
+ */
+export const VALUE_RE = {
+  version: "v?\\d+(?:\\.\\d+)+(?:[-.+][0-9A-Za-z.]+)?",
+  number: "[-−]?\\d[\\d,.]*\\d(?:\\s?(?:%|°[CF]?|km²|km2|sq mi|km|m|ft|mi|kg|lb|million|billion|[KMB])(?![A-Za-z]))?|\\d",
+};
+
+/** Runs in the page: find the element showing one of `candidates` (values from the model's answer) and describe how to read it. */
+export function deriveRecipeInPage({ candidates, labels }) {
+  const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
+  const low = (s) => norm(s).toLowerCase();
+  const cssPath = (el) => {
+    const path = [];
+    for (let n = el; n && n.nodeType === 1 && path.length < 6; n = n.parentElement) {
+      if (n.id && /^[A-Za-z][\w-]*$/.test(n.id)) { path.unshift(`#${n.id}`); break; }
+      const t = n.tagName.toLowerCase(), sibs = n.parentElement ? [...n.parentElement.children].filter((c) => c.tagName === n.tagName) : [];
+      path.unshift(sibs.length > 1 ? `${t}:nth-of-type(${sibs.indexOf(n) + 1})` : t);
+    }
+    return path.join(" > ");
+  };
+  const els = [...document.body.querySelectorAll("td, dd, th, dt, span, i, b, strong, em, p, li, h1, h2, h3, h4, h5, h6, a, div, code, time, small")];
+  for (const c of candidates) {
+    const cl = low(c);
+    if (cl.length < 1) continue;
+    let best = null;
+    for (const el of els) {
+      const t = low(el.innerText || el.textContent);
+      if (!t || t.length > 300 || !t.includes(cl)) continue;
+      if (!best || t.length < best.t.length) best = { el, t };
+    }
+    if (!best) continue;
+    const el = best.el;
+    const cell = el.closest("td, dd");
+    if (cell) {
+      if (cell.tagName === "DD") {
+        let dt = cell.previousElementSibling; while (dt && dt.tagName !== "DT") dt = dt.previousElementSibling;
+        if (dt) return { kind: "row", label: norm(dt.innerText).slice(0, 200), offset: 0, sample: norm(cell.innerText).slice(0, 300), candidate: c };
+      } else {
+        // walk up the table from the value's row to the nearest row whose th names one of the labels (a param), else the own th
+        const row = cell.closest("tr"), rows = row ? [...row.closest("table")?.querySelectorAll("tr") ?? []] : [];
+        const i = rows.indexOf(row);
+        for (let k = 0; i >= 0 && k <= Math.min(i, 8); k++) {
+          const th = rows[i - k].querySelector("th");
+          if (th && labels.some((l) => low(th.innerText).includes(low(l)))) return { kind: "row", label: norm(th.innerText).slice(0, 200), offset: k, sample: norm(cell.innerText).slice(0, 300), candidate: c };
+        }
+        const own = row?.querySelector("th");
+        if (own) return { kind: "row", label: norm(own.innerText).slice(0, 200), offset: 0, sample: norm(cell.innerText).slice(0, 300), candidate: c };
+      }
+    }
+    return { kind: "css", css: cssPath(el), sample: norm(el.innerText).slice(0, 300), candidate: c };
+  }
+  return null;
+}
+
+/** Runs in the page: apply a (filled) recipe; returns the element's text or null. */
+export function applyRecipeInPage({ recipe }) {
+  const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
+  const low = (s) => norm(s).toLowerCase();
+  if (recipe.kind === "css") { const el = document.querySelector(recipe.css); return el ? norm(el.innerText || el.textContent).slice(0, 1000) : null; }
+  if (recipe.kind === "row") {
+    const want = low(recipe.label);
+    const pick = (list) => list.find((x) => low(x.innerText) === want) ?? list.find((x) => low(x.innerText).startsWith(want)) ?? list.find((x) => low(x.innerText).includes(want));
+    const th = pick([...document.querySelectorAll("th")]);
+    if (th) {
+      const rows = [...th.closest("table").querySelectorAll("tr")], i = rows.indexOf(th.closest("tr"));
+      const td = rows[i + (recipe.offset || 0)]?.querySelector("td");
+      if (td) return norm(td.innerText).slice(0, 1000);
+    }
+    const dt = pick([...document.querySelectorAll("dt")]);
+    if (dt) { let dd = dt.nextElementSibling; while (dd && dd.tagName !== "DD") dd = dd.nextElementSibling; if (dd) return norm(dd.innerText).slice(0, 1000); }
+  }
+  return null;
+}
+
+/** Values worth looking for in a model's answer: **bold** spans, versions, numbers (longest first), minus the inputs. */
+export function answerCandidates(answer, params = {}) {
+  const a = String(answer ?? "");
+  const out = [];
+  for (const m of a.matchAll(/\*\*([^*]{1,120})\*\*/g)) out.push(m[1].trim());
+  for (const m of a.matchAll(new RegExp(VALUE_RE.version, "g"))) out.push(m[0]);
+  for (const m of a.matchAll(/\d[\d,]*(?:\.\d+)?/g)) if (m[0].replace(/\D/g, "").length >= 2) out.push(m[0]);
+  const inputs = Object.values(params).map((v) => String(v).toLowerCase());
+  const seen = new Set();
+  return out.map((s) => s.replace(/[.,;:]+$/, "").trim()).filter((s) => s.length >= 1 && !inputs.includes(s.toLowerCase()) && !seen.has(s) && seen.add(s))
+    .sort((x, y) => Number(/\d/.test(y)) - Number(/\d/.test(x)) || y.length - x.length).slice(0, 12);
+}
+
+/** The value regex for a sample: versions and numbers are generalized; other text is returned whole. */
+export function regexFor(candidate) {
+  const c = String(candidate ?? "").trim();
+  if (new RegExp(`^${VALUE_RE.version}$`).test(c)) return VALUE_RE.version;
+  if (/^[-−]?\d[\d,.]*$/.test(c)) return VALUE_RE.number;
+  const m = c.match(new RegExp(`^(${VALUE_RE.number})`));
+  if (m && /\d/.test(c)) return VALUE_RE.number;
+  return null;
+}
+
+/** The value from an element's text with a recipe's regex. */
+export function pickValue(text, recipe) {
+  if (text == null) return null;
+  const t = String(text).replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  if (!recipe.regex) return t.slice(0, 300);
+  const m = t.match(new RegExp(recipe.regex));
+  return m ? m[0].trim().replace(/[.,;:]+$/, "").slice(0, 300) : null;
+}
+
+/** Template a derived recipe for storage (labels that are inputs become {{param}}). */
+export function storeRecipe(r, params) {
+  if (!r) return null;
+  const regex = regexFor(r.candidate);
+  // a label that names an input keeps only the placeholder ("{{target_field}}", not "{{target_field}} (2023)[2]"): matched as a prefix
+  const label = r.kind === "row" ? (templ(r.label, params).match(/\{\{\s*[a-z0-9_]+\s*\}\}/i)?.[0] ?? templ(r.label, params)) : "";
+  return { kind: r.kind, ...(r.kind === "row" ? { label: label.slice(0, 200), offset: Math.max(0, Math.min(10, r.offset | 0)) } : { css: String(r.css).slice(0, 320) }), ...(regex ? { regex } : {}), sample: String(r.sample ?? "").slice(0, 300) };
+}
+export const fillRecipe = (r, params) => (r.kind === "row" ? { ...r, label: fillText(r.label, params) } : r);
+
+// ---------------------------------------------------------------- trace hygiene
+const placeholderLead = (name) => String(name ?? "").match(/^(\s*\{\{\s*[a-z0-9_]+\s*\}\})/i)?.[1]?.trim();
+/** Normalize a locator: a name that is a parameter plus stale extra text ("{{q}} 8.1.4 Full-stack…") keeps only the parameter, matched as a prefix. */
+export function cleanLocator(l) {
+  if (!l) return l;
+  const lead = placeholderLead(l.name);
+  if (lead && lead.length < String(l.name).trim().length) return { ...l, name: lead, text: placeholderLead(l.text) ?? lead, match: "prefix" };
+  return l;
+}
+const meaningfulLoc = (l) => Boolean(l && (l.role || l.name || l.attrs?.id || l.attrs?.name));
+const sameStep = (a, b) => a.action === b.action && JSON.stringify(a.locator ?? null) === JSON.stringify(b.locator ?? null) && a.text === b.text && JSON.stringify(a.keys ?? null) === JSON.stringify(b.keys ?? null) && a.to === b.to;
+/**
+ * Clean a trace before saving: drop scrolls (locators scroll their element into view and values are read from the
+ * DOM), clicks on nothing interactive that changed nothing, and repeated identical steps; normalize locators.
+ */
+export function cleanSteps(steps) {
+  const out = [];
+  for (const s0 of steps) {
+    const s = s0.locator ? { ...s0, locator: cleanLocator(s0.locator) } : { ...s0 };
+    if (s.action === "scroll") continue;
+    if ((s.action === "click" || s.action === "double_click") && !s.changes_url && !meaningfulLoc(s.locator)) continue;
+    const prev = out[out.length - 1];
+    if (prev && !prev.changes_url && sameStep(prev, s)) { prev.changes_url = prev.changes_url || s.changes_url; continue; }
+    out.push(s);
+  }
+  return out;
+}
+/** Human label for a locator in logs: the filled parameter or accessible name, never stale recorded text. */
+export const locLabel = (l, params) => fillText(l?.match === "prefix" ? l.name : placeholderLead(l?.name) ?? (l?.name || l?.text || l?.css || ""), params).slice(0, 60);

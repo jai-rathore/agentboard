@@ -173,7 +173,9 @@ export async function getDraft(ctx: AppContext, id: string) {
 
 /** A verified run's concrete action trace (see services/executor/src/trace.mjs): what deterministic replay executes. */
 const S = (n: number) => z.string().max(n);
-const LocatorZ = z.object({ tag: S(40), role: S(40), name: S(220), text: S(220), css: S(320), attrs: z.record(z.string().max(40), S(140)).default({}) });
+const LocatorZ = z.object({ tag: S(40), role: S(40), name: S(220), text: S(220), css: S(320), attrs: z.record(z.string().max(40), S(140)).default({}), match: z.enum(["exact", "prefix"]).optional() });
+/** How to read the answer off the final page without a model (see services/executor/src/trace.mjs). */
+const ExtractZ = z.object({ kind: z.enum(["row", "css"]), label: S(200).optional(), offset: z.number().int().min(0).max(10).optional(), css: S(320).optional(), regex: S(200).optional(), sample: S(300).optional() });
 export const TraceStepZ = z.object({
   action: z.enum(["click", "double_click", "type", "keypress", "scroll", "scroll_to_text", "select_option", "navigate"]),
   url: S(520), changes_url: z.boolean().default(false),
@@ -183,6 +185,7 @@ export const TraceStepZ = z.object({
 export const TraceZ = z.object({
   v: z.literal(1), start_url: S(520), steps: z.array(TraceStepZ).min(1).max(60),
   final: z.object({ url: S(520), viewport: z.array(S(60)).max(20), page: z.array(S(60)).max(20), title: z.array(S(60)).max(20) }),
+  extract: ExtractZ.optional(),
 });
 export type Trace = z.infer<typeof TraceZ>;
 const ReplayZ = z.object({
@@ -210,6 +213,8 @@ export const RunZ = z.object({
   duration_ms: z.number().int(),
   trace: TraceZ.optional(),
   replay: ReplayZ.optional(),
+  /** The value the run returned, read deterministically off the final page with the trace's extraction recipe. */
+  answer: z.object({ value: S(300).nullable(), method: z.enum(["deterministic", "none"]), source: S(200).nullable(), verified_by: z.enum(["deterministic", "verifier"]) }).optional(),
 });
 export type RunInput = z.infer<typeof RunZ>;
 
@@ -357,6 +362,7 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
     requested_by: requestedBy,
     trigger: requestedBy.via,
     ...(run.replay ? { replay: run.replay } : {}),
+    ...(run.answer ? { answer: run.answer } : {}),
     ...(run.success && run.trace ? { trace: run.trace } : {}),
   };
   const runRec = sysRecord(ctx, "skill_run", { skill: published?.cid ?? skillCid!, ...runSummary });
