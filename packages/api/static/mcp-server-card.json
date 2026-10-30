@@ -126,6 +126,16 @@
               "type": "string"
             }
           },
+          "params": {
+            "description": "same as inputs (run_skill's name for them)",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
           "challenge_id": {
             "description": "from the first try_skill call",
             "type": "string",

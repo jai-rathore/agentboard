@@ -214,7 +214,7 @@ async function replay(m, send, ask, isAborted) {
         replayInfo.trace_steps_done = i + 1; stepMs.push(Date.now() - tStep);
         // no mid-trace screenshots: the run's evidence is the final screenshot (and the signed action log)
       }
-      send({ type: "status", message: `Trace replayed in ${Date.now() - tTrace} ms (steps ${stepMs.join(", ")} ms; page open ${tTrace - t0} ms after the run started, Chromium launch ${launchMs} ms)` });
+      send({ type: "status", message: `Trace replayed in ${Date.now() - tTrace} ms (${stepMs.length ? `steps ${stepMs.join(", ")} ms; ` : ""}page open ${tTrace - t0} ms after the run started, Chromium launch ${launchMs} ms)` });
       if (replayInfo.mode === "trace+recovery") {
         history.push(`Recorded trace: steps 1-${replayInfo.trace_steps_done} were done without the model; step ${replayInfo.failed_step} (${describeTraceStep(trace.steps[replayInfo.failed_step - 1])}) failed: ${replayInfo.failed_reason}. Continue the task from the current screen.`);
         send({ type: "status", message: `Trace step ${replayInfo.failed_step} failed (${replayInfo.failed_reason.slice(0, 120)}); recovering with the model` });
@@ -384,7 +384,7 @@ async function replay(m, send, ask, isAborted) {
     // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
     const steps = cleanSteps(recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })));
     const runTrace = verdictFull.success && (steps.length || recipe) ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: finalChecks(texts, params, page.url()), ...(recipe ? { extract: recipe } : noValue ? { no_value: true } : {}) } : null;
-    if (replayInfo.mode === "trace") send({ type: "status", message: `Final page read, value extracted and checked in ${Date.now() - tFinal} ms` });
+    if (replayInfo.mode === "trace" && !failFast) send({ type: "status", message: `Final page read, value extracted and checked in ${Date.now() - tFinal} ms` });
     send({ type: "verdict", ...verdictFull, final_message: finalMessage, value });
     const gif = gifFrames.length ? makeGif(gifFrames) : null;
     const run = {

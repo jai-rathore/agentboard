@@ -53,16 +53,18 @@ export async function hybridSkillSearch(ctx: AppContext, q: string, candidateSql
   const within = `s.cid IN (SELECT cid FROM (${candidateSql}) c)`;
   const [fts, name, summary, vec] = await Promise.all([
     // all words first, then how many distinct query words a skill covers, then ts_rank_cd (name > summary > steps)
-    orq ? ids(`SELECT s.cid FROM skills s WHERE ${within} AND s.tsv @@ to_tsquery('english', $1)
-      ORDER BY (s.tsv @@ websearch_to_tsquery('english', $2)) DESC,
-        (SELECT count(*) FROM unnest($3::text[]) t WHERE numnode(to_tsquery('english', t)) > 0 AND s.tsv @@ to_tsquery('english', t)) DESC,
-        ts_rank_cd(s.tsv, to_tsquery('english', $1), 32) DESC LIMIT 50`, [orq, q, orq.split(" | ")]) : Promise.resolve([]),
+    orq ? ctx.db.query<{ cid: string; covered: number; terms: number }>(`SELECT s.cid,
+        (SELECT count(*)::int FROM unnest($3::text[]) t WHERE numnode(to_tsquery('english', t)) > 0 AND s.tsv @@ to_tsquery('english', t)) AS covered,
+        (SELECT count(*)::int FROM unnest($3::text[]) t WHERE numnode(to_tsquery('english', t)) > 0) AS terms
+      FROM skills s WHERE ${within} AND s.tsv @@ to_tsquery('english', $1)
+      ORDER BY (s.tsv @@ websearch_to_tsquery('english', $2)) DESC, covered DESC, ts_rank_cd(s.tsv, to_tsquery('english', $1), 32) DESC LIMIT 50`, [orq, q, orq.split(" | ")]).then((r) => r.rows) : Promise.resolve([]),
     ids(`SELECT s.cid FROM skills s WHERE ${within} AND word_similarity($1, s.name) > 0.5 ORDER BY word_similarity($1, s.name) DESC LIMIT 30`, [q]),
     ids(`SELECT s.cid FROM skills s WHERE ${within} AND word_similarity($1, s.summary) > 0.5 ORDER BY word_similarity($1, s.summary) DESC LIMIT 30`, [q]),
     qvec ? ids(`SELECT s.cid FROM skills s WHERE ${within} AND s.emb IS NOT NULL ORDER BY s.emb <=> $1::vector LIMIT 30`, [toPgVector(qvec)]) : Promise.resolve([]),
   ]);
   const hashed = ctx.embedder.model.startsWith("local-hash");
-  const lists: RankedList[] = [{ name: "fts", ids: fts, weight: 1 }, { name: "vector", ids: vec, weight: hashed ? 0.6 : 1 }, { name: "trigram_name", ids: name, weight: 0.5 }, { name: "trigram_summary", ids: summary, weight: 0.3 }];
+  const coverage = new Map(fts.map((r) => [r.cid, r.covered / Math.max(1, r.terms)]));
+  const lists: RankedList[] = [{ name: "fts", ids: fts.map((r) => r.cid), weight: 1 }, { name: "vector", ids: vec, weight: hashed ? 0.6 : 1 }, { name: "trigram_name", ids: name, weight: 0.5 }, { name: "trigram_summary", ids: summary, weight: 0.3 }];
   const fused = reciprocalRankFusion(lists);
   if (!fused.length) return [];
   const embs = new Map((await ctx.db.query<any>(`SELECT cid, emb::text AS emb FROM skills WHERE cid = ANY($1)`, [fused.map((f) => f.id)])).rows.map((r) => [r.cid, r.emb ? (JSON.parse(r.emb) as number[]) : null]));
@@ -71,6 +73,10 @@ export async function hybridSkillSearch(ctx: AppContext, q: string, candidateSql
     const cos = emb && qvec ? cosine(qvec, emb) : null;
     const onlyVector = Object.keys(f.ranks).length === 1 && f.ranks.vector !== undefined;
     if (onlyVector && (cos ?? 0) < ctx.embedder.thresholds.vectorOnlyMin) return []; // semantic-only matches must be close
+    // a full-text hit on a small share of the query's words (one of four), with no close vector or trigram match, is
+    // noise ("how many people live in a city" matching "city" in a shipping address): left out
+    const weakText = f.ranks.fts !== undefined && (coverage.get(f.id) ?? 0) < 1 / 3 && f.ranks.trigram_name === undefined && f.ranks.trigram_summary === undefined;
+    if (weakText && (cos ?? 0) < ctx.embedder.thresholds.vectorOnlyMin) return [];
     return [{ cid: f.id, rrf: f.score, ranks: f.ranks, cos }];
   });
 }

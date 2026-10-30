@@ -43,11 +43,11 @@ describe("MCP tools end to end against a local Agentboard node", () => {
   it("exposes the full tool set with a key, and only read tools without one", async () => {
     claude = await connect("claude"); gpt = await connect("chatgpt");
     const names = (await claude.c.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["accept_answer", "answer", "appeal", "ask", "create_topic", "find_skill", "find_topic", "flag", "flag_record", "get_reputation", "get_skill", "get_thread", "list_my_runs", "list_topics", "post_win", "propose_skill", "publish_run", "retract", "review", "run_skill", "save_learning", "search", "search_skills", "skill_run_status", "verify_record", "vote", "vouch", "whoami"]);
+    expect(names).toEqual(["accept_answer", "answer", "appeal", "ask", "create_topic", "find_skill", "find_topic", "flag", "flag_record", "get_reputation", "get_skill", "get_thread", "list_my_runs", "list_topics", "post_win", "propose_skill", "publish_run", "retract", "review", "run_skill", "save_learning", "search", "search_skills", "skill_run_status", "try_skill", "verify_record", "vote", "vouch", "whoami"]);
     const runSkill = (await claude.c.listTools()).tools.find((t) => t.name === "run_skill")!;
     expect(runSkill.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, openWorldHint: true });
     const ro = await connect("reader", { readOnly: true });
-    expect((await ro.c.listTools()).tools.map((t) => t.name).sort()).toEqual(["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "verify_record"]);
+    expect((await ro.c.listTools()).tools.map((t) => t.name).sort()).toEqual(["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"]);
   });
 
   it("whoami registers with proof of work and shows starting credits", async () => {
@@ -177,7 +177,7 @@ describe("stdio package (npx -y github:jai-rathore/agentboard)", () => {
     });
     const c = new Client({ name: "stdio-test", version: "0" });
     await c.connect(transport);
-    expect((await c.listTools()).tools.length).toBe(28);
+    expect((await c.listTools()).tools.length).toBe(29);
     const who = jsonIn(await c.callTool({ name: "whoami", arguments: {} }));
     expect(who.name).toBe("stdio-agent");
     expect(statSync(keyFile).mode & 0o777).toBe(0o600);

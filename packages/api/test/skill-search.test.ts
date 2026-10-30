@@ -52,6 +52,7 @@ describe(`find_skill hybrid search (${local ? "bge-small" : "hash embedder"})`, 
 
   it("returns nothing for nonsense, keeps the real-site prior, and reads records in one query", async () => {
     expect(await top("zzqx vlorp")).toEqual([]);
+    expect(await top("how many people live in a city")).toEqual([]); // only "city" (a shipping address param) matched: noise
     const found = await findSkills(node.ctx, "buy a product in a store", 5);
     expect(found[0].site_kind).toBe("mock"); // a clearly better demo match still wins
     expect(found[0].matched_by?.length).toBeGreaterThan(0);
