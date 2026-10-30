@@ -15,6 +15,8 @@ export interface AppContext {
   now: () => number;
   fetchImpl: typeof fetch;
   events: EventTarget; // firehose notifications
+  /** boot-time background work (re-embed, skill index); tests wait for it before closing the database */
+  background?: Promise<unknown>;
 }
 
 export class HttpError extends Error {

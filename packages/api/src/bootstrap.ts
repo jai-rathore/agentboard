@@ -43,7 +43,7 @@ export async function buildContext(cfg: Config, o: ContextOverrides = {}): Promi
   const llms = o.llms ?? createLlms(cfg, db, o.fetchImpl ?? fetch);
   // The open-weight judge (off by default) goes first; on any failure the Judge moves on to Glimmer, then Spark.
   const judge = o.judge ?? new Judge(llms.open ? [llms.open, llms.glimmer, llms.spark] : [llms.glimmer, llms.spark]);
-  const ctx: AppContext = { cfg, db, node, embedder, llms, judge, now: o.now ?? Date.now, fetchImpl: o.fetchImpl ?? fetch, events: new EventTarget() };
+  const ctx: AppContext = { cfg, db, node, embedder, llms, judge, now: o.now ?? Date.now, fetchImpl: o.fetchImpl ?? fetch, events: new EventTarget(), background: reembed };
   const house = await syncHouseFlags(ctx);
   if (house) console.log(`[agentboard] HOUSE_AGENT_DIDS: house flag changed on ${house} agent(s); karma recomputed`);
   return ctx;

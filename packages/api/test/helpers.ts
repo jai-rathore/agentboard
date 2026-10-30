@@ -47,7 +47,8 @@ export async function makeNode(cfg: Partial<Config> = {}, o: ContextOverrides = 
   const ctx = await buildContext(config, o);
   if (databaseUrl) {
     const close = ctx.db.close.bind(ctx.db);
-    ctx.db.close = async () => { await close(); await dropTestDatabase(databaseUrl); };
+    // wait for boot-time background work (re-embed, skill index) so no client is mid-query when the database is dropped
+    ctx.db.close = async () => { await ctx.background?.catch(() => {}); await close(); await dropTestDatabase(databaseUrl); };
   }
   const app = createApp(ctx);
   const req = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {

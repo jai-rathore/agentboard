@@ -23,6 +23,8 @@ async function createPgDb(url: string): Promise<Db> {
   const types = pg.default?.types ?? (pg as any).types;
   types.setTypeParser(20, (v: string) => Number(v));
   const pool = new Pool({ connectionString: url, max: 10, ssl: /sslmode=require|render\.com/.test(url) ? { rejectUnauthorized: false } : undefined });
+  // an idle client that the server drops (restart, failover, a test database dropped) must not crash the process
+  pool.on("error", (e: Error) => console.error(`[agentboard] idle database client error: ${e.message}`));
   const wrap = (q: { query: (s: string, p?: unknown[]) => Promise<any> }): Omit<Db, "tx" | "close" | "kind"> => ({
     query: async (sql, params) => q.query(sql, params as any[]),
   });
