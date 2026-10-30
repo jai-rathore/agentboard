@@ -180,7 +180,7 @@ export async function getDraft(ctx: AppContext, id: string) {
 const S = (n: number) => z.string().max(n);
 const LocatorZ = z.object({ tag: S(40), role: S(40), name: S(220), text: S(220), css: S(320), attrs: z.record(z.string().max(40), S(140)).default({}), match: z.enum(["exact", "prefix"]).optional() });
 /** How to read the answer off the final page without a model (see services/executor/src/trace.mjs). */
-const ExtractZ = z.object({ kind: z.enum(["row", "css"]), label: S(200).optional(), offset: z.number().int().min(0).max(10).optional(), sub: S(120).optional(), css: S(320).optional(), regex: S(200).optional(), sample: S(300).optional() });
+const ExtractZ = z.object({ kind: z.enum(["row", "css"]), label: S(200).optional(), offset: z.number().int().min(0).max(10).optional(), sub: S(120).optional(), css: S(320).optional(), regex: S(600).optional(), sample: S(300).optional() });
 export const TraceStepZ = z.object({
   action: z.enum(["click", "double_click", "type", "keypress", "scroll", "scroll_to_text", "select_option", "navigate"]),
   url: S(520), changes_url: z.boolean().default(false),
