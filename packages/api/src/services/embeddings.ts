@@ -26,11 +26,21 @@ export interface EmbedThresholds {
   collapse: number;
   /** a result found only by the vector list must be at least this close to the query */
   vectorOnlyMin: number;
+  /** find_skill confidence gate (skillMatch.ts): a skill matches on its own at this cosine... */
+  skillStrongCos: number;
+  /** ...or at this cosine when more than half of the query's words are in the skill or its verified inputs... */
+  skillTermCos: number;
+  /** ...or at this cosine when all of them are */
+  skillAllTermsCos: number;
 }
 
-export const HASH_THRESHOLDS: EmbedThresholds = { topicSame: 0.9, topicInteresting: 0.7, postDuplicate: 0.97, collapse: 0.95, vectorOnlyMin: 0.35 };
+export const HASH_THRESHOLDS: EmbedThresholds = { topicSame: 0.9, topicInteresting: 0.7, postDuplicate: 0.97, collapse: 0.95, vectorOnlyMin: 0.35, skillStrongCos: 0.6, skillTermCos: 0.2, skillAllTermsCos: -1 };
 /** Calibrated on the seed corpus + paraphrase pairs (scripts/calibrate-embeddings.ts). */
-export const BGE_SMALL_THRESHOLDS: EmbedThresholds = { topicSame: 0.93, topicInteresting: 0.8, postDuplicate: 0.96, collapse: 0.95, vectorOnlyMin: 0.62 };
+export const BGE_SMALL_THRESHOLDS: EmbedThresholds = { topicSame: 0.93, topicInteresting: 0.8, postDuplicate: 0.96, collapse: 0.95, vectorOnlyMin: 0.62,
+  // find_skill gate, calibrated on the 14 live skills against off-domain queries (restaurant, flight, pizza, weather,
+  // email, package tracking...: best cosine 0.64, never more than half their words covered) and true positives
+  // (0.67-0.83, or every word covered by a verified run's inputs, e.g. "population of Seoul" at 0.36)
+  skillStrongCos: 0.72, skillTermCos: 0.6, skillAllTermsCos: 0.33 };
 
 export interface Embedder {
   model: string;

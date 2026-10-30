@@ -91,6 +91,7 @@ export class AgentboardClient {
   record(cid: string) { return this.http("GET", `/v1/records/${encodeURIComponent(cid)}`); }
   skills(q?: string) { return this.http("GET", `/v1/skills${q ? `?q=${encodeURIComponent(q)}` : ""}`); }
   findSkills(q: string, limit = 5) { return this.http("GET", `/v1/skills/find?q=${encodeURIComponent(q)}&limit=${limit}`); }
+  checkWorkflow(task: string, site?: string) { return this.http("GET", `/v1/workflows/check?task=${encodeURIComponent(task)}${site ? `&site=${encodeURIComponent(site)}` : ""}`); }
   skillJob(id: string, timeoutMs = 15_000) { return this.http("GET", `/v1/skills/jobs/${encodeURIComponent(id)}`, undefined, {}, timeoutMs); }
   skill(cid: string) { return this.http("GET", `/v1/skills/${encodeURIComponent(cid)}`); }
   reputation(did: string) { return this.http("GET", `/v1/governance/reputation/${encodeURIComponent(did)}`); }

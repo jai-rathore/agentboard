@@ -16,7 +16,7 @@ const WEB = (process.env.WEB_URL || "https://agentboard-olive-pi.vercel.app").re
 const EXPECT = (process.env.EXPECT_COMMIT || "").trim();
 const WAIT_MS = Number(process.env.WAIT_MINUTES || 30) * 60_000;
 const UA = "agentboard-smoke/1 (+https://github.com/jai-rathore/agentboard; read-only)";
-const REMOTE_TOOLS = ["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"];
+const REMOTE_TOOLS = ["check_workflow", "find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"];
 
 const results = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -109,7 +109,7 @@ if (process.env.SKIP_API !== "1") {
     return `pow ${w.register_pow_bits} bits, challenge ${w.challenge_difficulty_bits} bits, ip ${ip ? JSON.stringify(ip) : "not published yet"}`;
   });
 
-  await check("API /mcp tools/list: exactly the 10 read-only tools plus the capped try_skill, no run_skill", async () => {
+  await check("API /mcp tools/list: exactly the 11 read-only tools plus the capped try_skill, no run_skill", async () => {
     const r = await req(`${API}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
     let body = r.json;
     if (!body) { const line = r.text.split("\n").find((l) => l.startsWith("data:")); body = line ? JSON.parse(line.slice(5)) : undefined; }
@@ -117,13 +117,30 @@ if (process.env.SKIP_API !== "1") {
     assert(Array.isArray(tools), `no tools (status ${r.status})`);
     const names = tools.map((t) => t.name).sort();
     assert(!names.includes("run_skill"), "run_skill is offered on the public endpoint");
-    assert(tools.length === 11, `${tools.length} tools: ${names.join(", ")}`);
+    assert(tools.length === 12, `${tools.length} tools: ${names.join(", ")}`);
     assert(JSON.stringify(names) === JSON.stringify(REMOTE_TOOLS), `tools ${names.join(", ")}`);
     for (const t of tools) assert(t.annotations?.readOnlyHint === (t.name !== "try_skill"), `${t.name} readOnlyHint wrong`);
     const card = (await req(`${API}/.well-known/mcp/server-card.json`)).json;
     const cardNames = (card?.tools ?? []).map((t) => t.name).sort();
     assert(JSON.stringify(cardNames) === JSON.stringify(names), `server card tools differ: ${cardNames.join(", ")}`);
-    return "11 tools (10 read-only + try_skill), server card matches";
+    return "12 tools (11 read-only + try_skill), server card matches";
+  });
+
+  await check("API find_skill precision: off-domain tasks get an explicit no-match; true positives first, at most 3, with a trust card", async () => {
+    for (const q of ["book a restaurant reservation", "book a flight from SFO to JFK", "order a pizza"]) {
+      const r = (await req(`${API}/v1/skills/find?q=${encodeURIComponent(q)}`)).json;
+      assert(Array.isArray(r?.matches) && r.matches.length === 0, `"${q}" matched ${(r?.matches ?? []).map((s) => s.slug).join(", ")}`);
+      assert(/no recently verified workflow/i.test(r.no_match?.message ?? ""), `"${q}": no no_match message`);
+    }
+    for (const [q, slug] of [["dollars to yen", "x-rates-exchange-rate"], ["latest release of a rust crate", "crates-io-version"]]) {
+      const r = (await req(`${API}/v1/skills/find?q=${encodeURIComponent(q)}&limit=10`)).json;
+      assert(r?.matches?.[0]?.slug === slug, `"${q}" -> ${(r?.matches ?? []).map((s) => s.slug).join(", ") || "nothing"}, want ${slug}`);
+      assert(r.matches.length <= 3, `"${q}": ${r.matches.length} results`);
+      assert(r.matches[0].trust?.task && r.matches[0].trust?.runs_7d, `"${q}": no trust card`);
+    }
+    const c = (await req(`${API}/v1/workflows/check?task=${encodeURIComponent("order a pizza")}`)).json;
+    assert(c?.verdict === "no_match" && c.executed === false && c.cost_usd === 0, `check_workflow pizza: ${c?.verdict}`);
+    return "restaurant/flight/pizza: no match; dollars to yen, rust crate: first; check_workflow read-only";
   });
 
   await check("API /v1/benchmarks and /v1/benchmarks/latest (latest headline benchmark: verified and reuse cheaper; 204 when none)", async () => {

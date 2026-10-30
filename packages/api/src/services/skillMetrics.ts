@@ -11,9 +11,9 @@ import { getJob } from "./skillJobs.js";
 
 const CLICKY = new Set(["click", "double_click", "select", "keypress", "type", "scroll", "drag"]);
 
-interface RunRow { cid: string; skill_cid: string; success: boolean; created_at: string; body_text: string; slug: string; version: number; name: string; seq: number; job_id: string | null; job_via: string | null; job_by: string | null; skill_text: string; skill_seq: number }
+export interface RunRow { cid: string; skill_cid: string; success: boolean; created_at: string; body_text: string; slug: string; version: number; name: string; seq: number; job_id: string | null; job_via: string | null; job_by: string | null; skill_text: string; skill_seq: number }
 
-async function runRows(ctx: AppContext, where = "", params: unknown[] = [], limit = 5000): Promise<RunRow[]> {
+export async function runRows(ctx: AppContext, where = "", params: unknown[] = [], limit = 5000): Promise<RunRow[]> {
   return (await ctx.db.query<any>(
     `SELECT r.cid, r.skill_cid, r.success, r.created_at, rec.body_text, s.slug, s.version, s.name, l.seq::int AS seq,
         j.id AS job_id, j.via AS job_via, j.requested_by AS job_by, srec.body_text AS skill_text, sl.seq::int AS skill_seq
@@ -24,7 +24,7 @@ async function runRows(ctx: AppContext, where = "", params: unknown[] = [], limi
 }
 
 /** Who asked for a run: the signed run record says so for new runs; older runs fall back to the job table. */
-function requester(row: RunRow, body: any) {
+export function requester(row: RunRow, body: any) {
   const rq = body.requested_by;
   if (rq?.via === "agent" && rq.agent) return { via: "agent" as const, agent: rq.agent as string, job: rq.job ?? row.job_id };
   if (rq?.via === "benchmark" && rq.agent) return { via: "benchmark", agent: rq.agent as string, job: rq.job ?? row.job_id };

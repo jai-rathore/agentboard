@@ -391,6 +391,33 @@ export function SignatureCheck({ entries }: { entries: { seq: number; log: { pre
   return <div className="sigcheck"><button onClick={check}>Check signatures in my browser</button>{res && <pre className="mono small">{res.join("\n")}</pre>}</div>;
 }
 
+const secs = (ms?: number | null) => (ms == null ? "unknown" : `${Math.round(ms / 100) / 10} s`);
+const dollars = (x?: number | null) => (x == null ? "unknown" : `$${x.toFixed(4)}`);
+/** The trust card (GET /v1/skills/:cid .trust, the same as find_skill's): computed from the signed records only. */
+export function TrustCard({ t }: { t: any }) {
+  const reuse = typeof t.time_cost?.reuse === "object" ? t.time_cost.reuse : null, cold = typeof t.time_cost?.cold === "object" ? t.time_cost.cold : null;
+  const id = t.identities ?? {};
+  return <div className="panel trust-card">
+    <h2>Trust card</h2>
+    <table className="tbl small"><tbody>
+      <tr><th>Site / task</th><td>{t.site} ({t.site_kind}) · {t.task}</td></tr>
+      <tr><th>Inputs</th><td className="mono">{Object.keys(t.input_schema ?? {}).join(", ") || "none"}</td></tr>
+      <tr><th>Example (real run)</th><td>{typeof t.example === "object" ? <><span className="mono">{JSON.stringify(t.example.input)}</span> → <b>{String(t.example.output ?? "(no value)")}</b> <Link to={`/skills/runs/${t.example.run}`}>run</Link></> : t.example}</td></tr>
+      <tr><th>Last verified run</th><td>{typeof t.last_verified_run === "object" ? <><Link to={`/skills/runs/${t.last_verified_run.run}`}>{ago(t.last_verified_run.at)}</Link></> : t.last_verified_run}</td></tr>
+      <tr><th>Runs, 7 / 30 days</th><td>{t.runs_7d.verified} verified, {t.runs_7d.failed} failed / {t.runs_30d.verified} verified, {t.runs_30d.failed} failed</td></tr>
+      <tr><th>Latest failure</th><td>{typeof t.latest_failure === "object" ? <><span className="mono">{JSON.stringify(t.latest_failure.input)}</span>: {t.latest_failure.reason} <Link to={`/skills/runs/${t.latest_failure.run}`}>run</Link></> : t.latest_failure}</td></tr>
+      <tr><th>Distinct inputs tested</th><td>{t.distinct_inputs_tested.total} ({t.distinct_inputs_tested.verified} verified)</td></tr>
+      <tr><th>Who ran it</th><td>operator (house): {id.operator_house?.runs ?? 0} runs{(id.own_agents ?? []).map((a: any) => <span key={a.did}> · {a.name}: {a.runs} runs <span className="badge house" title={a.label}>own agent, not independent</span></span>)} · seeded benchmark identities: {id.seeded_benchmark?.identities ?? 0} ({id.seeded_benchmark?.runs ?? 0} runs) · anonymous public: {id.anonymous_public?.runs ?? 0} runs · <b>independent agents: {id.independent_agents?.identities ?? 0}</b></td></tr>
+      <tr><th>Time and cost</th><td>reuse: {reuse ? `median ${secs(reuse.median_ms)}, ${reuse.median_model_calls} model calls, ${dollars(reuse.median_usd)} (${reuse.verified_runs} verified replays)` : String(t.time_cost?.reuse)} · cold: {cold ? `median ${secs(cold.median_ms)}, ${cold.median_model_calls} model calls, ${dollars(cold.median_usd)} (${cold.benchmarks} benchmark${cold.benchmarks === 1 ? "" : "s"})` : String(t.time_cost?.cold)}</td></tr>
+      <tr><th>Who pays</th><td>{t.time_cost?.who_pays}</td></tr>
+      <tr><th>Login · actions · approvals</th><td>login: {t.login_required} · {t.actions} · approvals: {Array.isArray(t.approvals) ? t.approvals.join("; ") : t.approvals}</td></tr>
+      <tr><th>Runs where · visibility</th><td>{t.runs_where} · {t.visibility}</td></tr>
+      <tr><th>If it fails</th><td>{t.on_failure}</td></tr>
+      <tr><th>Don't use it for</th><td>{(t.when_not_to_use ?? []).join("; ")}</td></tr>
+    </tbody></table>
+  </div>;
+}
+
 export function SkillPage({ cid }: { cid: string }) {
   const r = useData<any>(`/v1/skills/${cid}`, [cid]);
   if (r.loading) return <p className="muted">Loading…</p>;
@@ -411,6 +438,7 @@ export function SkillPage({ cid }: { cid: string }) {
     <p className="small replay-counts"><b>{plural(r.data.reuse?.replays ?? 0, "replay")}</b> so far ({r.data.reuse?.verified_replays ?? 0} verified, {r.data.reuse?.new_input_replays ?? 0} with new inputs) · <b>{badge.verified_runs_all_versions} of {badge.runs_all_versions ?? badge.verified_runs_all_versions}</b> signed runs verified{badge.versions > 1 ? ` across v1–v${latest_version}` : ""}, including the run that published the skill, which never counts as a replay.{heal_run && !runs.some((x: any) => x.record.cid === heal_run.record.cid) && <> This version was first verified by the v{prev_skill?.version} run that healed it.</>}</p>
     {version !== latest_version && <div className="superseded">This is v{version}. <Link to={`/s/${latest_cid}`}>v{latest_version} is the current version →</Link></div>}
     <div className="meta">v{version} · published {ago(skill.record.created_at)} · log #{skill.seq} · signed by node <span className="mono">{short(node)}</span></div>
+    {r.data.trust && <TrustCard t={r.data.trust} />}
     <div className="calls">
       <ModelCall model={b.recorder.model} capability={`recorded with ${b.recorder.capability}`} extra={usd(b.recorder.usage?.usd)} />
       {lb && <ModelCall model={lb.loop.model} capability={`replayed with ${lb.loop.capability}`} extra={`${lb.turns} turns · ${usd(lb.usage.usd)}`} />}

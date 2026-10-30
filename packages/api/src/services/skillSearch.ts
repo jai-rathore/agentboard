@@ -44,7 +44,7 @@ export async function indexSkills(db: Db, e: Embedder, batch = 16): Promise<numb
 export interface SkillHit { cid: string; rrf: number; ranks: Record<string, number>; cos: number | null }
 
 /** Ranked candidate cids among `candidateSql` (a SELECT of skill cids, e.g. the latest active versions). */
-export async function hybridSkillSearch(ctx: AppContext, q: string, candidateSql: string): Promise<SkillHit[]> {
+export async function hybridSkillSearch(ctx: AppContext, q: string, candidateSql: string, opts: { filter?: boolean } = {}): Promise<SkillHit[]> {
   // degrade gracefully: without an embedder the lexical lists still answer
   await indexSkills(ctx.db, ctx.embedder).catch((e) => console.error(`[agentboard] skill index: ${(e as Error).message}`));
   const orq = orTsQuery(q);
@@ -71,6 +71,7 @@ export async function hybridSkillSearch(ctx: AppContext, q: string, candidateSql
   return fused.flatMap((f) => {
     const emb = embs.get(f.id);
     const cos = emb && qvec ? cosine(qvec, emb) : null;
+    if (opts.filter === false) return [{ cid: f.id, rrf: f.score, ranks: f.ranks, cos }]; // the caller applies its own gate (skillMatch.ts)
     const onlyVector = Object.keys(f.ranks).length === 1 && f.ranks.vector !== undefined;
     if (onlyVector && (cos ?? 0) < ctx.embedder.thresholds.vectorOnlyMin) return []; // semantic-only matches must be close
     // a full-text hit on a small share of the query's words (one of four), with no close vector or trigram match, is

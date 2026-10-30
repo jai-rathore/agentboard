@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { AppContext } from "./context.js";
 import { HttpError } from "./context.js";
 import { museResponses, museSpend, type MuseKind } from "./services/muse.js";
+import { MAX_MATCHES, NO_MATCH_MESSAGE, CONTRIBUTE_HINT } from "./services/skillMatch.js";
 import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
 import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, createAgentFundedJob, refundAgentRun } from "./services/skillJobs.js";
 import { verifyRequestAuth } from "./requestAuth.js";
@@ -154,7 +155,33 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     return c.json(draft, 201);
   });
   app.get("/v1/skills/drafts/:id", async (c) => c.json(await getDraft(ctx, c.req.param("id"))));
-  app.get("/v1/skills/find", async (c) => c.json({ skills: await findSkills(ctx, c.req.query("q") ?? "", Number(c.req.query("limit") ?? 5)) }));
+  // check_workflow: the no-cost first call for a multi-step website task. Read-only: never runs anything, no model
+  // call, no credits. Same gate as find_skill; `site` (a host or name) narrows to skills that start on that site.
+  app.get("/v1/workflows/check", async (c) => {
+    const task = (c.req.query("task") ?? c.req.query("q") ?? "").trim(), site = (c.req.query("site") ?? "").trim().toLowerCase();
+    if (!task) throw new HttpError(400, "task_required", "pass task (the task in plain words) and optionally site");
+    const t0 = Date.now();
+    let found = await findSkills(ctx, site ? `${task} ${site.replace(/^https?:\/\//, "").replace(/^www\./, "")}` : task, MAX_MATCHES);
+    const siteKey = site.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+    if (siteKey) found = found.filter((s: any) => { try { const h = new URL(String(s.start_url).replace(/\{\{[^}]*\}\}/g, "x")).hostname.replace(/^www\./, ""); return h === siteKey || h.endsWith(`.${siteKey}`) || h.split(".").includes(siteKey); } catch { return false; } });
+    const best = found[0];
+    return c.json({
+      task, site: site || null, executed: false, model_calls: 0, cost_usd: 0, credits: 0, lookup_ms: Date.now() - t0,
+      verdict: best ? (best.trust?.last_verified_run !== "none yet" ? "verified_workflow_found" : "workflow_found_not_yet_verified") : "no_match",
+      ...(best ? {
+        best: best, alternatives: found.slice(1).map((s: any) => ({ slug: s.slug, name: s.name, match: s.match, site: s.trust?.site ?? null, url: s.url })),
+        next: best.public_replay ? `try_skill({slug: "${best.slug}", inputs: {...}}) on the public MCP endpoint (free to you, capped per day), or run_skill in the local server (npx -y github:jai-rathore/agentboard; ${ctx.cfg.skillsAgentRunCredits} credits per run)` : `run_skill in the local server (npx -y github:jai-rathore/agentboard; ${ctx.cfg.skillsAgentRunCredits} credits per run)`,
+      } : { message: siteKey ? `${NO_MATCH_MESSAGE.replace("this task", `this task on ${siteKey}`)}` : NO_MATCH_MESSAGE, contribute: CONTRIBUTE_HINT }),
+    });
+  });
+  app.get("/v1/skills/find", async (c) => {
+    const q = c.req.query("q") ?? "";
+    const t0 = Date.now();
+    const skills = await findSkills(ctx, q, Number(c.req.query("limit") ?? MAX_MATCHES));
+    // `skills` is kept for older clients; `matches` is the same list. An empty list is an explicit no-match.
+    return c.json({ query: q, matches: skills, skills, lookup_ms: Date.now() - t0, model_calls: 0, cost_usd: 0,
+      ...(q.trim() && !skills.length ? { no_match: { message: NO_MATCH_MESSAGE, contribute: CONTRIBUTE_HINT } } : {}) });
+  });
 
   // ---- run a published skill through the executor (MCP run_skill). Auth: the operator token, or a signed
   // agent request (Authorization: Agentboard ..., over "POST /v1/skills/run?h=<sha256 of the body>") that

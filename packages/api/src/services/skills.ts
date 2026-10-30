@@ -20,6 +20,9 @@ import { siteKind, SITE_LABEL, replayCountsBySlug } from "./skillMetrics.js";
 import { submitColdRun, benchmarkForJob } from "./benchmark.js";
 import { recomputeKarma } from "./reputation.js";
 import { hybridSkillSearch } from "./skillSearch.js";
+import { MAX_MATCHES, queryTerms, coverage, skillVocab, inputVocab, matchScore, selectMatches } from "./skillMatch.js";
+import { trustCards } from "./trustCard.js";
+import { cosine } from "./embeddings.js";
 
 export const ARTIFACT_MIME = ["video/mp4", "image/jpeg", "image/png", "image/gif"] as const;
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
@@ -466,50 +469,70 @@ export async function listSkills(ctx: AppContext, q?: string) {
   return [...rows.filter((r) => r.site_kind === "real"), ...rows.filter((r) => r.site_kind !== "real")];
 }
 
-/** How much better (in word-overlap match, 0..1) a demo (mock) skill must match to rank above a real-site one. */
-export const REAL_SITE_BOOST = 0.25;
+/** Ranking prior (added to the match score, never to the gate): real sites a little ahead of Agentboard's demo (mock) sites. */
+export const REAL_SITE_BOOST = 0.05;
+/** Ranking only: how much the fused retrieval rank (RRF relative to the best hit, 0..1) adds to the match score. */
+export const RRF_WEIGHT = 0.15;
 /**
  * find_skill: hybrid retrieval (services/skillSearch.ts: FTS + pg_trgm on name and summary + bge-small embeddings over
- * name, summary, params and steps, fused with RRF) over the latest active version of each skill. Then a prior:
- * real sites before Agentboard's demo (mock) sites, so a mock skill only ranks first when its relative match is more
- * than REAL_SITE_BOOST higher; then a little for verified runs. `match` is the relevance relative to the best
- * hit (1 = best), before the prior. Records are read in one query.
+ * name, summary, params and steps, fused with RRF) over the latest active version of each skill, plus any skill whose
+ * own words or verified inputs cover the query. Then the confidence gate (skillMatch.ts): an absolute match score
+ * (cosine + 0.3 x the share of the query's words found in the skill or its verified inputs), at most MAX_MATCHES (3)
+ * results, and [] when nothing clears it, so an off-domain task gets an explicit no-match. Each result carries a
+ * trust card (trustCard.ts) computed from the signed records. An empty query lists the latest skills (no gate).
  */
-export async function findSkills(ctx: AppContext, q: string, limit = 5) {
+export async function findSkills(ctx: AppContext, q: string, limit = MAX_MATCHES, opts: { trust?: boolean } = {}) {
   const query = q.trim().slice(0, 300);
-  const n = Math.min(10, Math.max(1, Number.isFinite(limit) ? limit : 5));
-  let ranked: { cid: string; rel: number; ranks?: Record<string, number> }[];
-  if (!query) ranked = (await ctx.db.query<any>(`${latestSkillsSql} ORDER BY s.created_at DESC LIMIT 200`)).rows.map((r) => ({ cid: r.cid, rel: 1 }));
+  let picked: { cid: string; score: number; cos: number | null; cov: number; ranks?: Record<string, number> }[];
+  const latest = (await ctx.db.query<any>(`SELECT l.*, rec.body_text FROM (${latestSkillsSql}) l JOIN records rec ON rec.cid = l.cid`)).rows;
+  const byCid = new Map(latest.map((r) => [r.cid, { r, body: JSON.parse(r.body_text) }]));
+  if (!query) picked = latest.sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at)).slice(0, 10).map((r) => ({ cid: r.cid, score: 1, cos: null, cov: 0 }));
   else {
-    const hits = await hybridSkillSearch(ctx, query, `SELECT cid FROM (${latestSkillsSql}) l`);
-    const top = hits[0]?.rrf ?? 1;
-    ranked = hits.map((h) => ({ cid: h.cid, rel: h.rrf / top, ranks: h.ranks }));
+    const n = Math.min(MAX_MATCHES, Math.max(1, Number.isFinite(limit) ? limit : MAX_MATCHES));
+    const terms = queryTerms(query);
+    // the inputs of each skill's verified runs (any version): a task phrased by its inputs ("population of Seoul") is covered
+    const inputs = new Map<string, Set<string>>();
+    for (const row of (await ctx.db.query<any>(`SELECT v.slug, rec.body->'params' AS p FROM skill_runs sr JOIN skills v ON v.cid = sr.skill_cid JOIN records rec ON rec.cid = sr.cid WHERE sr.success`)).rows) {
+      inputs.set(row.slug, inputVocab(Object.values(row.p ?? {}), inputs.get(row.slug)));
+    }
+    const cov = new Map(latest.map((r) => { const b = byCid.get(r.cid)!.body; return [r.cid, coverage(terms, skillVocab({ slug: r.slug, name: r.name, summary: r.summary, params: b.skill?.params, start_url: b.source?.start_url }), inputs.get(r.slug) ?? new Set())]; }));
+    const hits = await hybridSkillSearch(ctx, query, `SELECT cid FROM (${latestSkillsSql}) l`, { filter: false });
+    const hit = new Map(hits.map((h) => [h.cid, h]));
+    // candidates: the retrieval hits plus skills that cover at least half of the query's words (their cosine computed here)
+    const extra = latest.filter((r) => !hit.has(r.cid) && (cov.get(r.cid) ?? 0) >= 0.5).map((r) => r.cid);
+    const extraCos = new Map<string, number | null>();
+    if (extra.length) {
+      const qvec = await ctx.embedder.embed([query], "query").then((v) => v[0]).catch(() => null);
+      for (const e of (await ctx.db.query<any>(`SELECT cid, emb::text AS emb FROM skills WHERE cid = ANY($1)`, [extra])).rows) extraCos.set(e.cid, qvec && e.emb ? cosine(qvec, JSON.parse(e.emb)) : null);
+    }
+    const topRrf = hits[0]?.rrf || 1;
+    const cands = [...hits.map((h) => ({ cid: h.cid, cos: h.cos, rel: h.rrf / topRrf, ranks: h.ranks as Record<string, number> | undefined })), ...extra.map((cid) => ({ cid, cos: extraCos.get(cid) ?? null, rel: 0, ranks: { terms: 1 } as Record<string, number> | undefined }))].flatMap((c) => {
+      const x = byCid.get(c.cid);
+      if (!x) return [];
+      const mock = siteKind(ctx, x.body.source?.start_url) === "mock";
+      const cv = cov.get(c.cid) ?? 0;
+      const score = matchScore(c.cos, cv);
+      return [{ ...c, cov: cv, score, rank: score + RRF_WEIGHT * c.rel + (mock ? 0 : REAL_SITE_BOOST) + 0.02 * Math.tanh(Number(x.r.verified_runs) / 5) }];
+    });
+    picked = selectMatches(cands, ctx.embedder.thresholds, n);
   }
-  if (!ranked.length) return [];
-  const rows = (await ctx.db.query<any>(`SELECT l.*, rec.body_text FROM (${latestSkillsSql}) l JOIN records rec ON rec.cid = l.cid WHERE l.cid = ANY($1)`, [ranked.map((x) => x.cid)])).rows;
-  const byCid = new Map(rows.map((r) => [r.cid, r]));
-  const scored = ranked.flatMap((x) => {
-    const r = byCid.get(x.cid);
-    if (!r) return [];
-    const body = JSON.parse(r.body_text);
-    const mock = siteKind(ctx, body.source?.start_url) === "mock" ? 1 : 0;
-    // additive on the relative match (1 = best hit): a real site within REAL_SITE_BOOST of a demo site ranks first
-    const prior = (mock ? 0 : REAL_SITE_BOOST) + 0.02 * Math.tanh(Number(r.verified_runs) / 5);
-    return [{ r, body, score: x.rel, rank: x.rel + prior, mock, ranks: x.ranks }];
-  });
-  scored.sort((a, b) => b.rank - a.rank || a.mock - b.mock || b.r.verified_runs - a.r.verified_runs);
+  if (!picked.length) return [];
   const counts = await replayCountsBySlug(ctx);
+  const cards = opts.trust === false ? new Map() : await trustCards(ctx, picked.map((p) => ({ slug: byCid.get(p.cid)!.r.slug, name: byCid.get(p.cid)!.r.name, body: byCid.get(p.cid)!.body })));
   const out = [];
-  for (const { r, body, score, ranks } of scored.slice(0, n)) {
+  for (const { cid, score, cos, cov: cv, ranks } of picked) {
+    const { r, body } = byCid.get(cid)!;
     const rec = await recordingMs(ctx, body.source);
     out.push({
-      cid: r.cid, slug: r.slug, version: r.version, name: r.name, summary: r.summary, match: Math.round(score * 100) / 100, ...(ranks ? { matched_by: Object.keys(ranks) } : {}),
+      cid: r.cid, slug: r.slug, version: r.version, name: r.name, summary: r.summary,
+      ...(query ? { match: Math.round(score * 100) / 100, match_detail: { semantic: cos == null ? null : Math.round(cos * 100) / 100, term_coverage: Math.round(cv * 100) / 100 }, ...(ranks ? { matched_by: Object.keys(ranks) } : {}) } : {}),
       params: body.skill.params, start_url: body.source?.start_url ?? null, success_check: body.skill.success_check,
       risk_flags: effectiveRiskFlags(body.skill), approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, intent: body.skill.steps[g.index].intent, flags: g.flags })),
       site_kind: siteKind(ctx, body.source?.start_url), site_label: SITE_LABEL[siteKind(ctx, body.source?.start_url)],
       verified_runs: r.verified_runs, runs: r.runs, ...(counts.get(r.slug) ?? { replays: 0, verified_replays: 0, new_input_replays: 0 }), recording_ms: rec, healed: Boolean(body.healed_from),
       public_replay: publicReplayable(ctx, r.slug, body.skill),
       url: `${ctx.cfg.skillsWebUrl}/s/${r.cid}`,
+      ...(cards.has(r.slug) ? { trust: cards.get(r.slug) } : {}),
     });
   }
   return out;
@@ -569,6 +592,8 @@ export async function getSkill(ctx: AppContext, cidOrSlug: string) {
     reuse: (await replayCountsBySlug(ctx)).get(s.slug) ?? { replays: 0, verified_replays: 0, new_input_replays: 0 },
     public_replay: publicReplayable(ctx, s.slug, versions[0]?.cid && versions[0].cid !== cid ? JSON.parse((await rec(versions[0].cid))?.body_text ?? "null")?.skill : body.skill),
     badge: { verified: verifiedRuns.length > 0 || Boolean(healRun && JSON.parse(healRun.body_text).success), replayed: runs.length, runs_this_version: runs.length, verified_runs_this_version: verifiedRuns.length, runs_all_versions: allRuns, verified_runs_all_versions: allVerified, versions: versions.length, healed: Boolean(body.healed_from) },
+    // trust card (all versions of the slug, like find_skill's)
+    trust: (await trustCards(ctx, [{ slug: s.slug, name: s.name, body }])).get(s.slug) ?? null,
     node: ctx.node.did,
   };
 }

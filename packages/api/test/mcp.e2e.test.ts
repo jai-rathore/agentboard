@@ -43,11 +43,11 @@ describe("MCP tools end to end against a local Agentboard node", () => {
   it("exposes the full tool set with a key, and only read tools without one", async () => {
     claude = await connect("claude"); gpt = await connect("chatgpt");
     const names = (await claude.c.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual(["accept_answer", "answer", "appeal", "ask", "create_topic", "find_skill", "find_topic", "flag", "flag_record", "get_reputation", "get_skill", "get_thread", "list_my_runs", "list_topics", "post_win", "propose_skill", "publish_run", "retract", "review", "run_skill", "save_learning", "search", "search_skills", "skill_run_status", "try_skill", "verify_record", "vote", "vouch", "whoami"]);
+    expect(names).toEqual(["accept_answer", "answer", "appeal", "ask", "check_workflow", "create_topic", "find_skill", "find_topic", "flag", "flag_record", "get_reputation", "get_skill", "get_thread", "list_my_runs", "list_topics", "post_win", "propose_skill", "publish_run", "retract", "review", "run_skill", "save_learning", "search", "search_skills", "skill_run_status", "try_skill", "verify_record", "vote", "vouch", "whoami"]);
     const runSkill = (await claude.c.listTools()).tools.find((t) => t.name === "run_skill")!;
     expect(runSkill.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, openWorldHint: true });
     const ro = await connect("reader", { readOnly: true });
-    expect((await ro.c.listTools()).tools.map((t) => t.name).sort()).toEqual(["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"]);
+    expect((await ro.c.listTools()).tools.map((t) => t.name).sort()).toEqual(["check_workflow", "find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"]);
   });
 
   it("whoami registers with proof of work and shows starting credits", async () => {
@@ -140,13 +140,13 @@ describe("MCP tools end to end against a local Agentboard node", () => {
 });
 
 describe("remote MCP (Streamable HTTP: read tools plus the capped try_skill)", () => {
-  it("lists 11 tools: read tools and try_skill, never run_skill; searches", async () => {
+  it("lists 12 tools: read tools and try_skill, never run_skill; searches", async () => {
     const c = new Client({ name: "remote-test", version: "0" });
     await c.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`)));
     const tools = (await c.listTools()).tools;
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"]);
-    expect(names).toHaveLength(11);
+    expect(names).toEqual(["check_workflow", "find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"]);
+    expect(names).toHaveLength(12);
     expect(names).not.toContain("run_skill");
     expect(names).not.toContain("post_win"); // a signed write: local server only (the remote endpoint holds no key)
     const tryTool = tools.find((t) => t.name === "try_skill")!;
@@ -159,7 +159,10 @@ describe("remote MCP (Streamable HTTP: read tools plus the capped try_skill)", (
     expect(text(off)).toMatch(/public_replay_disabled/);
     const r = await c.callTool({ name: "search", arguments: { query: "pgvector render" } });
     expect(text(r)).toMatch(/pgvector index on Render Postgres/);
-    expect(text(await c.callTool({ name: "find_skill", arguments: { query: "helpdesk" } }))).toMatch(/No skills match/);
+    expect(text(await c.callTool({ name: "find_skill", arguments: { query: "helpdesk" } }))).toMatch(/No recently verified workflow for this task/);
+    const chk = await c.callTool({ name: "check_workflow", arguments: { task: "book a restaurant reservation" } });
+    expect(text(chk)).toMatch(/No recently verified workflow/);
+    expect((chk.structuredContent as any)).toMatchObject({ verdict: "no_match", executed: false, model_calls: 0, cost_usd: 0 });
     await c.close();
   });
 });
@@ -177,7 +180,7 @@ describe("stdio package (npx -y github:jai-rathore/agentboard)", () => {
     });
     const c = new Client({ name: "stdio-test", version: "0" });
     await c.connect(transport);
-    expect((await c.listTools()).tools.length).toBe(29);
+    expect((await c.listTools()).tools.length).toBe(30);
     const who = jsonIn(await c.callTool({ name: "whoami", arguments: {} }));
     expect(who.name).toBe("stdio-agent");
     expect(statSync(keyFile).mode & 0o777).toBe(0o600);

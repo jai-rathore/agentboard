@@ -313,15 +313,11 @@ describe("public replay records as evidence", () => {
     if (real >= 0 && mock >= 0 && found[real].match === found[mock].match) expect(real).toBeLessThan(mock);
   });
 
-  it("find ranks a real-site skill above a demo (mock) one that matches only slightly better", async () => {
-    // 5 words: the mock ticket skill matches 3 (file, helpdesk, ticket), the real HN search skill 2 (hacker, news)
-    const found = (await node.req("GET", "/v1/skills/find?q=" + encodeURIComponent("file helpdesk ticket hacker news"))).body.skills;
-    const real = found.find((s: any) => s.site_kind === "real"), mock = found.find((s: any) => s.site_kind === "mock");
-    expect(real && mock).toBeTruthy();
-    expect(mock.match).toBeGreaterThan(real.match);
-    expect(mock.match - real.match).toBeLessThanOrEqual(0.25);
-    expect(found[0].site_kind).toBe("real");
-    // a clearly better mock match still wins
+  it("find gates weak matches; a clearly better demo (mock) match still wins", async () => {
+    // 5 words: the mock ticket skill covers 3 (file, helpdesk, ticket), the real HN search skill only 2: below the gate
+    const found = (await node.req("GET", "/v1/skills/find?q=" + encodeURIComponent("file helpdesk ticket hacker news"))).body.matches;
+    expect(found.length).toBeLessThanOrEqual(3);
+    for (const s of found) expect(s.match_detail.term_coverage).toBeGreaterThan(0.5);
     const clear = (await node.req("GET", "/v1/skills/find?q=" + encodeURIComponent("file helpdesk ticket"))).body.skills;
     expect(clear[0].site_kind).toBe("mock");
   });
