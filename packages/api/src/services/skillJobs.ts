@@ -46,7 +46,8 @@ export function checkStartUrl(recorded: string, requested?: string) {
   let a: URL, b: URL;
   try { a = new URL(recorded); b = new URL(requested); } catch { throw new HttpError(400, "start_url", "start_url must be an absolute URL"); }
   if (a.origin !== b.origin) throw new HttpError(400, "start_url_origin", `start_url must stay on ${a.origin}, where the skill was recorded`);
-  return b.toString();
+  // keep {{param}} placeholders as written (URL() encodes the braces; the executor fills them with the run's inputs)
+  return b.toString().replace(/%7B%7B([a-z0-9_]+)%7D%7D/gi, "{{$1}}");
 }
 
 export async function createJob(ctx: AppContext, req: JobRequest, by: { requested_by: string; via: "operator" | "agent" | "benchmark" }) {

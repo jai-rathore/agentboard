@@ -90,6 +90,7 @@ describe("safety and time saved", () => {
   it("runs stay on the recorded site", () => {
     expect(checkStartUrl("https://a.test/demo/helpdesk/", "https://a.test/demo/helpdesk/?v=2")).toBe("https://a.test/demo/helpdesk/?v=2");
     expect(() => checkStartUrl("https://a.test/x", "https://evil.test/x")).toThrow(/must stay on/);
+    expect(checkStartUrl("https://a.test/company/{{company_number}}", "https://a.test/company/{{company_number}}")).toBe("https://a.test/company/{{company_number}}"); // placeholders kept for the executor
   });
 });
 
