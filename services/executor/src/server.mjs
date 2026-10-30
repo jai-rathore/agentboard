@@ -124,6 +124,9 @@ async function runJob(id) {
   await chain;
 }
 
+/** An input that names the value's row stays a final check even when the page text missed it (a page still streaming in):
+ *  a published trace whose final checks lost the input would fail every later replay ("showed none of the parameter values"). */
+const keepRowInputs = (f, rowBound) => { for (const k of rowBound ?? []) if (![...f.viewport, ...f.page].includes(k)) f.viewport.push(k); return f; };
 /** The extraction recipe is a row named by an input ("{{target_field}}"); the scroll step names the same input. */
 const inputsIn = (t) => [...String(t ?? "").matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi)].map((x) => x[1]);
 const rowNamesInputs = (rc) => Boolean(rc && rc.kind === "row" && inputsIn(rc.label).length);
@@ -325,6 +328,17 @@ async function replay(m, send, ask, isAborted) {
     await page.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
     closePrev();
     const tFinal = Date.now();
+    // a replayed trace reads the final page as soon as its DOM is parsed; a page that streams its table in (x-rates with a
+    // 0-step trace) may not show the row yet: wait (up to 5 s) until the recipe finds its value or the page has loaded
+    if (replayInfo.mode === "trace" && !failFast && trace?.extract) {
+      const until = Date.now() + 5000;
+      while (Date.now() < until) {
+        const got = await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(trace.extract, params), scroll: false }).catch(() => null);
+        if (got != null && pickValue(got, trace.extract) != null) break;
+        if ((await page.evaluate(() => document.readyState).catch(() => "complete")) === "complete") break;
+        await page.waitForTimeout(200);
+      }
+    }
     const texts = await page.evaluate(pageTextInPage).catch(() => ({ viewport: "", page: "", title: "" }));
     // ---- deterministic value return: read the answer off the page with the trace's extraction recipe
     const extractWith = async (recipe) => (recipe ? pickValue(await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: false }).catch(() => null), recipe) : null);
@@ -404,7 +418,7 @@ async function replay(m, send, ask, isAborted) {
     const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `infobox/table row "${rowLabel}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier", model_text: finalMessage ? finalMessage.slice(0, 400) : null, binding: { ok: binding.ok, checked: binding.checked, by: binding.by, reason: binding.reason.slice(0, 300), ...(unboundNote ? { rejected: unboundNote.slice(0, 300) } : {}) } };
     // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
     const steps = cleanSteps(recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })));
-    const runTrace = verdictFull.success && (steps.length || recipe) ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: finalChecks(texts, params, page.url()), ...(recipe ? { extract: recipe } : noValue ? { no_value: true } : {}) } : null;
+    const runTrace = verdictFull.success && (steps.length || recipe) ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: keepRowInputs(finalChecks(texts, params, page.url()), [...rowBound, ...Object.entries(binding.by ?? {}).filter(([, how]) => how === "row").map(([k]) => k)]), ...(recipe ? { extract: recipe } : noValue ? { no_value: true } : {}) } : null;
     if (replayInfo.mode === "trace" && !failFast) send({ type: "status", message: `Final page read, value extracted and checked in ${Date.now() - tFinal} ms` });
     send({ type: "verdict", ...verdictFull, final_message: finalMessage, value });
     const gif = gifFrames.length ? makeGif(gifFrames) : null;

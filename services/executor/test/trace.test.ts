@@ -347,5 +347,9 @@ describe("infobox rows: label variants, dates, sections, honest misses", () => {
     const texts = { viewport: "Seoul Population Metro 26,037,000", page: "", title: "Seoul - Wikipedia" };
     expect(checkFinal(final, texts, { q: "Seoul", f: "Metro population" }, "https://w.test/wiki/Seoul").ok).toBe(false);
     expect(checkFinal(final, texts, { q: "Seoul", f: "Metro population" }, "https://w.test/wiki/Seoul", { rowBound: ["f"], rowLabel: "Population › Metro" })).toMatchObject({ ok: true });
+    // a trace published while the page was still streaming in lost the input from its final checks: the row still counts
+    const thin = { url: "https://x.test/table/", viewport: [], page: [], title: [] };
+    expect(checkFinal(thin, { viewport: "", page: "", title: "" }, { c: "Indian Rupee" }, "https://x.test/table/").ok).toBe(false);
+    expect(checkFinal(thin, { viewport: "", page: "", title: "" }, { c: "Indian Rupee" }, "https://x.test/table/", { rowBound: ["c"], rowLabel: "Indian Rupee" })).toMatchObject({ ok: true });
   });
 });

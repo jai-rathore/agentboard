@@ -114,6 +114,8 @@ export function checkFinal(final, texts, params, url, opts = {}) {
   one(final.viewport, `${texts.viewport}\n${texts.page}`, "on the page");
   one(final.page, texts.page, "in the page");
   one(final.title, texts.title, "in the page title");
+  // an input that names the value's row is checked by that row even when an older trace's final checks missed it
+  for (const k of byRow) if (k in params && ![...(final.viewport ?? []), ...(final.page ?? [])].includes(k)) checks.push(`"${params[k]}" names the row "${String(opts.rowLabel ?? "").slice(0, 80)}"`);
   if (checks.length + fails.length <= 1) return { ok: false, checks, reason: "the trace's final page showed none of the parameter values" };
   if (!checks.length && !fails.length) return { ok: false, checks, reason: "the trace's final page showed none of the parameter values" };
   return fails.length ? { ok: false, checks, reason: `missing: ${fails.join("; ")}` } : { ok: true, checks };
