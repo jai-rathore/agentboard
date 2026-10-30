@@ -461,6 +461,8 @@ export function answerCandidates(answer, params = {}) {
 export function regexFor(candidate) {
   const c = String(candidate ?? "").trim();
   if (new RegExp(`^${VALUE_RE.version}$`).test(c)) return VALUE_RE.version;
+  // a calendar date ("28 February 2026") is read whole, not as its day number
+  if (new RegExp(`^${DATE_RE}$`, "i").test(c)) return DATE_RE;
   if (/^[-−]?\d[\d,.]*$/.test(c)) return VALUE_RE.number;
   const m = c.match(new RegExp(`^(${VALUE_RE.number})`));
   if (m && /\d/.test(c)) return VALUE_RE.number;
@@ -481,7 +483,7 @@ export function pickValue(text, recipe) {
   const inputRow = recipe.kind === "row" && /\{\{\s*[a-z0-9_]+\s*\}\}/i.test(String(recipe.label ?? ""));
   if (inputRow) t = t.replace(/\[[^\]]{1,20}\]/g, "").replace(/\s+/g, " ").trim();
   // (a unit is a whole unit: "2,757 m3/s" is 2,757, not "2,757 m")
-  const m = t.match(new RegExp(inputRow && recipe.regex === VALUE_RE.number ? recipe.regex.replace("(?![A-Za-z])", "(?![A-Za-z0-9²³/])") : recipe.regex));
+  const m = t.match(new RegExp(inputRow && recipe.regex === VALUE_RE.number ? recipe.regex.replace("(?![A-Za-z])", "(?![A-Za-z0-9²³/])") : recipe.regex, recipe.regex === DATE_RE ? "i" : ""));
   if (inputRow && recipe.regex === VALUE_RE.number) {
     const d = t.match(new RegExp(DATE_RE, "i"));
     if (d && (!m || d.index <= m.index + 2)) return d[0].trim().slice(0, 300);
@@ -493,9 +495,11 @@ export function pickValue(text, recipe) {
 /** Template a derived recipe for storage (labels that are inputs become {{param}}). */
 export function storeRecipe(r, params) {
   if (!r) return null;
-  const regex = regexFor(r.candidate);
   // a label that names an input keeps only the placeholder ("{{target_field}}", not "{{target_field}} (2023)[2]"): matched as a prefix
   const label = r.kind === "row" ? (templ(r.label, params).match(/\{\{\s*[a-z0-9_]+\s*\}\}/i)?.[0] ?? templ(r.label, params)) : "";
+  // a row the input names holds any kind of value (pickValue reads a date, a figure or text there): keep the figure regex
+  let regex = regexFor(r.candidate);
+  if (regex === DATE_RE && /\{\{/.test(label)) regex = VALUE_RE.number;
   // a side sub-row (Urban / Metro / Density) is kept only when the field asked for it; otherwise replay picks the main figure
   const askedText = String(fillText(label, params) ?? "").toLowerCase();
   const sideSub = r.sub && /^(urban|metro|density|rank)/i.test(String(r.sub)) && !askedText.includes(String(r.sub).toLowerCase().split(/\s+/)[0]);

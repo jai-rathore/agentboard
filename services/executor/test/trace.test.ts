@@ -59,6 +59,12 @@ describe("trace: hygiene and value helpers", () => {
     expect(answerCandidates("Latest version: **4.2.1** (released October 10)", { gem_name: "sinatra" })[0]).toBe("4.2.1");
     expect(regexFor("4.2.1")).toMatch(/\\d\+/);
     expect(pickValue("Version 4.2.1 · MIT", { kind: "css", regex: regexFor("8.1.4") })).toBe("4.2.1");
+    // a date answer is read whole ("Last accounts made up to 28 February 2026"), not as its day number
+    expect(pickValue("31 December 2025", { kind: "css", regex: regexFor("28 February 2026") })).toBe("31 December 2025");
+    expect(pickValue("made up to 31 March 2026", { kind: "css", regex: regexFor("28 February 2026") })).toBe("31 March 2026");
+    expect(regexFor("1,234")).toBe(regexFor("12"));
+    expect(storeRecipe({ kind: "row", label: "Born", offset: 0, sample: "14 March 1879", candidate: "14 March 1879" }, { target_field: "Born" }).regex).toBe(regexFor("12")); // input-named row: any value kind
+    expect(storeRecipe({ kind: "css", css: "p > strong", sample: "28 February 2026", candidate: "28 February 2026" }, { company_number: "00445790" }).regex).toBe(regexFor("1 May 2020"));
     expect(pickValue("717,710 (city)", { kind: "row", regex: regexFor("139,875") })).toBe("717,710");
     expect(pickValue("8,848.86 m (29,031.7 ft) Ranked 1st", { kind: "row", regex: regexFor("8,848.86 m (29,031.7 ft)") })).toBe("8,848.86 m");
     expect(pickValue("Python", { kind: "css" })).toBe("Python");
