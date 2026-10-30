@@ -11,7 +11,7 @@ const DAY = 86_400_000;
 const median = (xs: number[]) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const r4 = (x: number | null) => (x == null ? null : Math.round(x * 10000) / 10000);
 const host = (u?: string | null) => { try { return new URL(String(u ?? "").replace(/\{\{[^}]*\}\}/g, "x")).hostname.replace(/^www\./, ""); } catch { return null; } };
-const shortReason = (s: string) => s.replace(/^Not verified:\s*/i, "").replace(/\s*Final URL \S+\.?\s*$/, "").slice(0, 220);
+const shortReason = (s: string) => { const t = s.replace(/^Not verified:\s*/i, "").replace(/\s*Final URL \S+\.?\s*$/, "").trim(); return t.length > 200 ? `${t.slice(0, 197).replace(/\s+\S*$/, "")}…` : t; };
 
 export const RUNS_WHERE = "Agentboard's hosted Playwright executor (headless Chromium) on Render; nothing runs on the caller's machine";
 export const VISIBILITY = "public: every run's inputs, result, final screenshot and the node-signed, hash-chained run record";
@@ -65,7 +65,6 @@ export async function trustCards(ctx: AppContext, skills: { slug: string; name: 
     const reuse = ok.filter((p) => p.kind === "replay");
     const reuseTrace = reuse.filter((p) => p.body.replay?.mode === "trace");
     const colds = benches.filter((b) => b.skill_slug === s.slug).map((b) => b.runs?.cold).filter((c) => c?.success);
-    const failReasons = [...new Map(bad.map((p) => [shortReason(String(p.body.verdict?.evidence ?? p.body.replay?.fail_fast ?? "")), p])).entries()].filter(([r]) => r).slice(0, 2);
     const h = host(startUrl);
     out.set(s.slug, {
       site: h ?? "unknown", site_kind: SITE_LABEL[kind], task: s.name,
@@ -76,7 +75,7 @@ export async function trustCards(ctx: AppContext, skills: { slug: string; name: 
         ...(readOnly ? ["changing anything on the site: it only reads"] : []),
         "anything behind a login (not supported)",
         "an easy lookup you can already do with one API call: call that API instead",
-        ...failReasons.map(([r, p]) => `inputs the site does not have, e.g. ${JSON.stringify(p.body.params ?? {})}: ${r}`),
+        ...(bad.length ? [`inputs like the failed ones (latest_failure; ${bad.length} failed run${bad.length === 1 ? "" : "s"} in total, each public)`] : []),
       ],
       last_verified_run: ok[0] ? { at: new Date(ok[0].row.created_at).toISOString(), run: ok[0].row.cid } : "none yet",
       runs_7d: window(7), runs_30d: window(30),

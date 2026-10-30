@@ -109,7 +109,7 @@ describe(`find_skill hybrid search (${local ? "bge-small" : "hash embedder"})`, 
     expect(t.identities.independent_agents).toMatchObject({ identities: 0, runs: 0 });
     expect(t.actions).toMatch(/^read-only/);
     expect(t.approvals).toBe("none");
-    expect(t.when_not_to_use.join(" ")).toMatch(/Mount Fuji/);
+    expect(t.when_not_to_use.join(" ")).toMatch(/1 failed run/);
   });
 
   it("check_workflow: read-only, no cost; site narrows to that host", async () => {
