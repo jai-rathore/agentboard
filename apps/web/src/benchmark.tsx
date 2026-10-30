@@ -24,9 +24,9 @@ export function BenchmarkStat({ empty }: { empty?: ReactNode } = {}) {
 
 export function BenchmarkPage({ id }: { id?: string }) {
   const list = useData<any>("/v1/benchmarks");
-  // The headline is the latest benchmark where both runs verified AND reuse was cheaper; others stay in the history, labeled.
+  // The headline (the API's headline_id: pinned, else the latest where both runs verified, reuse was cheaper and the values matched); others stay in the history, labeled.
   const all: any[] = list.data?.benchmarks ?? [];
-  const latestId = id ?? all.find((x) => x.headline_eligible)?.id;
+  const latestId = id ?? list.data?.headline_id ?? all.find((x) => x.headline_eligible)?.id;
   const one = useData<any>(latestId ? `/v1/benchmarks/${latestId}` : null, [latestId]);
   if (!id && list.loading) return <p className="muted">Loading…</p>;
   if (list.error) return <p className="err">{list.error}</p>;

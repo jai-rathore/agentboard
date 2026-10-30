@@ -226,6 +226,21 @@ describe("reuse benchmark", () => {
     expect(row).toMatchObject({ cid: out.cid, verified: true, reuse_cheaper: false, headline_eligible: false });
     expect((await req("GET", "/v1/benchmarks/latest")).body.cid).toBe(head.cid);
   });
+
+  it("a pinned headline stays the headline when a newer eligible benchmark lands; unpinned, the newest eligible one leads", async () => {
+    const head = (await req("GET", "/v1/benchmarks/latest")).body;
+    node.ctx.cfg.headlineBenchmark = head.id;
+    try {
+      const out: any = await runBenchmark(opts({ input: "Lima" }));
+      const list = (await req("GET", "/v1/benchmarks")).body;
+      expect(list.benchmarks[0]).toMatchObject({ cid: out.cid, headline_eligible: true, is_headline: false });
+      expect(list.headline_id).toBe(head.id);
+      expect(list.benchmarks.find((b: any) => b.id === head.id).is_headline).toBe(true);
+      expect((await req("GET", "/v1/benchmarks/latest")).body.cid).toBe(head.cid);
+      node.ctx.cfg.headlineBenchmark = "00000000-0000-0000-0000-000000000000"; // a pin that is not (or no longer) eligible is ignored
+      expect((await req("GET", "/v1/benchmarks/latest")).body.cid).toBe(out.cid);
+    } finally { node.ctx.cfg.headlineBenchmark = null; }
+  });
 });
 
 describe("benchmark values must match for a headline", () => {

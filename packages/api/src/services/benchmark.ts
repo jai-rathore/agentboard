@@ -326,7 +326,8 @@ const benchRows = async (ctx: AppContext, where = "", params: unknown[] = [], li
   .map((x) => ({ cid: x.cid, author: x.author, created_at: x.created_at, sig: x.sig, seq: x.seq, log: { prev_hash: x.prev_hash, entry_hash: x.entry_hash }, body: JSON.parse(x.body_text) }));
 
 export async function listBenchmarks(ctx: AppContext) {
-  return { benchmarks: (await benchRows(ctx)).map((r) => present(ctx, r)), method: METHOD };
+  const head = await latestBenchmark(ctx);
+  return { benchmarks: (await benchRows(ctx)).map((r) => ({ ...present(ctx, r), is_headline: r.body?.benchmark === head?.id })), headline_id: head?.id ?? null, method: METHOD };
 }
 
 /** Both runs verified. */
@@ -341,9 +342,15 @@ export const benchmarkHeadlineable = (body: any) => benchmarkVerified(body) && r
 /** Both agents returned the same value (recorded in the signed comparison; older benchmarks did not record it). */
 export const valuesMatched = (body: any) => body?.comparison?.values_match === true;
 
-/** The latest headline benchmark (verified, reuse cheaper, same value); `any` returns the latest one whatever its result. */
+/**
+ * The headline benchmark (verified, reuse cheaper, same value): the pinned one (cfg.headlineBenchmark) while it is
+ * eligible, else the latest eligible one; `any` returns the latest one whatever its result.
+ */
 export async function latestBenchmark(ctx: AppContext, opts: { any?: boolean } = {}) {
-  const r = (await benchRows(ctx, "", [], 200)).find((x) => opts.any || benchmarkHeadlineable(x.body));
+  const rows = await benchRows(ctx, "", [], 200);
+  const pin = opts.any ? null : ctx.cfg.headlineBenchmark;
+  const r = (pin ? rows.find((x) => String(x.body?.benchmark ?? "").toLowerCase() === pin && benchmarkHeadlineable(x.body)) : undefined)
+    ?? rows.find((x) => opts.any || benchmarkHeadlineable(x.body));
   return r ? present(ctx, r) : null;
 }
 
