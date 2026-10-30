@@ -115,11 +115,20 @@ const pages: Record<string, (q: URLSearchParams, path: string) => string> = {
   "/table/": () => `<title>Exchange Rates table</title><table><thead><tr><th>US Dollar</th><th>1.00 USD</th><th>inv. 1.00 USD</th></tr></thead><tbody><tr><td>Euro</td><td><a href="/e">0.895817</a></td><td>1.116299</td></tr><tr><td>British Pound</td><td><a href="/g">0.741203</a></td><td>1.349159</td></tr><tr><td>Japanese Yen</td><td><a href="/j">157.869642</a></td><td>0.006334</td></tr></tbody></table>`,
   "/wiki": (_q, path) => { const t = decodeURIComponent(path.slice(6)); const pop = t === "Oslo" ? "717,710" : "139,875"; return `<title>${t} - Wiki</title><h1>${t}</h1><table class="infobox"><tr><th>Country</th><td>Somewhere</td></tr><tr><th colspan="2">Population (${t === "Oslo" ? 2024 : 2023})</th></tr><tr><th>• City</th><td>${pop}</td></tr><tr><th>• Density</th><td>1,500/km2 (3,900/sq mi)</td></tr><tr><th>• Urban</th><td>${t === "Oslo" ? "1,064,235" : "200,000"}</td></tr><tr><th>• Metro</th><td>${t === "Oslo" ? "1,588,457" : "250,000"}</td></tr><tr><th>Elevation</th><td>12 m</td></tr></table><p>Population figures are estimates.</p>`; },
 };
+// varied infoboxes (from real Wikipedia layouts): label variants, dates, plain sections, bullet sub-rows, text fields
+pages["/fact"] = (_q, path) => ({
+  "/fact/Peak": `<table class="infobox"><tr><th colspan="2">Highest point</th></tr><tr><th>Elevation</th><td>8,848.86 m (29,031.7 ft)[note 2] Ranked 1st</td></tr><tr><th>Prominence</th><td>8,848.86 m Ranked 1st</td></tr></table>`,
+  "/fact/Fuji": `<table class="infobox"><tr><th colspan="2">Highest point</th></tr><tr><th>Prominence</th><td>3,776 m (12,388 ft)[1] Ranked 35th</td></tr><tr><th>Country</th><td>Japan</td></tr></table><p>Its elevation is often quoted.</p><table><tr><td>Elevation</td><td>9 m</td></tr></table>`,
+  "/fact/Metro": `<table class="infobox"><tr><th>Area</th><td>Seoul Metropolitan</td></tr><tr><th colspan="2">Area[3]</th></tr><tr><th> • Special metropolitan city</th><td>605.21 km2 (233.67 sq mi)</td></tr><tr><th>Elevation</th><td>38 m (125 ft)</td></tr><tr><th>Highest elevation (Bukhansan)</th><td>836.5 m (2,744 ft)</td></tr><tr><th colspan="2">Population (Q1 2026)[4]</th></tr><tr><th> • Special metropolitan city</th><td>9,579,449</td></tr><tr><th> • Metro</th><td>26,037,000</td></tr><tr><th> • Metro density</th><td>2,053/km2 (5,320/sq mi)</td></tr></table>`,
+  "/fact/Town": `<table class="infobox"><tr><th>Population</th><td>Metropolitan France</td></tr><tr><th>Population (Jan 2026[4])</th><td>2,047,602</td></tr><tr><th>Highest elevation[5]</th><td>2,017 m (6,617 ft)</td></tr></table>`,
+  "/fact/Tower": `<table class="infobox"><tr><th colspan="2">Height</th></tr><tr><th>Architectural</th><td>300 m (984 ft)[2]</td></tr><tr><th>Tip</th><td>330 m (1,083 ft)</td></tr><tr><th>Opened:</th><td>30 June 1894; 132 years ago</td></tr></table>`,
+  "/fact/Person": `<table class="infobox"><tr><th>Born</th><td>Maria Salomea Skłodowska 7 November 1867 Warsaw</td></tr><tr><th>Founded</th><td>April 1, 1976 (50 years ago), in Los Altos</td></tr><tr><th>Nationality</th><td>Polish; French</td></tr><tr><th colspan="2">Discharge</th></tr><tr><th> • average</th><td>2,757 m3/sec[7]</td></tr></table>`,
+}[path] ?? "nf");
 async function newPage() {
   const page = await (await browser.newContext({ viewport: { width: 960, height: 600 } })).newPage();
   await page.route("**/*", (route: any) => {
     const u = new URL(route.request().url());
-    const key = u.pathname.startsWith("/wiki/") ? "/wiki" : u.pathname;
+    const key = u.pathname.startsWith("/wiki/") ? "/wiki" : u.pathname.startsWith("/fact/") ? "/fact" : u.pathname;
     const f = pages[key];
     return f ? route.fulfill({ contentType: "text/html", body: `<!doctype html><meta charset=utf-8>${f(u.searchParams, u.pathname)}` }) : route.fulfill({ status: 404, body: "nf" });
   });
@@ -295,4 +304,48 @@ describe.skipIf(!chromium)("fail fast in headless Chromium (x-rates)", () => {
     // layout drift: the label IS on the page but the recorded element is gone -> not fail-fast (the model recovers)
     expect(missingInputs({ action: "click", locator: { name: "{{target_currency}}", text: "" } }, { target_currency: "Euro" }, text)).toEqual([]);
   }, 30000);
+});
+
+describe("infobox rows: label variants, dates, sections, honest misses", () => {
+  it("reads the row the field names across real infobox layouts, and says when there is none", async () => {
+    if (!browser) return;
+    const p = await newPage();
+    const recipe = { kind: "row", label: "{{f}}", offset: 1, sub: "City", regex: regexFor("9,600,000") };
+    const read = async (path: string, f: string) => { await p.goto(SITE + path); const r = await p.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, { f }), withLabel: true }); return r ? { value: pickValue(r.text, recipe), label: r.label } : null; };
+    const probe = async (path: string, f: string) => { await p.goto(SITE + path); return p.evaluate(applyRecipeInPage, { recipe: { ...fillRecipe(recipe, { f }), probe: true } }); };
+    expect(await read("/fact/Peak", "Elevation")).toEqual({ value: "8,848.86 m", label: "Elevation" });
+    expect(await read("/fact/Peak", "elevation")).toMatchObject({ value: "8,848.86 m" });
+    // a section header with plain rows: its first row, labeled as such (not the side figure "Prominence ... 1st")
+    expect(await read("/fact/Peak", "Highest point")).toEqual({ value: "8,848.86 m", label: "Highest point › Elevation" });
+    // no Elevation row in the fact box: no value (another table or the prose never stands in), and the probe says so
+    expect(await read("/fact/Fuji", "Elevation")).toBeNull();
+    expect(await probe("/fact/Fuji", "Elevation")).toEqual({ found: false, label: null });
+    expect(await probe("/fact/Peak", "Elevation")).toEqual({ found: true, label: "Elevation" });
+    // a text field
+    expect(await read("/fact/Fuji", "Country")).toEqual({ value: "Japan", label: "Country" });
+    // the hero: the city row under "Population (Q1 2026)", the metro row only when asked
+    expect(await read("/fact/Metro", "Population")).toEqual({ value: "9,579,449", label: "Population (Q1 2026) › Special metropolitan city" });
+    expect(await read("/fact/Metro", "Metro population")).toEqual({ value: "26,037,000", label: "Population (Q1 2026) › Metro" });
+    expect(await read("/fact/Metro", "Population (Q1 2026)")).toMatchObject({ value: "9,579,449" });
+    // exact "Elevation" beats "Highest elevation"; "Highest elevation (Bukhansan)" when asked; a header with figures beats a text row
+    expect(await read("/fact/Metro", "Elevation")).toEqual({ value: "38 m", label: "Elevation" });
+    expect(await read("/fact/Metro", "Highest elevation")).toEqual({ value: "836.5 m", label: "Highest elevation (Bukhansan)" });
+    expect(await read("/fact/Metro", "Area")).toEqual({ value: "605.21 km2", label: "Area › Special metropolitan city" });
+    // "Population (Jan 2026[4])" with its own value beats a text row labeled "Population"; "Elevation" finds "Highest elevation[5]"
+    expect(await read("/fact/Town", "Population")).toEqual({ value: "2,047,602", label: "Population (Jan 2026)" });
+    expect(await read("/fact/Town", "Elevation")).toEqual({ value: "2,017 m", label: "Highest elevation" });
+    expect(await read("/fact/Tower", "Height")).toEqual({ value: "300 m", label: "Height › Architectural" });
+    // dates are read whole; a trailing colon on the label is ignored; a unit is a whole unit
+    expect(await read("/fact/Tower", "Opened")).toEqual({ value: "30 June 1894", label: "Opened:" });
+    expect(await read("/fact/Person", "Born")).toMatchObject({ value: "7 November 1867" });
+    expect(await read("/fact/Person", "Founded")).toMatchObject({ value: "April 1, 1976" });
+    expect(await read("/fact/Person", "Nationality")).toMatchObject({ value: "Polish" });
+    expect(await read("/fact/Person", "Discharge")).toEqual({ value: "2,757", label: "Discharge › average" });
+  }, 30000);
+  it("checks the final page with an input that names the value's row", () => {
+    const final = { url: "https://w.test/wiki/{{q}}", viewport: ["q", "f"], page: [], title: ["q"] };
+    const texts = { viewport: "Seoul Population Metro 26,037,000", page: "", title: "Seoul - Wikipedia" };
+    expect(checkFinal(final, texts, { q: "Seoul", f: "Metro population" }, "https://w.test/wiki/Seoul").ok).toBe(false);
+    expect(checkFinal(final, texts, { q: "Seoul", f: "Metro population" }, "https://w.test/wiki/Seoul", { rowBound: ["f"], rowLabel: "Population › Metro" })).toMatchObject({ ok: true });
+  });
 });

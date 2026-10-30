@@ -96,7 +96,7 @@ export function finalChecks(texts, params, url) {
 }
 
 /** Deterministic verification of a replay's final page against the trace's final checks. */
-export function checkFinal(final, texts, params, url) {
+export function checkFinal(final, texts, params, url, opts = {}) {
   if (!final) return { ok: false, checks: [], reason: "no final checks in the trace" };
   const checks = [], fails = [];
   // the final page is the same page (origin + path, with this run's parameter values) as in the verified run
@@ -107,7 +107,9 @@ export function checkFinal(final, texts, params, url) {
     const qOk = (() => { try { const tq = new URL(final.url.replace(/\{\{/g, "%7B%7B").replace(/\}\}/g, "%7D%7D")).searchParams, w = new URL(want).searchParams, u = new URL(url).searchParams; for (const [k, v] of tq) if (/%7B%7B|\{\{/i.test(v) || /\{\{/.test(decodeURIComponent(v))) { if (norm(u.get(k)) !== norm(w.get(k))) return false; } return true; } catch { return true; } })();
     (path(want) === path(url) && qOk ? checks : fails).push(`final page ${want.slice(0, 160)}`);
   }
-  const one = (list, hay, label) => { for (const k of list ?? []) { if (!(k in params)) continue; const v = params[k]; (has(hay, v) ? checks : fails).push(`"${v}" ${label}`); } };
+  // an input that names the row the value was read from ("Metro population" → the "Population › Metro" row) is on the page as that row
+  const byRow = new Set(opts.rowBound ?? []);
+  const one = (list, hay, label) => { for (const k of list ?? []) { if (!(k in params)) continue; const v = params[k]; if (!has(hay, v) && byRow.has(k)) { checks.push(`"${v}" names the row "${String(opts.rowLabel ?? "").slice(0, 80)}"`); continue; } (has(hay, v) ? checks : fails).push(`"${v}" ${label}`); } };
   // viewport-recorded values are checked on the page: idle scrolls are dropped from saved traces
   one(final.viewport, `${texts.viewport}\n${texts.page}`, "on the page");
   one(final.page, texts.page, "in the page");
@@ -289,6 +291,9 @@ export function deriveRecipeInPage({ candidates, labels }) {
     const path = [];
     for (let n = el; n && n.nodeType === 1 && path.length < 14; n = n.parentElement) {
       if (n.id && /^[A-Za-z][\w-]*$/.test(n.id) && !/\d{3,}/.test(n.id)) { path.unshift(`#${n.id}`); break; }
+      // a test id names the element's role on the page ("UnitHeader-version"): stable across items, unlike its position
+      const tid = ["data-test-id", "data-testid"].map((a) => [a, n.getAttribute(a)]).find(([, v]) => v && /^[A-Za-z][\w.-]{2,80}$/.test(v) && !/\d{3,}/.test(v));
+      if (tid && document.querySelectorAll(`[${tid[0]}="${tid[1]}"]`).length === 1) { path.unshift(`[${tid[0]}="${tid[1]}"]`); break; }
       const t = n.tagName.toLowerCase(), sibs = n.parentElement ? [...n.parentElement.children].filter((c) => c.tagName === n.tagName) : [];
       path.unshift(sibs.length > 1 ? `${t}:nth-of-type(${sibs.indexOf(n) + 1})` : t);
       if (path.length >= 3 && document.querySelector(path.join(" > ")) === el) break;
@@ -299,11 +304,15 @@ export function deriveRecipeInPage({ candidates, labels }) {
   for (const c of candidates) {
     const cl = low(c);
     if (cl.length < 1) continue;
+    // the verifier quoted what the final screenshot showed: an element on screen wins over the same text further down
+    // (pkg.go.dev's header version, not a "since v1.12.0" note deep in the docs); then the tightest element
+    const onScreen = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth; };
     let best = null;
     for (const el of els) {
       const t = low(el.innerText || el.textContent);
       if (!t || t.length > 300 || !t.includes(cl)) continue;
-      if (!best || t.length < best.t.length) best = { el, t };
+      const vis = onScreen(el);
+      if (!best || (vis && !best.vis) || (vis === best.vis && t.length < best.t.length)) best = { el, t, vis };
     }
     if (!best) continue;
     const el = best.el;
@@ -340,21 +349,50 @@ export function applyRecipeInPage({ recipe, scroll, withLabel }) {
   const low = (s) => norm(s).toLowerCase();
   if (recipe.kind === "css") { const el = document.querySelector(recipe.css); show(el); const text = el ? norm(el.innerText || el.textContent).slice(0, 1000) : null; return withLabel && text != null ? { text, label: null } : text; }
   if (recipe.kind === "row") {
+    // Row labels vary by page: "Elevation" / "Highest elevation", "Population" / "Population (2020)[12]" / "Population (Jan 2026)",
+    // "Born:" / "• Born". Labels are compared cleaned (footnotes, bullets, a trailing colon dropped), then without a
+    // parenthetical, then as whole words; among equally good matches a row with a figure wins over a text one.
+    const clean = (x) => norm(x).replace(/\[[^\]]*\]/g, "").replace(/^[•·\-\s]+/, "").replace(/\s*[:：]\s*$/, "").replace(/\s+/g, " ").trim();
+    const lab = (x) => clean(x).toLowerCase();
+    const base = (x) => x.replace(/\s*\([^)]*\)?/g, " ").replace(/\s+/g, " ").trim();
+    const escRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const word = (hay, w) => Boolean(w) && new RegExp(`(^|[^\\p{L}\\p{N}])${escRe(w)}($|[^\\p{L}\\p{N}])`, "u").test(hay);
     // a field that names a sub-row ("Metro population", "urban area population") looks up the header ("Population") and that sub-row
     const SUBWORD = /\b(metro(?:politan)?(?: area)?|urban(?: area)?|city proper|city|municipality|total|land|water|density|rank)\b/;
-    let want = low(recipe.label), named = null;
+    const allTh = [...document.querySelectorAll("th")];
+    let want = lab(recipe.label), named = null;
     const nm = want.match(SUBWORD);
-    if (nm && want.replace(nm[0], "").trim()) { const headerHas = [...document.querySelectorAll("th")].some((x) => low(x.innerText).includes(want)); if (!headerHas) { named = nm[1]; want = want.replace(nm[0], "").replace(/\s+/g, " ").trim(); } }
-    const pick1 = (list) => list.find((x) => low(x.innerText) === want) ?? list.find((x) => low(x.innerText).startsWith(want)) ?? list.find((x) => low(x.innerText).includes(want));
+    if (nm && want.replace(nm[0], "").trim()) { const headerHas = allTh.some((x) => lab(x.innerText).includes(want)); if (!headerHas) { named = nm[1]; want = want.replace(nm[0], "").replace(/\s+/g, " ").trim(); } }
+    const wantBase = base(want);
+    // 0 exact, 1 same without a parenthetical, 2 the field as whole words ("Highest elevation"), 3 its base as whole words; 9 no match
+    const score = (el) => { const l = lab(el.innerText); if (!l || l.length > 120) return 9; const lb = base(l); return l === want ? 0 : lb === want || lb === wantBase ? 1 : word(l, want) ? 2 : wantBase && word(lb, wantBase) ? 3 : 9; };
     // a fact box (infobox / sidebar) first: an article can have later tables with the same label
     const factBox = (x) => Boolean(x.closest(".infobox, [class*='infobox'], aside, [role=complementary]"));
-    const pick = (list) => pick1(list.filter(factBox)) ?? pick1(list);
-    const th = pick([...document.querySelectorAll("th")]);
+    const rowsOf = (th) => { const t = th.closest("table"); const rows = t ? [...t.querySelectorAll("tr")] : []; return { rows, i: rows.indexOf(th.closest("tr")) }; };
+    const valueText = (th) => { const { rows, i } = rowsOf(th); if (i < 0) return ""; const own = rows[i].querySelector("td"); if (own && norm(own.innerText)) return norm(own.innerText); const nx = rows[i + 1]?.querySelector("td"); return nx ? norm(nx.innerText) : ""; };
+    const best = (list, strict) => {
+      const c = list.map((el, n) => ({ el, n, s: score(el) })).filter((x) => x.s < (strict ? 2 : 9) && rowsOf(x.el).i >= 0);
+      if (!c.length) return null;
+      // exact-or-base (0/1) beats word matches (2/3); then a row with a figure; then the closer match; then page order
+      const tier = (x) => (x.s <= 1 ? 0 : 1), num = (x) => (/\d/.test(valueText(x.el)) ? 0 : 1);
+      c.sort((a, b) => tier(a) - tier(b) || num(a) - num(b) || a.s - b.s || a.n - b.n);
+      return c[0].el;
+    };
+    const th = best(allTh.filter(factBox), false) ?? best(allTh.filter((x) => !factBox(x)), true);
+    if (recipe.probe && th) return { found: true, label: clean(th.innerText) };
     if (th) {
-      const rows = [...th.closest("table").querySelectorAll("tr")], i = rows.indexOf(th.closest("tr"));
+      const { rows, i } = rowsOf(th);
       // the recorded offset first; a header row without a value cell looks a few rows further (infobox sub-rows)
       // a sub-row label ("Metro" under "Population") wins over the recorded offset when the page has it
-      const block = []; for (const r of rows.slice(i + 1, i + 10)) { if (!r.querySelector("td")) break; block.push(r); } // rows up to the next header
+      // in an infobox, a section header with no value of its own ("Population (2020)") owns only the "• …" rows below it;
+      // the next plain row ("Prominence" under "Highest point") is another field, never the header's value
+      const bullet = (r) => /^\s*[•·]/.test(r.querySelector("th")?.innerText ?? "");
+      const headerOnly = !rows[i].querySelector("td") && Boolean(th.closest(".infobox"));
+      let block = []; for (const r of rows.slice(i + 1, i + 10)) { if (!r.querySelector("td")) break; block.push(r); } // rows up to the next header
+      // a header with "• …" sub-rows owns only those; a header over plain rows ("Height": Architectural, Tip) is a section
+      // whose first row is the figure ("Highest point" → its Elevation row), read as is (no city/metro choice)
+      const plainSection = headerOnly && block.length > 0 && !bullet(block[0]);
+      if (headerOnly && !plainSection) { const k = block.findIndex((r) => !bullet(r)); if (k >= 0) block = block.slice(0, k); }
       const subName = (r) => low(r.querySelector("th")?.innerText).replace(/^[•·\-\s]+/, "");
       const hasNum = (r) => /\d/.test(r.querySelector("td")?.innerText ?? "");
       // which sub-row: the one the field names; else the main figure (City / Municipality / Total / Capital city…), never
@@ -363,13 +401,14 @@ export function applyRecipeInPage({ recipe, scroll, withLabel }) {
       const MAIN = /^(city|capital|municipality|total|town|village|commune|borough|county|district|state|province|country|national|estimate|census|overall|all)\b/;
       const perArea = (r) => /\/\s*(km|sq)/i.test(r.querySelector("td")?.innerText ?? ""); // a density, not a count
       const namedRows = named ? block.filter((r) => (named.startsWith("metro") ? /^(metro|cma\b|msa\b)/ : new RegExp(`^${named.split(" ")[0]}`)).test(subName(r)) && !perArea(r)) : [];
-      const subRow = (named ? namedRows.find((r) => subName(r) === named) ?? namedRows[0] : null)
+      const subRow = (plainSection ? block.find((r) => norm(r.querySelector("td")?.innerText)) : null)
+        ?? (named ? namedRows.find((r) => subName(r) === named) ?? namedRows[0] : null)
         ?? (!named ? block.find((r) => MAIN.test(subName(r)) && hasNum(r)) : null)
         ?? (recipe.sub && !SIDE.test(low(recipe.sub)) ? block.find((r) => subName(r).startsWith(low(recipe.sub))) : null)
         ?? (!named ? block.find((r) => !SIDE.test(subName(r)) && hasNum(r)) : null);
       // the label's own value cell first (e.g. "Elevation"); for a header row ("Population (2024)") the sub-row, then the offset
       const sideOffset = !named && recipe.offset > 0 && SIDE.test(subName(rows[i + recipe.offset] ?? document.createElement("tr")));
-      const tryRows = [i, subRow ? rows.indexOf(subRow) : -1, sideOffset ? -1 : i + (recipe.offset || 0), i + 1, i + 2, i + 3].filter((k, x, a) => k >= i && a.indexOf(k) === x);
+      const tryRows = (plainSection ? [subRow ? rows.indexOf(subRow) : -1] : [i, subRow ? rows.indexOf(subRow) : -1, sideOffset ? -1 : i + (recipe.offset || 0), i + 1, i + 2, i + 3]).filter((k, x, a) => k >= i && a.indexOf(k) === x && (!headerOnly || k === i || block.includes(rows[k])));
       const wantsArea = /density|per /.test(want + " " + (named ?? ""));
       for (const k of tryRows) {
         const td = rows[k]?.querySelector("td"); if (k !== i && !wantsArea && rows[k] && perArea(rows[k])) continue;
@@ -385,9 +424,13 @@ export function applyRecipeInPage({ recipe, scroll, withLabel }) {
       }
     }
     // a table whose rows are labeled by their first cell (a rates table: "Japanese Yen | 157.87 | 0.0063"): the cell after the label
-    const tdl = th ? null : pick([...document.querySelectorAll("tr > td:first-child")].filter((x) => x.nextElementSibling?.tagName === "TD"));
+    const hasInfobox = Boolean(document.querySelector(".infobox"));
+    const tdl = th || hasInfobox ? null : best([...document.querySelectorAll("tr > td:first-child")].filter((x) => x.nextElementSibling?.tagName === "TD"), false);
+    if (recipe.probe && tdl) return { found: true, label: clean(tdl.innerText) };
     if (tdl) { const td = tdl.nextElementSibling; show(td); const text = norm(td.innerText).slice(0, 1000); return withLabel ? { text, label: norm(tdl.innerText).replace(/\[[^\]]*\]/g, "").trim() } : text; }
-    const dt = pick([...document.querySelectorAll("dt")]);
+    const dtBest = (list) => { const c = list.map((el, n) => ({ el, n, s: score(el) })).filter((x) => x.s < 9).sort((a, b) => a.s - b.s || a.n - b.n); return c[0]?.el ?? null; };
+    const dt = th || tdl || hasInfobox ? null : dtBest([...document.querySelectorAll("dt")]);
+    if (recipe.probe) return { found: Boolean(dt), label: dt ? clean(dt.innerText) : null };
     if (dt) { let dd = dt.nextElementSibling; while (dd && dd.tagName !== "DD") dd = dd.nextElementSibling; if (dd) { show(dd); const text = norm(dd.innerText).slice(0, 1000); return withLabel ? { text, label: norm(dt.innerText) } : text; } }
   }
   return null;
@@ -423,12 +466,25 @@ export function regexFor(candidate) {
 }
 
 /** The value from an element's text with a recipe's regex. */
+const MONTHS = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+/** A calendar date as infoboxes write it: "14 March 1879", "April 1, 1976", "March 1879", "1879-03-14". */
+export const DATE_RE = `(?:\\d{1,2}\\s+(?:${MONTHS})\\.?,?\\s+\\d{3,4}|(?:${MONTHS})\\.?\\s+\\d{1,2},?\\s+\\d{3,4}|(?:${MONTHS})\\.?\\s+\\d{4}|\\d{4}-\\d{2}-\\d{2})(?![\\d])`;
 export function pickValue(text, recipe) {
   if (text == null) return null;
-  const t = String(text).replace(/\s+/g, " ").trim();
+  let t = String(text).replace(/\s+/g, " ").trim();
   if (!t) return null;
   if (!recipe.regex) return t.slice(0, 300);
-  const m = t.match(new RegExp(recipe.regex));
+  // a row the input names ({{target_field}}) holds whatever that field is: a date ("Born", "Founded", "Opened") is read
+  // whole, not as its day number; a figure with its unit; a text field (no digits) as its first clause
+  const inputRow = recipe.kind === "row" && /\{\{\s*[a-z0-9_]+\s*\}\}/i.test(String(recipe.label ?? ""));
+  if (inputRow) t = t.replace(/\[[^\]]{1,20}\]/g, "").replace(/\s+/g, " ").trim();
+  // (a unit is a whole unit: "2,757 m3/s" is 2,757, not "2,757 m")
+  const m = t.match(new RegExp(inputRow && recipe.regex === VALUE_RE.number ? recipe.regex.replace("(?![A-Za-z])", "(?![A-Za-z0-9²³/])") : recipe.regex));
+  if (inputRow && recipe.regex === VALUE_RE.number) {
+    const d = t.match(new RegExp(DATE_RE, "i"));
+    if (d && (!m || d.index <= m.index + 2)) return d[0].trim().slice(0, 300);
+    if (!m && !/\d/.test(t)) return t.split(/\s*[;\n]\s*|\s+\(/)[0].trim().slice(0, 120) || null;
+  }
   return m ? m[0].trim().replace(/[.,;:]+$/, "").slice(0, 300) : null;
 }
 

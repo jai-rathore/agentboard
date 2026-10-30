@@ -124,6 +124,11 @@ async function runJob(id) {
   await chain;
 }
 
+/** The extraction recipe is a row named by an input ("{{target_field}}"); the scroll step names the same input. */
+const inputsIn = (t) => [...String(t ?? "").matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi)].map((x) => x[1]);
+const rowNamesInputs = (rc) => Boolean(rc && rc.kind === "row" && inputsIn(rc.label).length);
+const rowNamesInputsOf = (step, rc) => rowNamesInputs(rc) && inputsIn(step.text).length > 0 && inputsIn(step.text).every((k) => inputsIn(rc.label).includes(k));
+
 async function loadTarget(m) {
   if (m.draft_id) { const d = await api(`/v1/skills/drafts/${encodeURIComponent(m.draft_id)}`); return { skill: d.skill, start_url: m.start_url || d.source.start_url || d.skill.start_url_hint, target: { draft_id: d.id } }; }
   if (m.skill_cid) { const s = await api(`/v1/skills/${encodeURIComponent(m.skill_cid)}`); const b = s.skill.record.body; return { skill: b.skill, start_url: m.start_url || b.source.start_url, target: { skill_cid: m.skill_cid }, trace: m.no_trace ? null : s.trace ?? null }; }
@@ -203,6 +208,14 @@ async function replay(m, send, ask, isAborted) {
         const s = trace.steps[i], tStep = Date.now();
         if (isAborted()) throw Object.assign(new Error("viewer disconnected"), { code: "aborted" });
         const r = await runTraceStep(page, s, params, { origin, skill, ask, send, actions, history, index: i, W, H, selectOption, inspect, execute, onHuman: (ms) => { humanMs += ms; } });
+        // a scroll_to_text only positions the page (locators scroll their element into view, values are read from the
+        // DOM): text it cannot scroll to is not a failure when the extraction row it points at is named by the same input
+        // ("Metro population" is the "Metro" sub-row of "Population"); the row lookup decides, with no model call
+        if (!r.ok && s.action === "scroll_to_text" && (!missingInputs(s, params, await pageText()).length || rowNamesInputsOf(s, trace.extract))) {
+          send({ type: "status", message: `Trace step ${i + 1}: no text "${fillText(s.text, params).slice(0, 60)}" to scroll to; the value is read from its row` });
+          replayInfo.trace_steps_done = i + 1; stepMs.push(Date.now() - tStep);
+          continue;
+        }
         if (!r.ok) {
           replayInfo.failed_step = i + 1; replayInfo.failed_reason = r.reason.slice(0, 300);
           const missing = missingInputs(s, params, await pageText());
@@ -322,14 +335,22 @@ async function replay(m, send, ask, isAborted) {
     // table) is never returned for another input.
     const rowLabelOf = async (rc) => (rc?.kind === "row" ? ((await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(rc, params), scroll: false, withLabel: true }).catch(() => null))?.label ?? fillText(rc.label, params)) : null);
     const bindingOf = async (rc, val) => valueBinding({ params, value: val, finalUrlTemplate: templ(page.url(), params), finalUrl: page.url(), rowLabel: await rowLabelOf(rc), titleParams: finalChecks(texts, params, page.url()).title });
-    let unboundNote = null;
+    let unboundNote = null, rowBound = [];
+    // a row named by an input ({{target_field}}): when this page has no such row, or its value is not tied to the inputs,
+    // no model can return it either, so the run is not verified right away (0 calls) instead of asking the verifier
+    const inputRow = replayInfo.mode === "trace" && rowNamesInputs(recipe);
     if (recipe && value != null) {
       const b = await bindingOf(recipe, value);
-      if (!b.ok) { unboundNote = b.reason; send({ type: "status", message: `Not returning "${value}": ${b.reason}` }); recipe = null; value = null; }
+      if (!b.ok) { unboundNote = b.reason; send({ type: "status", message: `Not returning "${value}": ${b.reason}` }); if (inputRow && !failFast) failFast = `the "${fillText(recipe.label, params)}" value found is not tied to the inputs (${b.reason})`; recipe = null; value = null; }
+      else rowBound = Object.entries(b.by).filter(([, how]) => how === "row").map(([k]) => k);
     }
     if (!failFast && !unboundNote && recipe && value == null && replayInfo.mode === "trace") {
       const missing = missingInputs(recipe, params, texts.page);
       if (missing.length) failFast = `${describeMissing(missing)} is not on the page (no "${fillText(recipe.label, params)}" row)`;
+      else if (inputRow) {
+        const probe = await page.evaluate(applyRecipeInPage, { recipe: { ...fillRecipe(recipe, params), probe: true }, scroll: false }).catch(() => null);
+        failFast = probe?.found ? `the "${probe.label}" row has no value on this page` : `this page has no "${fillText(recipe.label, params)}" row`;
+      }
     }
     if (!unboundNote && recipe && value == null) { send({ type: "status", message: `The extraction recipe found no value on this page (${recipe.kind}${recipe.label ? ` "${fillText(recipe.label, params)}"` : ""})` }); recipe = null; }
     // the final screenshot shows the extracted value (scrolled into view) for the record and any verifier call
@@ -342,7 +363,7 @@ async function replay(m, send, ask, isAborted) {
       replayInfo.fail_fast = failFast.slice(0, 300);
       send({ type: "status", message: `Not verified: ${failFast}. No model recovery: the input is not on the site` });
     } else if (replayInfo.mode === "trace") {
-      det = checkFinal(trace.final, texts, params, page.url());
+      det = checkFinal(trace.final, texts, params, page.url(), { rowBound, rowLabel: rowBound.length ? await rowLabelOf(recipe) : null });
       if (det.ok && trace.extract && value == null) det = { ok: false, checks: det.checks, reason: unboundNote ? `the recorded value is not tied to the inputs (${unboundNote})` : "the value could not be extracted" };
       // no recipe yet: one verifier call quotes the value, and this run learns where it is on the page (next replays: 0 calls)
       // (an operator run with relearn: true retries learning on a trace marked no_value)
