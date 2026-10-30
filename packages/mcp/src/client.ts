@@ -3,7 +3,7 @@
  * locally; never transmits key material.
  */
 import { createHash } from "node:crypto";
-import { createRecord, solveChallenge, verifyRecord, type KeyPair, type Challenge, type SignedRecord, type RecordType, utf8ToBytes, signBytes, b64url, sha256Hex, winBodyFromRun, selfReportedWinBody, type WinStep } from "@agentboard/core";
+import { createRecord, solveChallenge, verifyRecord, type KeyPair, type Challenge, type SignedRecord, type RecordType, utf8ToBytes, signBytes, b64url, sha256Hex, sha256, leadingZeroBits, winBodyFromRun, selfReportedWinBody, type WinStep } from "@agentboard/core";
 
 /**
  * Registration proof of work with Node's native sha256 (~5x the pure-JS hasher): at the default 20 bits this is
@@ -120,8 +120,21 @@ export class AgentboardClient {
   }
 
   /** Public capped replay (no token, no identity): the first call answers 428 with a challenge, see try_skill. */
-  publicReplay(slug: string, b: { params: Record<string, string>; challenge?: Record<string, unknown> }) {
-    return this.http("POST", `/v1/skills/${encodeURIComponent(slug)}/public-replay`, b);
+  /**
+   * Public replay. Over plain HTTP (the local server) the node answers with a small proof-of-work challenge; this solves
+   * it and resends once, so try_skill is one call locally. The remote /mcp gets an arithmetic question instead (428).
+   */
+  async publicReplay(slug: string, b: { params: Record<string, string>; challenge?: Record<string, unknown> }): Promise<any> {
+    const path = `/v1/skills/${encodeURIComponent(slug)}/public-replay`;
+    try {
+      return await this.http("POST", path, b);
+    } catch (e) {
+      const ch = (e as AgentboardError)?.body?.challenge;
+      if ((e as AgentboardError)?.status !== 428 || b.challenge || ch?.kind !== "pow" || !(Number(ch.bits) <= 24)) throw e;
+      let counter = 0;
+      while (leadingZeroBits(sha256(`${ch.nonce}:${slug}:${ch.params_hash}:${counter}`)) < Number(ch.bits)) counter++;
+      return this.http("POST", path, { ...b, challenge: { id: ch.id, counter } });
+    }
   }
   publicReplayStatus() { return this.http("GET", "/v1/skills/public-replay"); }
 

@@ -11,6 +11,9 @@ import { loadConfig } from "../src/config.js";
 import { mountRemoteMcp } from "../src/mcpRemote.js";
 import { solvePublicPow, MCP_CLIENT_IP_HEADER } from "../src/services/publicReplay.js";
 import { classifyRun } from "../src/services/skillMetrics.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { AgentboardClient, createAgentboardMcpServer } from "@agentboard/mcp";
+import { generateKeyPair } from "@agentboard/core";
 
 const TOKEN = "test-".repeat(6), SECRET = "fake-".repeat(6); // fake test values
 const op = { "x-skills-token": TOKEN }, ex = { "x-skills-secret": SECRET };
@@ -370,6 +373,20 @@ describe("try_skill on the remote /mcp", () => {
     const c3 = await connect({});
     expect(txt(await c3.callTool({ name: "try_skill", arguments: { slug: "search-hn", inputs: { query: "x" } } }))).toMatch(/client_ip_required/);
     await Promise.all([c.close(), c2.close(), c3.close()]);
+  });
+  it("the local (stdio) server offers try_skill too: one call, it solves the HTTP proof of work itself; params works as inputs", async () => {
+    now = Date.parse("2026-11-03T00:10:00Z");
+    const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => { const r = new Request(input, init); r.headers.set("cf-connecting-ip", "12.0.0.1"); return node.app.fetch(r); }) as typeof fetch;
+    const mcp = createAgentboardMcpServer({ client: new AgentboardClient({ baseUrl: "http://agentboard.test", keyPair: generateKeyPair(), fetchImpl }) });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const c = new Client({ name: "fresh-local", version: "0" });
+    await Promise.all([mcp.connect(a), c.connect(b)]);
+    const names = (await c.listTools()).tools.map((t) => t.name);
+    expect(names).toEqual(expect.arrayContaining(["try_skill", "run_skill"]));
+    const r: any = await c.callTool({ name: "try_skill", arguments: { slug: "search-hn", params: { query: "local one" }, wait_seconds: 0 } });
+    expect(r.isError).toBeFalsy();
+    expect(txt(r)).toMatch(/"trigger": "public"/);
+    await c.close();
   });
   it("made no real network calls", () => {
     expect(urls.every((u) => u.startsWith("https://exec.test/") || u.startsWith("https://api.meta.ai/"))).toBe(true); // all answered by the fake
