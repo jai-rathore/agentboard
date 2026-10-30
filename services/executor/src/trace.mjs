@@ -448,6 +448,8 @@ export function answerCandidates(answer, params = {}) {
   for (const m of a.matchAll(/\*\*([^*]{1,120})\*\*(:?)/g)) if (!inputsLow.some((v) => m[1].toLowerCase().includes(v)) && !/:\s*$/.test(m[1]) && !m[2]) out.push(m[1].trim());
   for (const m of a.matchAll(new RegExp(VALUE_RE.version, "g"))) { const pre = a.slice(0, m.index); if (!/[A-Za-z]$/.test(pre) || /(^|[^A-Za-z])v$/.test(pre)) out.push(m[0]); } // not "Qwen3.5" ("v1.2.0" is fine)
   for (const m of a.matchAll(/["“]([^"”\n]{3,160})["”]|(?:^|[\s(])'([^'\n]{3,160})'(?=[\s.,;:)]|$)/g)) out.push((m[1] ?? m[2]).trim()); // a quoted title ("…") is usually the answer itself
+  // a calendar date ("31 December 2025") as a whole, before its day number and year
+  for (const m of a.matchAll(new RegExp(DATE_RE, "gi"))) out.push(m[0]);
   // numbers in the order the answer mentions them (the first is usually the one asked for); bare years last
   for (const m of a.matchAll(/\d[\d,]*(?:\.\d+)?/g)) if (!/[A-Za-z]$/.test(a.slice(0, m.index)) && m[0].replace(/\D/g, "").length >= 2) (/^(1[5-9]|20)\d\d$/.test(m[0]) ? years : out).push(m[0]);
   out.push(...years);
@@ -463,6 +465,9 @@ export function regexFor(candidate) {
   if (new RegExp(`^${VALUE_RE.version}$`).test(c)) return VALUE_RE.version;
   // a calendar date ("28 February 2026") is read whole, not as its day number
   if (new RegExp(`^${DATE_RE}$`, "i").test(c)) return DATE_RE;
+  // a short line around one date ("Last accounts made up to 31 December 2025"): the date is the value
+  const d = c.match(new RegExp(DATE_RE, "i"));
+  if (d && c.length <= 120 && !/\d/.test(c.replace(d[0], ""))) return DATE_RE;
   if (/^[-−]?\d[\d,.]*$/.test(c)) return VALUE_RE.number;
   const m = c.match(new RegExp(`^(${VALUE_RE.number})`));
   if (m && /\d/.test(c)) return VALUE_RE.number;

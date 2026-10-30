@@ -63,6 +63,8 @@ describe("trace: hygiene and value helpers", () => {
     expect(pickValue("31 December 2025", { kind: "css", regex: regexFor("28 February 2026") })).toBe("31 December 2025");
     expect(pickValue("made up to 31 March 2026", { kind: "css", regex: regexFor("28 February 2026") })).toBe("31 March 2026");
     expect(regexFor("1,234")).toBe(regexFor("12"));
+    expect(regexFor("Last accounts made up to 31 December 2025")).toBe(regexFor("1 May 2020"));
+    expect(answerCandidates("Accounts section shows Last accounts made up to 31 December 2025 (next: 31 December 2026)").slice(0, 2)).toEqual(["31 December 2025", "31 December 2026"]);
     expect(storeRecipe({ kind: "row", label: "Born", offset: 0, sample: "14 March 1879", candidate: "14 March 1879" }, { target_field: "Born" }).regex).toBe(regexFor("12")); // input-named row: any value kind
     expect(storeRecipe({ kind: "css", css: "p > strong", sample: "28 February 2026", candidate: "28 February 2026" }, { company_number: "00445790" }).regex).toBe(regexFor("1 May 2020"));
     expect(pickValue("717,710 (city)", { kind: "row", regex: regexFor("139,875") })).toBe("717,710");
