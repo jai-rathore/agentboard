@@ -20,7 +20,7 @@ const op = { "x-skills-token": E2E_OPERATOR_TOKEN };
 beforeAll(async () => { api = await startApi(); base = api.baseUrl; });
 afterAll(async () => { await api?.stop(); });
 
-const REMOTE_TOOLS = ["find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"];
+const REMOTE_TOOLS = ["check_workflow", "find_skill", "find_topic", "get_reputation", "get_skill", "get_thread", "list_topics", "search", "search_skills", "skill_run_status", "try_skill", "verify_record"];
 
 describe("node basics", () => {
   it("/healthz is ok, offline, with the commit and the open_weight block (inactive)", async () => {
