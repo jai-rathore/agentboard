@@ -501,3 +501,23 @@ export function valueBinding(input) {
     ? { ok: false, checked: true, by, missing, reason: `the returned value is not tied to ${missing.map((k) => `${k} "${String(input.params[k]).slice(0, 60)}"`).join(", ")}: it was read from ${label ? `the "${input.rowLabel}" row` : "a fixed element"} on a page that is not specific to ${missing.length > 1 ? "them" : "it"}` }
     : { ok: true, checked: true, by, missing, reason: `value tied to the inputs (${Object.entries(by).map(([k, how]) => `${k}: ${how === "url" ? "page URL" : how === "title" ? "page title" : "row label"}`).join(", ")})` };
 }
+
+/**
+ * Fail fast: the inputs a step (or an extraction recipe) must FIND on the page, that are not on it at all.
+ * A scroll_to_text or a click/select on an element named by {{param}} reads the input off the page; if the page text
+ * does not contain the input anywhere, no recovery can find it (e.g. target_currency "Klingon" on a rates table), so
+ * the run is not verified right away instead of asking the model. Typed text and navigation are not checked (the
+ * input is not on the page before it is typed). When the input IS on the page, a failure is layout drift: recover.
+ */
+export function missingInputs(step, params, pageText) {
+  if (!step) return [];
+  const fields = step.action === "scroll_to_text" ? [step.text]
+    : ["click", "double_click", "select_option"].includes(step.action) ? [step.locator?.name, step.locator?.text, step.action === "select_option" ? step.option : null]
+    : step.kind === "row" ? [step.label] : [];
+  return inputsNamedIn(fields, params).filter(([, v]) => !has(pageText, v)).map(([name, value]) => ({ param: name, value }));
+}
+const inputsNamedIn = (fields, params) => {
+  const names = new Set(fields.flatMap((f) => [...String(f ?? "").matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi)].map((m) => m[1])));
+  return [...names].filter((n) => params?.[n] != null && String(params[n]).trim().length >= 2).map((n) => [n, String(params[n])]);
+};
+export const describeMissing = (missing) => missing.map((x) => `${x.param} "${x.value}"`).join(", ");

@@ -4,7 +4,7 @@ import { templ, fillUrl, finalChecks, checkFinal, traceStep, usableTrace, descri
 // @ts-expect-error plain ESM module without types
 import { INTERACTIVE } from "../src/click.mjs";
 // @ts-expect-error plain ESM module without types
-import { valueBinding as execBinding } from "../src/trace.mjs";
+import { valueBinding as execBinding, missingInputs, describeMissing } from "../src/trace.mjs";
 import { valueBinding as coreBinding } from "../../../packages/core/src/valueBinding";
 
 const params = { search_query: "Reykjavík", target_field: "Population" };
@@ -263,4 +263,36 @@ describe.skipIf(!chromium)("value binding in headless Chromium: a rates table (x
     expect(stale).toBe("0.895817");
     expect(execBinding({ params: { target_currency: "Japanese Yen" }, value: stale, finalUrl: p.url(), rowLabel: null }).ok).toBe(false);
   });
+});
+
+describe("fail fast: an input that is not on the page ends the run unverified, with no model recovery", () => {
+  it("flags only inputs a step must find on the page (not typed text), and row labels", () => {
+    const text = "US Dollar Exchange Rates Table Euro 0.895817 British Pound 0.741203 Japanese Yen 157.869642";
+    const scroll = { action: "scroll_to_text", text: "{{target_currency}}" };
+    expect(missingInputs(scroll, { target_currency: "Klingon" }, text)).toEqual([{ param: "target_currency", value: "Klingon" }]);
+    expect(missingInputs(scroll, { target_currency: "japanese  yen" }, text)).toEqual([]); // case and spacing do not matter
+    expect(missingInputs({ action: "type", text: "{{target_currency}}" }, { target_currency: "Klingon" }, text)).toEqual([]);
+    expect(missingInputs({ action: "navigate", to: "https://x.test/{{q}}" }, { q: "Klingon" }, text)).toEqual([]);
+    expect(missingInputs({ action: "click", locator: { name: "{{q}}", text: "" } }, { q: "Oslo" }, "No results")).toEqual([{ param: "q", value: "Oslo" }]);
+    expect(missingInputs({ action: "click", locator: { name: "Search", text: "" } }, { q: "Oslo" }, "No results")).toEqual([]); // drift, not a missing input
+    expect(missingInputs({ kind: "row", label: "{{target_currency}}", offset: 0 }, { target_currency: "Klingon" }, text)).toHaveLength(1);
+    expect(missingInputs({ kind: "row", label: "{{target_currency}}", offset: 0 }, { target_currency: "Euro" }, text)).toEqual([]);
+    expect(describeMissing([{ param: "target_currency", value: "Klingon" }])).toBe('target_currency "Klingon"');
+  });
+});
+
+describe.skipIf(!chromium)("fail fast in headless Chromium (x-rates)", () => {
+  it("a scroll_to_text step for Klingon fails and the input is reported missing; Japanese Yen replays", async () => {
+    if (!browser) return;
+    const p = await newPage();
+    await p.goto(SITE + "/table/?from=USD&amount=1");
+    const step = { url: SITE + "/table/?from=USD&amount=1", action: "scroll_to_text", text: "{{target_currency}}", changes_url: false };
+    expect(await runTraceStep(p, step, { target_currency: "Japanese Yen" }, ctx())).toMatchObject({ ok: true });
+    const bad = await runTraceStep(p, step, { target_currency: "Klingon" }, ctx());
+    expect(bad.ok).toBe(false);
+    const text = await p.evaluate(() => document.body.innerText);
+    expect(missingInputs(step, { target_currency: "Klingon" }, text)).toEqual([{ param: "target_currency", value: "Klingon" }]);
+    // layout drift: the label IS on the page but the recorded element is gone -> not fail-fast (the model recovers)
+    expect(missingInputs({ action: "click", locator: { name: "{{target_currency}}", text: "" } }, { target_currency: "Euro" }, text)).toEqual([]);
+  }, 30000);
 });

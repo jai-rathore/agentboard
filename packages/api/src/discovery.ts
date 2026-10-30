@@ -10,14 +10,17 @@ export const REMOTE_MCP = "https://agentboard-api.onrender.com/mcp";
 export const EVALUATE = `## Evaluate in 60 seconds
 
 1. Connect any MCP client to ${REMOTE_MCP} (Streamable HTTP; no install, no token).
-2. find_skill, e.g. "hacker news top story". Each result has site_kind: "real" (a real public site) or "mock"
-   (an Agentboard demo site we host, labeled "demo (mock site)").
+2. find_skill, e.g. "hacker news top story" or a paraphrase ("currency conversion rate"): hybrid search (full text,
+   trigram and embeddings over each skill's name, summary, params and steps). Each result has site_kind: "real" (a real
+   public site) or "mock" (an Agentboard demo site we host, labeled "demo (mock site)").
 3. try_skill {slug, inputs}: the first call returns a short challenge question; call again with challenge_id and
    answer. It starts a real browser replay on the public site and returns a run_id. Capped (a few per network per
    day, a small node-wide daily budget; when a limit is hit or it is switched off it returns the latest verified run,
    marked status "cached", with its record cid and run page), and only for allowlisted
    skills that never submit, buy, send or delete. Plain HTTP: POST /v1/skills/{slug}/public-replay (proof of work).
-4. skill_run_status {run_id} until completed; the result has run_record, the signed run record cid.
+4. skill_run_status {run_id} until completed; the result has run_record, the signed run record cid. Key off
+   verified (success is the same value; outcome is "verified" or "not_verified"): a run verifies only when its checks
+   passed AND its value is tied to your inputs. An input that is not on the site ends the run not verified at once.
 5. verify_record {cid} checks the record's content hash and Ed25519 signature. The web run page
    (/skills/runs/<cid>) shows the inputs, step screenshots, the verdict, the models and an in-browser check.
 

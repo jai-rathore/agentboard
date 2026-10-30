@@ -19,6 +19,7 @@ import { museResponses, outputText, reasoningSummary, type MuseUsage, type MuseP
 import { siteKind, SITE_LABEL, replayCountsBySlug } from "./skillMetrics.js";
 import { submitColdRun, benchmarkForJob } from "./benchmark.js";
 import { recomputeKarma } from "./reputation.js";
+import { hybridSkillSearch } from "./skillSearch.js";
 
 export const ARTIFACT_MIME = ["video/mp4", "image/jpeg", "image/png", "image/gif"] as const;
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
@@ -406,7 +407,7 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
       await tx.query(`UPDATE skill_drafts SET status = 'published', published_cid = $2 WHERE id = $1`, [b.draft, published.cid]);
     }
     const a = await appendToLog(tx, ctx, runRec);
-    await tx.query(`INSERT INTO skill_runs (cid, skill_cid, success, created_at) VALUES ($1,$2,$3,$4)`, [runRec.cid, published?.cid ?? skillCid, run.success, runRec.created_at]);
+    await tx.query(`INSERT INTO skill_runs (cid, skill_cid, success, created_at) VALUES ($1,$2,$3,$4)`, [runRec.cid, published?.cid ?? skillCid, runVerified(runRec.body), runRec.created_at]); // success column = verified
     if (healed) {
       const b = healed.body as any;
       healedSeq = (await appendToLog(tx, ctx, healed)).seq;
@@ -467,29 +468,42 @@ export async function listSkills(ctx: AppContext, q?: string) {
 
 /** How much better (in word-overlap match, 0..1) a demo (mock) skill must match to rank above a real-site one. */
 export const REAL_SITE_BOOST = 0.25;
-const STOP = new Set(["a", "an", "the", "to", "for", "of", "on", "in", "and", "or", "my", "with", "how", "do", "i"]);
-/** Agent-facing search (MCP find_skill): word-overlap ranking over latest versions, with what a caller needs to run one. */
+/**
+ * find_skill: hybrid retrieval (services/skillSearch.ts: FTS + pg_trgm on name and summary + bge-small embeddings over
+ * name, summary, params and steps, fused with RRF) over the latest active version of each skill. Then a prior:
+ * real sites before Agentboard's demo (mock) sites, so a mock skill only ranks first when its relative match is more
+ * than REAL_SITE_BOOST higher; then a little for verified runs. `match` is the relevance relative to the best
+ * hit (1 = best), before the prior. Records are read in one query.
+ */
 export async function findSkills(ctx: AppContext, q: string, limit = 5) {
-  const words = q.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !STOP.has(w));
-  const rows = (await ctx.db.query<any>(`${latestSkillsSql} ORDER BY s.created_at DESC LIMIT 200`)).rows;
-  const scored = [];
-  for (const r of rows) {
-    const body = JSON.parse((await ctx.db.query<any>(`SELECT body_text FROM records WHERE cid = $1`, [r.cid])).rows[0].body_text);
-    const hay = `${r.name} ${r.summary} ${r.slug} ${body.skill.steps.map((s: any) => s.intent).join(" ")} ${body.source?.start_url ?? ""}`.toLowerCase();
-    const score = words.length ? words.filter((w) => hay.includes(w)).length / words.length : 1;
-    if (score > 0) scored.push({ r, body, score });
+  const query = q.trim().slice(0, 300);
+  const n = Math.min(10, Math.max(1, Number.isFinite(limit) ? limit : 5));
+  let ranked: { cid: string; rel: number; ranks?: Record<string, number> }[];
+  if (!query) ranked = (await ctx.db.query<any>(`${latestSkillsSql} ORDER BY s.created_at DESC LIMIT 200`)).rows.map((r) => ({ cid: r.cid, rel: 1 }));
+  else {
+    const hits = await hybridSkillSearch(ctx, query, `SELECT cid FROM (${latestSkillsSql}) l`);
+    const top = hits[0]?.rrf ?? 1;
+    ranked = hits.map((h) => ({ cid: h.cid, rel: h.rrf / top, ranks: h.ranks }));
   }
-  // Real sites before Agentboard's demo (mock) sites: a mock skill only ranks first when it matches clearly better
-  // (by more than REAL_SITE_BOOST), so generic or partial queries land on real-world skills. Then more verified runs.
-  const mock = (x: { body: any }) => (siteKind(ctx, x.body.source?.start_url) === "mock" ? 1 : 0);
-  const rank = (x: { body: any; score: number }) => x.score + (mock(x) ? 0 : REAL_SITE_BOOST);
-  scored.sort((a, b) => rank(b) - rank(a) || mock(a) - mock(b) || b.score - a.score || b.r.verified_runs - a.r.verified_runs);
+  if (!ranked.length) return [];
+  const rows = (await ctx.db.query<any>(`SELECT l.*, rec.body_text FROM (${latestSkillsSql}) l JOIN records rec ON rec.cid = l.cid WHERE l.cid = ANY($1)`, [ranked.map((x) => x.cid)])).rows;
+  const byCid = new Map(rows.map((r) => [r.cid, r]));
+  const scored = ranked.flatMap((x) => {
+    const r = byCid.get(x.cid);
+    if (!r) return [];
+    const body = JSON.parse(r.body_text);
+    const mock = siteKind(ctx, body.source?.start_url) === "mock" ? 1 : 0;
+    // additive on the relative match (1 = best hit): a real site within REAL_SITE_BOOST of a demo site ranks first
+    const prior = (mock ? 0 : REAL_SITE_BOOST) + 0.02 * Math.tanh(Number(r.verified_runs) / 5);
+    return [{ r, body, score: x.rel, rank: x.rel + prior, mock, ranks: x.ranks }];
+  });
+  scored.sort((a, b) => b.rank - a.rank || a.mock - b.mock || b.r.verified_runs - a.r.verified_runs);
   const counts = await replayCountsBySlug(ctx);
   const out = [];
-  for (const { r, body, score } of scored.slice(0, Math.min(10, limit))) {
+  for (const { r, body, score, ranks } of scored.slice(0, n)) {
     const rec = await recordingMs(ctx, body.source);
     out.push({
-      cid: r.cid, slug: r.slug, version: r.version, name: r.name, summary: r.summary, match: Math.round(score * 100) / 100,
+      cid: r.cid, slug: r.slug, version: r.version, name: r.name, summary: r.summary, match: Math.round(score * 100) / 100, ...(ranks ? { matched_by: Object.keys(ranks) } : {}),
       params: body.skill.params, start_url: body.source?.start_url ?? null, success_check: body.skill.success_check,
       risk_flags: effectiveRiskFlags(body.skill), approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, intent: body.skill.steps[g.index].intent, flags: g.flags })),
       site_kind: siteKind(ctx, body.source?.start_url), site_label: SITE_LABEL[siteKind(ctx, body.source?.start_url)],
@@ -501,6 +515,18 @@ export async function findSkills(ctx: AppContext, q: string, limit = 5) {
   return out;
 }
 
+/**
+ * skill_runs.success means verified (runVerified: the run passed its checks AND its value is tied to its inputs).
+ * Runs recorded before value binding existed may say success with an unbound value: mark those not verified.
+ * Idempotent; runs on boot.
+ */
+export async function reconcileRunVerified(db: AppContext["db"]): Promise<number> {
+  const rows = (await db.query<any>(`SELECT sr.cid, r.body_text FROM skill_runs sr JOIN records r ON r.cid = sr.cid WHERE sr.success`)).rows;
+  const bad = rows.filter((r) => !runVerified(JSON.parse(r.body_text))).map((r) => r.cid);
+  if (bad.length) await db.query(`UPDATE skill_runs SET success = false WHERE cid = ANY($1)`, [bad]);
+  return bad.length;
+}
+
 /** A skill by cid, or by slug (its latest version). */
 export async function getSkill(ctx: AppContext, cidOrSlug: string) {
   const s = (await ctx.db.query<any>(`SELECT * FROM skills WHERE cid = $1`, [cidOrSlug])).rows[0]
@@ -508,11 +534,10 @@ export async function getSkill(ctx: AppContext, cidOrSlug: string) {
   if (!s) throw new HttpError(404, "skill_not_found", "no such skill");
   const cid: string = s.cid;
   const rec = async (c: string) => (await ctx.db.query<any>(`SELECT r.cid, r.type, r.author, r.created_at, r.body_text, r.sig, l.seq::int AS seq, l.prev_hash, l.entry_hash FROM records r JOIN log l ON l.cid = r.cid WHERE r.cid = $1`, [c])).rows[0];
-  const toRecord = (r: any) => ({ seq: r.seq, log: { prev_hash: r.prev_hash, entry_hash: r.entry_hash }, record: { v: 1, type: r.type, author: r.author, created_at: r.created_at, body: JSON.parse(r.body_text), cid: r.cid, sig: r.sig } });
+  const toRecord = (r: any) => { const body = JSON.parse(r.body_text); return { seq: r.seq, log: { prev_hash: r.prev_hash, entry_hash: r.entry_hash }, ...(r.type === "skill_run" ? { verified: runVerified(body) } : {}), record: { v: 1, type: r.type, author: r.author, created_at: r.created_at, body, cid: r.cid, sig: r.sig } }; };
   const versions = (await ctx.db.query<any>(`SELECT cid, version, created_at, name FROM skills WHERE slug = $1 ORDER BY version DESC`, [s.slug])).rows;
-  const runCids = (await ctx.db.query<any>(`SELECT cid FROM skill_runs WHERE skill_cid = $1 ORDER BY created_at DESC LIMIT 50`, [cid])).rows.map((r) => r.cid);
-  const runs = [];
-  for (const c of runCids) runs.push(toRecord(await rec(c)));
+  const runs = (await ctx.db.query<any>(`SELECT r.cid, r.type, r.author, r.created_at, r.body_text, r.sig, l.seq::int AS seq, l.prev_hash, l.entry_hash
+    FROM skill_runs sr JOIN records r ON r.cid = sr.cid JOIN log l ON l.cid = r.cid WHERE sr.skill_cid = $1 ORDER BY sr.created_at DESC LIMIT 50`, [cid])).rows.map(toRecord);
   const all = (await ctx.db.query<any>(`SELECT count(*)::int AS n, count(*) FILTER (WHERE r.success)::int AS v FROM skill_runs r JOIN skills v ON v.cid = r.skill_cid WHERE v.slug = $1`, [s.slug])).rows[0];
   const allVerified = Number(all?.v ?? 0), allRuns = Number(all?.n ?? 0);
   const skill = toRecord(await rec(cid));

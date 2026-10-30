@@ -398,7 +398,8 @@ export function SkillPage({ cid }: { cid: string }) {
   const { skill, versions, runs, badge, version, latest_version, latest_cid, node, prev_skill, heal_run, time } = r.data;
   const b = skill.record.body;
   const hf = b.healed_from;
-  const last = runs.find((x: any) => x.record.body.success) ?? runs[0] ?? heal_run;
+  const ok = (x: any) => Boolean(x?.verified ?? x?.record?.body?.success); // verified: checks passed AND value tied to inputs
+  const last = runs.find(ok) ?? runs[0] ?? heal_run;
   const lb = last?.record.body;
   const diffIdx = prev_skill && hf ? b.skill.steps.map((st: any, i: number) => JSON.stringify(st) !== JSON.stringify(prev_skill.skill.steps[i])) : undefined;
   const faster = (rb: any) => Boolean(rb.success && rb.time?.recording_ms != null && rb.time.run_ms != null && rb.time.run_ms < rb.time.recording_ms);
@@ -426,7 +427,7 @@ export function SkillPage({ cid }: { cid: string }) {
     <div className="sbs">
       <div><h2>Shown once (source)</h2><Source source={b.source} /></div>
       <div><h2>Replayed by an agent</h2>{lb?.evidence.gif ? <img className="media" src={art(lb.evidence.gif)} alt="replay GIF" /> : <p className="muted">No replay yet.</p>}
-        {lb && <p className="small">{lb.success ? "✓" : "✗"} {lb.verdict.evidence} <a href={art(lb.evidence.final_screenshot)} target="_blank" rel="noreferrer">final screenshot</a>{last === heal_run && " (the run that healed this version)"}</p>}</div>
+        {lb && <p className="small">{ok(last) ? "✓" : "✗"} {lb.verdict.evidence} <a href={art(lb.evidence.final_screenshot)} target="_blank" rel="noreferrer">final screenshot</a>{last === heal_run && " (the run that healed this version)"}</p>}</div>
     </div>
     <SkillView skill={b.skill} diff={diffIdx} />
     {r.data.public_replay && <div className="panel try-panel"><TryItNow slug={b.slug} params={b.skill.params} /></div>}
@@ -441,7 +442,7 @@ run_skill({ skill: "${b.slug}", params: ${JSON.stringify(Object.fromEntries(b.sk
     <ReuseTable skill={b.slug} limit={50} compact />
     <h2>Signed runs of this version, v{version} ({runs.length})</h2>
     <table className="tbl cards"><thead><tr><th></th><th>params</th><th>turns</th><th>human input</th>{anyFaster && <th>vs human</th>}<th>cost</th><th>when</th></tr></thead><tbody>
-      {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td data-label="result">{rb.success ? "✓" : "✗"}{rb.drift?.healed && " 🩹"}</td><td className="small mono" data-label="params">{Object.values(rb.params).join(" · ").slice(0, 80)}{/[?&]v=2/.test(rb.start_url) && " · redesigned demo site"}</td><td data-label="turns">{rb.turns}</td><td className="small" data-label="human input">no clicks · {plural(rb.actions.filter((a: any) => a.approval === "human").length, "approval")}</td>{anyFaster && <td className="small" data-label="vs human">{faster(rb) ? `⚡ ${fmtDur(rb.time.run_ms)} vs ${fmtDur(rb.time.recording_ms)}` : ""}</td>}<td data-label="cost">{usd(rb.usage.usd)}</td><td className="small" data-label="when">{ago(x.record.created_at)} · #{x.seq} · <Link to={`/skills/runs/${x.record.cid}`}>run page</Link></td></tr>; })}
+      {runs.map((x: any) => { const rb = x.record.body; return <tr key={x.record.cid}><td data-label="result">{ok(x) ? "✓" : "✗"}{rb.drift?.healed && " 🩹"}</td><td className="small mono" data-label="params">{Object.values(rb.params).join(" · ").slice(0, 80)}{/[?&]v=2/.test(rb.start_url) && " · redesigned demo site"}</td><td data-label="turns">{rb.turns}</td><td className="small" data-label="human input">no clicks · {plural(rb.actions.filter((a: any) => a.approval === "human").length, "approval")}</td>{anyFaster && <td className="small" data-label="vs human">{faster(rb) ? `⚡ ${fmtDur(rb.time.run_ms)} vs ${fmtDur(rb.time.recording_ms)}` : ""}</td>}<td data-label="cost">{usd(rb.usage.usd)}</td><td className="small" data-label="when">{ago(x.record.created_at)} · #{x.seq} · <Link to={`/skills/runs/${x.record.cid}`}>run page</Link></td></tr>; })}
     </tbody></table>
     <p className="small"><Link to={`/skills/reuse?skill=${encodeURIComponent(b.slug)}`}>→ all runs of {b.slug}, every version</Link></p>
     <h2>Version history</h2>

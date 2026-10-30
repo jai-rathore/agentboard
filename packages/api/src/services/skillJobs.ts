@@ -88,11 +88,18 @@ export async function getJob(ctx: AppContext, id: string, internal = false) {
   const runBody = runRow?.body_text ?? null;
   const binding = runBody ? runValueBinding(JSON.parse(runBody)) : null;
   const verified = runBody ? JSON.parse(runBody).success === true && binding!.ok : null;
-  const message = runBody && binding && !binding.ok && JSON.parse(runBody).success === true ? `Not verified: ${binding.reason}` : r.message;
+  const unbound = Boolean(runBody && binding && !binding.ok && JSON.parse(runBody).success === true);
+  const message = unbound ? `Not verified: ${binding!.reason}` : r.message;
+  // One answer to "did it work": success === verified (the run passed its checks AND its value is tied to the inputs).
+  // When the executor's checks passed but the value is not tied to the inputs, the verdict shown says so
+  // (success false, checks_passed true); the signed run record keeps what the executor reported.
+  const view = (v: any) => (v && unbound ? { ...v, success: false, checks_passed: true, evidence: `Not verified: ${binding!.reason}. ${v.evidence ?? ""}`.trim() } : v);
+  const result = j(r.result);
+  const outcome = status !== "completed" ? status : verified === false || (verified == null && view(result?.verdict ?? j(r.verdict))?.success === false) ? "not_verified" : "verified";
   return {
-    id: r.id, skill_cid: r.skill_cid, status, message, ...(runBody ? { verified, value_binding: binding } : {}), params: j(r.params), start_url: r.start_url, via: r.via, trigger: r.via, agent: r.via === "agent" || r.via === "benchmark" ? r.requested_by : null,
-    turns: j(r.turns), approval, verdict: j(r.verdict),
-    result: runBody && j(r.result)?.answer ? { ...j(r.result), answer: displayAnswer({ created_at: new Date(runRow.created_at).toISOString(), body: JSON.parse(runBody) }) } : j(r.result),
+    id: r.id, skill_cid: r.skill_cid, status, outcome, ...(status === "completed" ? { success: outcome === "verified" } : {}), message, ...(runBody ? { verified, value_binding: binding } : {}), params: j(r.params), start_url: r.start_url, via: r.via, trigger: r.via, agent: r.via === "agent" || r.via === "benchmark" ? r.requested_by : null,
+    turns: j(r.turns), approval, verdict: view(j(r.verdict)),
+    result: result ? { ...result, ...(result.verdict ? { verdict: view(result.verdict) } : {}), ...(runBody && result.answer ? { answer: displayAnswer({ created_at: new Date(runRow.created_at).toISOString(), body: JSON.parse(runBody) }) } : {}) } : result,
     ...(internal ? { decision: j(r.decision) } : {}),
     frame_url: r.has_frame ? `${ctx.cfg.publicBaseUrl}/v1/skills/jobs/${r.id}/frame?t=${new Date(r.updated_at).getTime()}` : null,
     url: jobUrl(ctx, r.id),
@@ -169,7 +176,10 @@ export async function agentRunEligibility(ctx: AppContext, did: string, agent?: 
   const bal = Number((await ctx.db.query<any>(`SELECT COALESCE(SUM(delta_milli),0)::float8 AS b FROM credit_ledger WHERE did = $1`, [did])).rows[0]?.b ?? 0);
   const affordable = cost > 0 ? Math.max(0, Math.floor(bal / cost)) : Infinity;
   const left = el.eligible ? Math.max(0, Math.min(quota.yours.remaining, quota.node.remaining, affordable)) : 0;
-  const limitedBy = !el.eligible ? "eligibility" : left === affordable && affordable < Math.min(quota.yours.remaining, quota.node.remaining) ? "credits" : left === quota.node.remaining && quota.node.remaining < quota.yours.remaining ? "node_quota" : "your_quota";
+  // what caps runs_left_today: credits, the quota (yours or the node's), or "both" when credits and the quota allow the same number
+  const quotaLeft = Math.min(quota.yours.remaining, quota.node.remaining);
+  const quotaName = quota.node.remaining < quota.yours.remaining ? "node_quota" : "your_quota";
+  const limitedBy = !el.eligible ? "eligibility" : affordable < quotaLeft ? "credits" : affordable === quotaLeft ? "both" : quotaName;
   return { ...el, runs_left_today: left, runs_left_limited_by: limitedBy, credits: bal / 1000, runs_affordable: Number.isFinite(affordable) ? affordable : null, quota };
 }
 async function probationCheck(ctx: AppContext, did: string, agent?: { status: string; registered_at: string | Date }) {

@@ -1,0 +1,684 @@
+[
+ {
+  "slug": "pypi-package-version",
+  "skill": {
+   "name": "Read latest PyPI package version",
+   "summary": "Open the Release history tab on the PyPI project page to read the newest version and its date",
+   "params": [
+    {
+     "name": "package",
+     "example": "flask",
+     "description": "Name of the Python package on PyPI to check"
+    }
+   ],
+   "steps": [
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Open the Release history tab to view all releases",
+     "target": "Release history tab in the navigation bar below the package title, with a history/clock icon"
+    }
+   ],
+   "success_check": "The PyPI project page for {{package}} shows the Release history tab selected with a Release history section where the top entry is marked THIS RELEASE and displays the newest version number and its release date",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://pypi.org/project/{{package}}/"
+  }
+ },
+ {
+  "slug": "hacker-news-top-story",
+  "skill": {
+   "name": "Read top Hacker News story stats",
+   "summary": "Open the Hacker News front page and read the title, points and comment count of the current #1 story.",
+   "params": [],
+   "steps": [
+    {
+     "value": "https://news.ycombinator.com/",
+     "action": "navigate",
+     "intent": "Open Hacker News front page",
+     "target": "browser address bar"
+    }
+   ],
+   "success_check": "Hacker News front page story list is visible with the number 1 ranked story showing its title on the first line and its points and comment count on the line underneath",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://news.ycombinator.com/"
+  }
+ },
+ {
+  "slug": "rubygems-version",
+  "skill": {
+   "name": "Search RubyGems for a gem and view latest version",
+   "summary": "Search for a gem by name on RubyGems.org and open its detail page to read the latest version number and metadata.",
+   "params": [
+    {
+     "name": "gem_name",
+     "description": "name of the gem to search for",
+     "example": "rails"
+    }
+   ],
+   "steps": [
+    {
+     "intent": "Navigate to RubyGems homepage",
+     "target": "browser address bar showing https://rubygems.org/",
+     "action": "navigate",
+     "value": "https://rubygems.org/"
+    },
+    {
+     "intent": "Click the search input to focus it",
+     "target": "search input with placeholder \"Search Gems\u2026\"",
+     "action": "click",
+     "value": ""
+    },
+    {
+     "intent": "Type the gem name into the search field",
+     "target": "focused search input with placeholder \"Search Gems\u2026\"",
+     "action": "type",
+     "value": "{{gem_name}}"
+    },
+    {
+     "intent": "Submit the search by pressing Enter",
+     "target": "\"Search Gems\u2026\" search input",
+     "action": "keypress",
+     "value": "Enter"
+    },
+    {
+     "intent": "Open the matching gem from results",
+     "target": "search result link \"{{gem_name}}\"",
+     "action": "click",
+     "value": ""
+    }
+   ],
+   "success_check": "Gem detail page for {{gem_name}} is displayed showing the latest version number, release date, version count, and download statistics.",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://rubygems.org/"
+  }
+ },
+ {
+  "slug": "wikipedia-infobox-fact",
+  "skill": {
+   "name": "Read Wikipedia infobox field",
+   "summary": "Search Wikipedia for {{search_query}}, open the matching article, and read the {{target_field}} value from its infobox.",
+   "params": [
+    {
+     "name": "search_query",
+     "description": "query to type into Wikipedia search box",
+     "example": "Mount Everest"
+    },
+    {
+     "name": "target_field",
+     "description": "infobox field label to read on the article page",
+     "example": "Elevation"
+    }
+   ],
+   "steps": [
+    {
+     "intent": "click the search input to focus it",
+     "target": "main search input field at top of search page",
+     "action": "click",
+     "value": ""
+    },
+    {
+     "intent": "type the query into the search input",
+     "target": "main search input field at top of search page",
+     "action": "type",
+     "value": "{{search_query}}"
+    },
+    {
+     "intent": "Press Enter to run the search",
+     "target": "search input field containing {{search_query}}",
+     "action": "keypress",
+     "value": "Enter"
+    },
+    {
+     "intent": "open the article from search results",
+     "target": "\"{{search_query}}\" article link in search results list",
+     "action": "click",
+     "value": ""
+    },
+    {
+     "intent": "scroll to the field in the article infobox to read it",
+     "target": "infobox panel on right side of article, header row for {{target_field}} with sub-rows",
+     "action": "scroll",
+     "value": ""
+    }
+   ],
+   "success_check": "Article page for {{search_query}} is open and the right-side infobox is visible showing a row for {{target_field}} with its value displayed.",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://en.wikipedia.org/wiki/Special:Search"
+  }
+ },
+ {
+  "slug": "x-rates-exchange-rate",
+  "skill": {
+   "name": "Read USD exchange rate for currency from X-Rates table",
+   "summary": "Open the X-Rates USD table and locate today's exchange rate for a specified currency in the US Dollar Exchange Rates Table.",
+   "params": [
+    {
+     "name": "target_currency",
+     "example": "Euro",
+     "description": "Currency name to look up in the US Dollar Exchange Rates Table"
+    }
+   ],
+   "steps": [
+    {
+     "value": "",
+     "action": "wait",
+     "intent": "Wait for the US Dollar Exchange Rates Table to load",
+     "target": "main content heading 'US DOLLAR EXCHANGE RATES TABLE' with columns 'Currency', 'Top 10', '1.00 USD', 'Inv. 1.00 USD'"
+    },
+    {
+     "value": "",
+     "action": "scroll",
+     "intent": "Scroll down to view the full currency list",
+     "target": "central table area listing currencies such as Australian Dollar, Brazilian Real, Euro, etc. under 'US DOLLAR EXCHANGE RATES TABLE'"
+    },
+    {
+     "value": "",
+     "action": "scroll",
+     "intent": "Locate the row for the desired currency",
+     "target": "table row labeled '{{target_currency}}' in the currency column on the left side of the US Dollar Exchange Rates Table"
+    }
+   ],
+   "success_check": "The 'US DOLLAR EXCHANGE RATES TABLE' is visible with a row for '{{target_currency}}' showing its current exchange rate values in the '1.00 USD' and 'Inv. 1.00 USD' columns.",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://www.x-rates.com/table/?from=USD&amount=1"
+  }
+ },
+ {
+  "slug": "github-repo-stars-release",
+  "skill": {
+   "name": "Read GitHub star count and latest release",
+   "summary": "Open a GitHub repository page and read the star count and latest release version from the sidebar.",
+   "params": [
+    {
+     "name": "repository_url",
+     "example": "https://github.com/microsoft/playwright",
+     "description": "URL of the GitHub repository page to read"
+    }
+   ],
+   "steps": [
+    {
+     "value": "{{repository_url}}",
+     "action": "navigate",
+     "intent": "Open the GitHub repository page",
+     "target": "browser address bar"
+    },
+    {
+     "value": "",
+     "action": "scroll",
+     "intent": "Scroll down to reveal the About sidebar with star count and Releases section",
+     "target": "right sidebar Releases section of the repository page"
+    }
+   ],
+   "success_check": "Repository page for {{repository_url}} is visible, with the star count shown in the sidebar and a version labeled as Latest under Releases",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://github.com/vercel/next.js"
+  }
+ },
+ {
+  "slug": "crates-io-version",
+  "skill": {
+   "name": "Search crates.io for a crate and view latest version",
+   "summary": "Search for {{crate_name}} on crates.io from the homepage and open its crate detail page to read the latest version and metadata.",
+   "params": [
+    {
+     "name": "crate_name",
+     "example": "serde",
+     "description": "Name of the Rust crate to search for"
+    }
+   ],
+   "steps": [
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Click the main search bar to focus it",
+     "target": "Large white rounded search input at the top center of the page with placeholder text 'Type \"S\" or \"/\" to search'"
+    },
+    {
+     "value": "{{crate_name}}",
+     "action": "type",
+     "intent": "Type the crate name into the search bar",
+     "target": "Large white search input at the top center with placeholder 'Type \"S\" or \"/\" to search'"
+    },
+    {
+     "value": "Enter",
+     "action": "keypress",
+     "intent": "Submit the search",
+     "target": "Large white search input at the top center currently containing {{crate_name}}"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Open the crate detail page from results",
+     "target": "First result title link at the top of the Search Results list showing {{crate_name}} with its version number (e.g. v1.0.229)"
+    }
+   ],
+   "success_check": "Crate detail page for {{crate_name}} is visible with a large title showing {{crate_name}} and a version number, navigation tabs for Readme/Code/Versions/Dependencies, a description area, and a right-hand Metadata panel listing version, license, and install information.",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://crates.io/"
+  }
+ },
+ {
+  "slug": "go-package-version",
+  "skill": {
+   "name": "Read Go module latest version and publish date on pkg.go.dev",
+   "summary": "Navigate to a Go module's pkg.go.dev page and read its latest version tag and published date from the header.",
+   "params": [
+    {
+     "name": "module_path",
+     "example": "github.com/gin-gonic/gin",
+     "description": "Go module import path to look up on pkg.go.dev"
+    }
+   ],
+   "steps": [
+    {
+     "value": "https://pkg.go.dev/{{module_path}}",
+     "action": "navigate",
+     "intent": "Navigate to the Go module documentation page",
+     "target": "browser address bar"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Dismiss cookie consent banner if present",
+     "target": "small gray 'Okay' button at bottom-right of cookie notice bar"
+    },
+    {
+     "value": "",
+     "action": "wait",
+     "intent": "Verify latest version and publish date are visible",
+     "target": "header line below package title showing 'Version: vX.X.X Latest Published ...'"
+    }
+   ],
+   "success_check": "The pkg.go.dev page for {{module_path}} is loaded and the header displays the latest version label and its published date.",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://pkg.go.dev/github.com/spf13/cobra"
+  }
+ },
+ {
+  "slug": "hn-search-top-result",
+  "skill": {
+   "name": "Search Hacker News for topic by popularity",
+   "summary": "Search hn.algolia.com for a topic and display the most popular matching stories to read the top result title.",
+   "params": [
+    {
+     "name": "search_query",
+     "example": "sqlite",
+     "description": "topic or keyword to search for on Hacker News"
+    }
+   ],
+   "steps": [
+    {
+     "value": "{{search_query}}",
+     "action": "type",
+     "intent": "Enter search query on Hacker News",
+     "target": "large white search input at top center with placeholder 'Search stories by title, url or author' next to orange H logo"
+    },
+    {
+     "value": "Enter",
+     "action": "keypress",
+     "intent": "Submit search to view results",
+     "target": "same search input at top center containing {{search_query}}"
+    }
+   ],
+   "success_check": "Search results page shows stories matching {{search_query}} sorted by Popularity, with a list of result titles visible and the top most popular story title displayed at the top of the list",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://hn.algolia.com/"
+  }
+ },
+ {
+  "slug": "shop-mock-purchase",
+  "skill": {
+   "name": "Buy one product in mock coffee store",
+   "summary": "Search for a product, add it to cart, check out and place order with shipping name and address.",
+   "params": [
+    {
+     "name": "product_query",
+     "example": "Colombia Huila",
+     "description": "Product name to search for and purchase"
+    },
+    {
+     "name": "shipping_name",
+     "example": "Erin Lee",
+     "description": "Recipient name for shipping"
+    },
+    {
+     "name": "shipping_address",
+     "example": "12 Market St, San Francisco",
+     "description": "Street and city address for shipping"
+    }
+   ],
+   "steps": [
+    {
+     "value": "{{product_query}}",
+     "action": "type",
+     "intent": "enter product search term",
+     "target": "Search input box with placeholder 'Search coffee & gear' at top left of shop page"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "run product search",
+     "target": "brown Search button to the right of Max price dropdown"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "add searched product to cart",
+     "target": "brown Add to cart button under the single search result product card"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "open shopping cart",
+     "target": "Cart pill button showing item count in top right header"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "proceed to checkout",
+     "target": "brown Checkout button at bottom right of Your cart page next to Keep shopping"
+    },
+    {
+     "value": "{{shipping_name}}",
+     "action": "type",
+     "intent": "enter shipping recipient name",
+     "target": "Ship to (name) text input field on Checkout page"
+    },
+    {
+     "value": "{{shipping_address}}",
+     "action": "type",
+     "intent": "enter shipping address",
+     "target": "Address text input field with placeholder 'Street, city' below name field"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "place the order",
+     "target": "brown Place order button below Address field"
+    }
+   ],
+   "success_check": "Checkout page shows an Order confirmed message for {{product_query}} shipping to {{shipping_name}} at {{shipping_address}}, and cart count shows 0",
+   "risk_flags": [
+    "purchase",
+    "personal_data",
+    "submits_form"
+   ]
+  },
+  "source": {
+   "start_url": "https://agentboard-olive-pi.vercel.app/demo/shop/"
+  }
+ },
+ {
+  "slug": "shop-apply-coupon",
+  "skill": {
+   "name": "Add product to cart and apply coupon",
+   "summary": "Search for a product, add it to cart, open cart, apply coupon code and verify discounted total.",
+   "params": [
+    {
+     "name": "search_term",
+     "example": "Kenya AA",
+     "description": "Product name to search for in the shop search box"
+    },
+    {
+     "name": "coupon_code",
+     "example": "BEANS10",
+     "description": "Discount coupon code to apply in the cart"
+    }
+   ],
+   "steps": [
+    {
+     "value": "{{search_term}}",
+     "action": "type",
+     "intent": "Enter the product name to find it",
+     "target": "Search text input with placeholder 'Search coffee & gear' at top left"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Run the search to filter products",
+     "target": "brown Search button to the right of Max price dropdown"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Add the found product to the shopping cart",
+     "target": "brown Add to cart button under the Kenya AA product card"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Open the shopping cart page",
+     "target": "Cart (1) pill button in top right header"
+    },
+    {
+     "value": "{{coupon_code}}",
+     "action": "type",
+     "intent": "Enter the coupon code to get discount",
+     "target": "Coupon code text input with placeholder 'e.g. BEANS10' under Your cart"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Apply the coupon code to update totals",
+     "target": "light beige Use code button next to coupon code input"
+    }
+   ],
+   "success_check": "Your cart page shows the {{search_term}} item, message 'Code {{coupon_code}} applied: 10% off.', a Coupon discount line, and updated Total with discounted amount",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://agentboard-olive-pi.vercel.app/demo/shop/"
+  }
+ },
+ {
+  "slug": "shop-cheapest-under-price",
+  "skill": {
+   "name": "Find cheapest product and add to cart",
+   "summary": "Search for a term with a max price, add the cheapest sorted result to cart, and open the cart.",
+   "params": [
+    {
+     "name": "search_term",
+     "example": "beans",
+     "description": "Keyword to enter in the Search box, e.g. coffee type or product name"
+    },
+    {
+     "name": "max_price",
+     "example": "Under $15",
+     "description": "Maximum price filter to choose from the Max price dropdown"
+    }
+   ],
+   "steps": [
+    {
+     "value": "{{search_term}}",
+     "action": "type",
+     "intent": "Enter the search keyword in the Search box",
+     "target": "Search input box on top left labeled Search with placeholder 'Search coffee & gear'"
+    },
+    {
+     "value": "{{max_price}}",
+     "action": "select",
+     "intent": "Choose the maximum price filter",
+     "target": "Max price dropdown next to Search box showing 'Any price'"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Run the filtered search",
+     "target": "brown Search button to the right of the Max price dropdown"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Add the cheapest (first, lowest-priced) result to the cart",
+     "target": "Add to cart button under the first/cheapest product card in the results grid sorted by price"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Open the cart page",
+     "target": "Cart button in top right header showing Cart (1)"
+    }
+   ],
+   "success_check": "Your cart page is visible showing the cheapest {{search_term}} product under {{max_price}} as a line item with Price, Qty 1, and Total.",
+   "risk_flags": [
+    "none"
+   ]
+  },
+  "source": {
+   "start_url": "https://agentboard-olive-pi.vercel.app/demo/shop/"
+  }
+ },
+ {
+  "slug": "helpdesk-ticket-status",
+  "skill": {
+   "name": "Look up support ticket status",
+   "summary": "Look up a support ticket by its ticket number and customer email, and read its status and who it is assigned to.",
+   "params": [
+    {
+     "name": "ticket_number",
+     "example": "5379",
+     "description": "Ticket number from confirmation"
+    },
+    {
+     "name": "customer_email",
+     "example": "erin@hooli.com",
+     "description": "Customer email the ticket was filed under"
+    }
+   ],
+   "steps": [
+    {
+     "value": "{{ticket_number}}",
+     "action": "type",
+     "intent": "Enter the ticket number to look up",
+     "target": "Ticket number input field with placeholder e.g. 5379"
+    },
+    {
+     "value": "{{customer_email}}",
+     "action": "type",
+     "intent": "Enter the customer email the ticket was filed under",
+     "target": "Customer email input field with placeholder name@example.com"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Submit the lookup to display the ticket details",
+     "target": "blue 'Look up ticket' button below the email field"
+    }
+   ],
+   "success_check": "A result card titled 'Ticket #{{ticket_number}} - {{customer_email}}' is visible showing Status, Assigned to, Priority, Last update and Next step.",
+   "risk_flags": [
+    "personal_data"
+   ]
+  },
+  "source": {
+   "start_url": "https://agentboard-olive-pi.vercel.app/demo/helpdesk/status.html"
+  }
+ },
+ {
+  "slug": "create-a-support-ticket",
+  "skill": {
+   "name": "Create a support ticket",
+   "summary": "Fill out the New support ticket form with customer email, subject, priority and description and submit to create a ticket",
+   "params": [
+    {
+     "name": "customer_email",
+     "description": "Customer email address for the ticket",
+     "example": "dana@globex.com"
+    },
+    {
+     "name": "ticket_subject",
+     "description": "Short subject summary of the issue",
+     "example": "Cannot reset password"
+    },
+    {
+     "name": "priority",
+     "description": "Priority level for the ticket",
+     "example": "High"
+    },
+    {
+     "name": "description",
+     "description": "Detailed description of the issue",
+     "example": "Reset link expired twice."
+    }
+   ],
+   "steps": [
+    {
+     "intent": "Enter the customer email address",
+     "target": "Requester e-mail input under Open a request heading",
+     "action": "type",
+     "value": "{{customer_email}}"
+    },
+    {
+     "intent": "Select the urgency level",
+     "target": "Urgency dropdown",
+     "action": "select",
+     "value": "{{priority}}"
+    },
+    {
+     "intent": "Enter the ticket subject summary",
+     "target": "Summary input field",
+     "action": "type",
+     "value": "{{ticket_subject}}"
+    },
+    {
+     "intent": "Enter the ticket description details",
+     "target": "Details textarea",
+     "action": "type",
+     "value": "{{description}}"
+    },
+    {
+     "intent": "Click Submit request to create the ticket",
+     "target": "green Submit request button at top right of form",
+     "action": "click",
+     "value": ""
+    }
+   ],
+   "success_check": "Light green success banner below form stating Ticket # created for {{customer_email}} ({{priority}}): {{ticket_subject}}",
+   "risk_flags": [
+    "submits_form",
+    "personal_data"
+   ]
+  },
+  "source": {
+   "start_url": "https://agentboard-olive-pi.vercel.app/demo/helpdesk/"
+  }
+ }
+]

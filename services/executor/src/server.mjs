@@ -13,7 +13,7 @@ import { chromium } from "playwright-core";
 import { approvalFor, inspectInPage, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL, FIND_TOOL } from "./policy.mjs";
 import { makeGif } from "./gif.mjs";
 import { scrollPlan } from "./scroll.mjs";
-import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep, deriveRecipeInPage, applyRecipeInPage, answerCandidates, pickValue, storeRecipe, fillRecipe, cleanSteps, valueBinding } from "./trace.mjs";
+import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep, deriveRecipeInPage, applyRecipeInPage, answerCandidates, pickValue, storeRecipe, fillRecipe, cleanSteps, valueBinding, missingInputs, describeMissing } from "./trace.mjs";
 import { probeInPage, scrollToTextInPage, snapPoint, INTERACTIVE, SNAP_RADIUS, addressBarUrl, isAddressBarKey } from "./click.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
@@ -166,8 +166,13 @@ async function replay(m, send, ask, isAborted) {
       return route.continue();
     });
     // a known trace only needs the DOM (each step waits for its own element); the model needs the page fully painted
-    await page.goto(start_url, { waitUntil: usableTrace(trace) ? "domcontentloaded" : "load", timeout: 45_000 });
+    const startResp = await page.goto(start_url, { waitUntil: usableTrace(trace) ? "domcontentloaded" : "load", timeout: 45_000 });
     actions.push({ turn: 0, type: "navigate", detail: start_url.slice(0, 300), approval: "auto", checks: [] });
+    // fail fast (no model calls) when this run's inputs are not on the site: a start URL built from an input that does
+    // not exist (HTTP 4xx), or a trace step / extraction row that must find an input that is nowhere on the page
+    let failFast = null;
+    const pageText = async () => (await page.evaluate(() => document.body?.innerText ?? "").catch(() => "")) || "";
+    if (/\{\{\s*[a-z0-9_]+\s*\}\}/i.test(startTpl) && startResp && startResp.status() >= 400 && startResp.status() < 500) failFast = `there is no page for these inputs (HTTP ${startResp.status()} at ${start_url.slice(0, 200)})`;
     let lastSelect = null, finalMessage = "", turn = 0, addressBar = false;
     const shoot = async (label) => {
       const jpg = await page.screenshot({ type: "jpeg", quality: 70 });
@@ -190,15 +195,20 @@ async function replay(m, send, ask, isAborted) {
 
     // ---- deterministic replay: run the stored trace with no model calls; fall back to the model from the first failing step
     const replayInfo = { mode: "model", trace_source: trace?.source ?? null, trace_steps: 0, trace_steps_done: 0, failed_step: null, failed_reason: null, verifier: "model" };
-    if (usableTrace(trace)) {
-      replayInfo.mode = "trace"; replayInfo.trace_steps = trace.steps.length;
+    if (usableTrace(trace) || failFast) { replayInfo.mode = "trace"; replayInfo.trace_steps = trace?.steps?.length ?? 0; }
+    if (usableTrace(trace) && !failFast) {
       send({ type: "status", message: `Replaying the recorded trace (${trace.steps.length} steps, no model calls)` });
       const tTrace = Date.now(), stepMs = [];
       for (let i = 0; i < trace.steps.length; i++) {
         const s = trace.steps[i], tStep = Date.now();
         if (isAborted()) throw Object.assign(new Error("viewer disconnected"), { code: "aborted" });
         const r = await runTraceStep(page, s, params, { origin, skill, ask, send, actions, history, index: i, W, H, selectOption, inspect, execute, onHuman: (ms) => { humanMs += ms; } });
-        if (!r.ok) { lean.on = false; replayInfo.mode = "trace+recovery"; replayInfo.failed_step = i + 1; replayInfo.failed_reason = r.reason.slice(0, 300); break; }
+        if (!r.ok) {
+          replayInfo.failed_step = i + 1; replayInfo.failed_reason = r.reason.slice(0, 300);
+          const missing = missingInputs(s, params, await pageText());
+          if (missing.length) { failFast = `${describeMissing(missing)} is not on the page (trace step ${i + 1})`; break; }
+          lean.on = false; replayInfo.mode = "trace+recovery"; break;
+        }
         rec({ ...structuredClone(s), changes_url: undefined });
         recorded[recorded.length - 1]._before = r.before; recorded[recorded.length - 1].changes_url = r.changed;
         replayInfo.trace_steps_done = i + 1; stepMs.push(Date.now() - tStep);
@@ -317,6 +327,10 @@ async function replay(m, send, ask, isAborted) {
       const b = await bindingOf(recipe, value);
       if (!b.ok) { unboundNote = b.reason; send({ type: "status", message: `Not returning "${value}": ${b.reason}` }); recipe = null; value = null; }
     }
+    if (!failFast && !unboundNote && recipe && value == null && replayInfo.mode === "trace") {
+      const missing = missingInputs(recipe, params, texts.page);
+      if (missing.length) failFast = `${describeMissing(missing)} is not on the page (no "${fillText(recipe.label, params)}" row)`;
+    }
     if (!unboundNote && recipe && value == null) { send({ type: "status", message: `The extraction recipe found no value on this page (${recipe.kind}${recipe.label ? ` "${fillText(recipe.label, params)}"` : ""})` }); recipe = null; }
     // the final screenshot shows the extracted value (scrolled into view) for the record and any verifier call
     if (value != null) await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: true }).catch(() => {});
@@ -324,7 +338,10 @@ async function replay(m, send, ask, isAborted) {
     // a zero-model replay has no turns to animate: its evidence is the final screenshot (no GIF to encode)
     if (replayInfo.mode !== "trace") gifFrames.push(await page.screenshot({ type: "png" }));
     let det = null;
-    if (replayInfo.mode === "trace") {
+    if (failFast) {
+      replayInfo.fail_fast = failFast.slice(0, 300);
+      send({ type: "status", message: `Not verified: ${failFast}. No model recovery: the input is not on the site` });
+    } else if (replayInfo.mode === "trace") {
       det = checkFinal(trace.final, texts, params, page.url());
       if (det.ok && trace.extract && value == null) det = { ok: false, checks: det.checks, reason: unboundNote ? `the recorded value is not tied to the inputs (${unboundNote})` : "the value could not be extracted" };
       // no recipe yet: one verifier call quotes the value, and this run learns where it is on the page (next replays: 0 calls)
@@ -334,7 +351,9 @@ async function replay(m, send, ask, isAborted) {
       if (det.ok) replayInfo.verifier = "deterministic";
       else send({ type: "status", message: `Deterministic check inconclusive (${det.reason}); asking the verifier` });
     }
-    const v = det?.ok ? { model: "deterministic", usage: null, response: { output: [{ type: "message", content: [{ text: JSON.stringify({ success: true, evidence: `Deterministic checks of the recorded trace passed: ${det.checks.join("; ")}. Final URL ${page.url().slice(0, 200)}.` }) }] }] } } : await api("/internal/muse/responses", {
+    const detVerdict = (o) => ({ model: "deterministic", usage: null, response: { output: [{ type: "message", content: [{ text: JSON.stringify(o) }] }] } });
+    const v = failFast ? detVerdict({ success: false, evidence: `Not verified: ${failFast}. Final URL ${page.url().slice(0, 200)}.` })
+      : det?.ok ? detVerdict({ success: true, evidence: `Deterministic checks of the recorded trace passed: ${det.checks.join("; ")}. Final URL ${page.url().slice(0, 200)}.` }) : await api("/internal/muse/responses", {
       reasoning: { effort: "minimal" }, max_output_tokens: 600,
       text: { format: { type: "json_schema", name: "verdict", strict: true, schema: VERIFY_SCHEMA } },
       input: [{ role: "user", content: [{ type: "input_text", text: `Success check: ${check}\nExpected parameters: ${JSON.stringify(params)}\nDoes this final browser screenshot satisfy the success check? Only judge what is visible. In evidence, quote the exact value the task asks for as it is shown; in value, give only that value (no label).` }, { type: "input_image", image_url: `data:image/jpeg;base64,${finalJpg.toString("base64")}` }] }],
@@ -342,7 +361,7 @@ async function replay(m, send, ask, isAborted) {
     if (v.usage) addUsage(v.usage);
     let verdict = { success: false, evidence: "verifier returned no verdict" };
     try { verdict = JSON.parse((v.response.output ?? []).filter((o) => o.type === "message").flatMap((o) => o.content ?? []).map((c) => c.text ?? "").join("")); } catch {}
-    const verdictFull = { success: Boolean(verdict.success), evidence: String(verdict.evidence ?? "").slice(0, 1500), model: v.model, capability: det?.ok ? "deterministic: trace post-conditions and final-page checks (no model call)" : "image understanding + structured output" };
+    const verdictFull = { success: Boolean(verdict.success), evidence: String(verdict.evidence ?? "").slice(0, 1500), model: v.model, capability: failFast ? "deterministic: the input is not on the site (no model call)" : det?.ok ? "deterministic: trace post-conditions and final-page checks (no model call)" : "image understanding + structured output" };
     // No recipe yet (a model run, or an old trace): find the answer the model or verifier quoted on the page and keep how to read it.
     if (verdictFull.success && value == null) {
       // the verifier's own value first (a version or number inside it before the whole text), then what the answers quote

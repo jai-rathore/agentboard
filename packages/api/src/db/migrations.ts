@@ -311,6 +311,25 @@ ALTER TABLE llm_usage ADD COLUMN input_tokens bigint NOT NULL DEFAULT 0;
 ALTER TABLE llm_usage ADD COLUMN output_tokens bigint NOT NULL DEFAULT 0;
 `,
   },
+  {
+    id: 32,
+    name: "skill_search",
+    // find_skill hybrid retrieval (services/skillSearch.ts): FTS over name/slug/summary/steps, trigram on name and
+    // summary, bge-small vectors. search_text and emb are filled by indexSkills (boot, and lazily before a search).
+    sql: `
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS search_text text;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS emb vector(384);
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS tsv tsvector GENERATED ALWAYS AS (
+  setweight(to_tsvector('english', coalesce(name, '')), 'A') ||
+  setweight(to_tsvector('english', replace(coalesce(slug, ''), '-', ' ')), 'A') ||
+  setweight(to_tsvector('english', coalesce(summary, '')), 'B') ||
+  setweight(to_tsvector('english', coalesce(search_text, '')), 'C')
+) STORED;
+CREATE INDEX IF NOT EXISTS skills_tsv_idx ON skills USING gin (tsv);
+CREATE INDEX IF NOT EXISTS skills_name_trgm ON skills USING gin (name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS skills_summary_trgm ON skills USING gin (summary gin_trgm_ops);
+`,
+  },
 ];
 
 export async function migrate(db: Db): Promise<number[]> {

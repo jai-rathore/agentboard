@@ -204,7 +204,9 @@ export async function runDetail(ctx: AppContext, id: string) {
     inputs: b.params, new_inputs: k.new_inputs, differing_params: k.differing_params,
     site_kind: k.site_kind, site_label: SITE_LABEL[k.site_kind],
     self_healed: k.self_healed, healed_to: healedTo ? { cid: healedTo.cid, version: healedTo.version } : null,
-    verdict: b.verdict, success: b.success,
+    // success === verified (checks passed AND the value is tied to the inputs); signed_success is what the record says
+    verdict: runVerified(b) || !b.success ? b.verdict : { ...b.verdict, success: false, checks_passed: true, evidence: `Not verified: ${runValueBinding(b).reason}. ${b.verdict?.evidence ?? ""}`.trim() },
+    success: runVerified(b), outcome: runVerified(b) ? "verified" : "not_verified", ...(b.success !== runVerified(b) ? { signed_success: b.success } : {}),
     models: { loop: b.loop?.model ?? null, loop_capability: b.loop?.capability ?? null, verifier: b.verdict?.model ?? null, verifier_capability: b.verdict?.capability ?? null },
     evidence: { final_screenshot: b.evidence?.final_screenshot ? artifactUrl(ctx, b.evidence.final_screenshot) : null, gif: b.evidence?.gif ? artifactUrl(ctx, b.evidence.gif) : null, sha256: b.evidence },
     usage: b.usage, turns: b.turns, actions: b.actions, time: b.time,

@@ -73,6 +73,9 @@ describe("runs left today is what you can actually start", () => {
     await set(500);
     p = (await node.req("GET", `/v1/agents/${a.did}`)).body.run_policy;
     expect(p).toMatchObject({ runs_left_today: 10, runs_left_limited_by: "your_quota" });
+    await set(50); // 10 affordable = 10 quota left: a tie says both
+    p = (await node.req("GET", `/v1/agents/${a.did}`)).body.run_policy;
+    expect(p).toMatchObject({ runs_left_today: 10, runs_left_limited_by: "both", runs_affordable: 10 });
   });
 });
 

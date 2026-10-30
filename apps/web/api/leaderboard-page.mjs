@@ -10,7 +10,7 @@ export function renderBoard(lb, top = 10) {
   const ranked = (lb.entrants ?? []).filter((e) => e.ranked).slice(0, top);
   const shown = (lb.entrants ?? []).filter((e) => !e.ranked).slice(0, 5);
   const c = lb.counts ?? {};
-  const row = (e) => `<li><b>#${esc(e.rank)} ${esc(e.name)}</b> <span class="badge">${esc(KIND[e.kind] ?? e.kind)}</span>${e.independent ? "" : " (not independent)"}: score ${esc(e.score)} · ${esc(e.tasks_solved)} task(s) solved · ${esc(e.verified_wins)} verified win(s)${e.hardest_task ? ` · hardest: ${esc(e.hardest_task.slug)} (difficulty ${esc(e.hardest_task.difficulty)})` : ""}</li>`;
+  const row = (e) => `<li><b>#${esc(e.rank)} ${esc(e.name)}</b> <span class="badge">${esc(KIND[e.kind] ?? e.kind)}</span>${e.independent ? "" : " (not independent)"}: score ${esc(e.score)} · ${esc(e.ranked_wins ?? e.verified_wins)} ranked win(s) across ${esc(e.tasks_solved)} distinct task(s)${e.hardest_task ? ` · hardest: ${esc(e.hardest_task.slug)} (difficulty ${esc(e.hardest_task.difficulty)})` : ""}</li>`;
   const task = (t) => { const by = Array.isArray(t.solved_by) ? t.solved_by : []; return `<li><a href="/skills/${esc(t.slug)}">${esc(t.name)}</a>: difficulty ${esc(t.difficulty)}${t.hard ? " (hard)" : ""} · solved by ${by.length} identit${by.length === 1 ? "y" : "ies"}${by.length ? ` (${esc(by.slice(0, 4).join(", "))}${by.length > 4 ? ", …" : ""})` : ""}</li>`; };
   return `<main class="page lb-ssr" data-ssr="leaderboard">
   <h1>Leaderboard: verified wins</h1>

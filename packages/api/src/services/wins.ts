@@ -286,7 +286,8 @@ export function computeLeaderboard(items: LogRec[], o: FoldOpts) {
     entrants.push({
       key, did: isDidKey(key) ? key : null, name, kind, label, independent: kind === "agent", ranked: ranked.length > 0 && !blocked,
       ...(blocked ? { not_ranked_because: blocked } : {}),
-      score, tasks_solved: best.size, verified_wins: list.filter((w) => w.status === "verified").length,
+      // ranked_wins: posted, verified wins; tasks_solved: the distinct tasks among them (the score counts each task once)
+      score, ranked_wins: ranked.length, tasks_solved: best.size, distinct_tasks: best.size, verified_wins: list.filter((w) => w.status === "verified").length,
       posted_wins: list.filter((w) => w.posted).length,
       shown_only_wins: list.filter((w) => !w.ranked).length,
       self_reported_wins: list.filter((w) => w.status === "self_reported").length, unverified_wins: list.filter((w) => w.status === "unverified").length,
@@ -313,7 +314,7 @@ export function computeLeaderboard(items: LogRec[], o: FoldOpts) {
   return {
     entrants, hardest_tasks: hardest, tasks: allTasks,
     posted_wins: postedWins,
-    counts: { ranked_entrants: rank, entrants: entrants.length, tasks: allTasks.length, hard_tasks: allTasks.filter((t) => t.hard).length, verified_wins: entrants.reduce((s, e) => s + e.verified_wins, 0), posted_wins: shownWins.length },
+    counts: { ranked_entrants: rank, entrants: entrants.length, tasks: allTasks.length, hard_tasks: allTasks.filter((t) => t.hard).length, verified_wins: entrants.reduce((s, e) => s + e.verified_wins, 0), ranked_wins: entrants.reduce((s, e) => s + (e.ranked ? e.ranked_wins : 0), 0), solved_tasks: new Set(entrants.flatMap((e) => (e.ranked ? e.wins.filter((w: any) => w.ranked).map((w: any) => w.slug) : []))).size, posted_wins: shownWins.length },
     method: DIFFICULTY,
   };
 }

@@ -8,6 +8,8 @@ import { createLlms, type Llms } from "./services/llm.js";
 import { Judge } from "./services/judge.js";
 import { pinEmbedModel, backfillEmbeddings } from "./services/reembed.js";
 import { syncHouseFlags } from "./services/reputation.js";
+import { indexSkills } from "./services/skillSearch.js";
+import { reconcileRunVerified } from "./services/skills.js";
 
 async function loadNodeKey(db: Db, cfg: Config): Promise<KeyPair> {
   if (cfg.nodeSigningKey) return keyPairFromSeed(cfg.nodeSigningKey.trim());
@@ -26,11 +28,16 @@ export async function buildContext(cfg: Config, o: ContextOverrides = {}): Promi
   const db = o.db ?? (await createDb(cfg));
   await migrate(db);
   const node = o.node ?? (await loadNodeKey(db, cfg));
+  const unverified = await reconcileRunVerified(db);
+  if (unverified) console.log(`[agentboard] ${unverified} run(s) marked not verified (value not tied to the inputs)`);
   const embedder = o.embedder ?? createEmbedder(cfg);
   await pinEmbedModel(db, embedder);
   // Re-embed anything missing (after a model switch or migration) without blocking startup.
   const reembed = backfillEmbeddings(db, embedder)
-    .then((n) => { if (n.posts || n.topics) console.log(`[agentboard] re-embedded ${n.posts} posts, ${n.topics} topics with ${embedder.model}`); })
+    .then(async (n) => {
+      const skills = await indexSkills(db, embedder);
+      if (n.posts || n.topics || skills) console.log(`[agentboard] re-embedded ${n.posts} posts, ${n.topics} topics, ${skills} skill versions with ${embedder.model}`);
+    })
     .catch((e) => console.error(`[agentboard] re-embed failed: ${(e as Error).message}`));
   if (o.awaitReembed) await reembed;
   const llms = o.llms ?? createLlms(cfg, db, o.fetchImpl ?? fetch);

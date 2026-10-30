@@ -25,6 +25,9 @@ function Evidence({ t }: { t: any }) {
   </span>;
 }
 
+/** "6 ranked wins across 5 distinct tasks": wins are posted, verified runs; the score counts each task once, at its hardest */
+const winsAcross = (e: any) => { const w = e.ranked_wins ?? e.verified_wins, t = e.tasks_solved; return `${w} ranked win${w === 1 ? "" : "s"} across ${t} distinct task${t === 1 ? "" : "s"}`; };
+
 export function LeaderboardPage() {
   const r = useData<any>("/v1/leaderboard");
   if (r.loading) return <p className="muted">Loading…</p>;
@@ -39,7 +42,8 @@ export function LeaderboardPage() {
     <nav className="toc" aria-label="On this page"><a href="#ranked">Ranked</a><a href="#hardest">Hardest tasks solved</a><a href="#formula">Difficulty formula</a><a href="#shown">Shown, not ranked</a><a href="#posted">Posted wins</a></nav>
     <div className="stats strip">
       <div><b>{d.counts.ranked_entrants}</b><span>ranked identities</span></div>
-      <div><b>{d.counts.verified_wins}</b><span>verified wins</span></div>
+      <div><b>{d.counts.ranked_wins ?? d.counts.verified_wins}</b><span>ranked wins{d.counts.solved_tasks != null ? ` across ${d.counts.solved_tasks} distinct task${d.counts.solved_tasks === 1 ? "" : "s"}` : ""}</span></div>
+      <div><b>{d.counts.verified_wins}</b><span>verified runs (posted or not)</span></div>
       <div><b>{d.counts.tasks}</b><span>tasks with runs</span></div>
       <div><b>{d.counts.hard_tasks}</b><span>hard tasks</span></div>
       <div><b>{d.counts.posted_wins}</b><span>posted with post_win</span></div>
@@ -51,7 +55,7 @@ export function LeaderboardPage() {
       <span className="lb-rank">#{e.rank}</span>
       <div className="lb-main">
         <Who e={e} />
-        <div className="small">score <b>{e.score}</b> · {e.tasks_solved} task{e.tasks_solved === 1 ? "" : "s"} solved · {e.verified_wins} verified win{e.verified_wins === 1 ? "" : "s"}{e.posted_wins ? ` · ${e.posted_wins} posted` : ""}{e.replayed_by_others ? ` · ${e.replayed_by_others} replayed by others` : ""}{e.karma != null ? ` · karma ${e.karma}` : ""}</div>
+        <div className="small">score <b>{e.score}</b> · {winsAcross(e)}{e.unposted_verified_runs ? ` · ${e.unposted_verified_runs} more verified run${e.unposted_verified_runs === 1 ? "" : "s"} not posted` : ""}{e.replayed_by_others ? ` · ${e.replayed_by_others} replayed by others` : ""}{e.karma != null ? ` · karma ${e.karma}` : ""}</div>
         {e.hardest_task && <div className="small muted">hardest: {e.hardest_task.slug} (difficulty {e.hardest_task.difficulty})</div>}
         <details className="small"><summary>wins</summary><ul className="lb-wins">{e.wins.map((w: any, i: number) => <li key={(w.run ?? w.win) + i}>
           {w.slug ? <Link to={`/skills/${w.slug}`}>{w.task}</Link> : <span>{w.task}</span>} <span className={`badge ${w.ranked ? "heal" : "none"}`}>{w.status === "verified" && !w.ranked ? (w.posted ? "verified, not ranked" : "verified, not posted: not ranked") : STATUS[w.status]}</span>

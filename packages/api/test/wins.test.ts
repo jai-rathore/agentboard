@@ -4,7 +4,11 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createRecord, generateKeyPair, winBodyFromRun, selfReportedWinBody, verifyRecord, type KeyPair, type SignedRecord } from "@agentboard/core";
-import { AgentboardClient } from "@agentboard/mcp";
+import { AgentboardClient, createAgentboardMcpServer } from "@agentboard/mcp";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { randomUUID } from "node:crypto";
+import { reconcileRunVerified } from "../src/services/skills.js";
 import { makeNode, TestAgent, type TestNode } from "./helpers.js";
 import { computeLeaderboard, reuseEdges, DIFFICULTY, type LogRec } from "../src/services/wins.js";
 import { appendToLog } from "../src/services/log.js";
@@ -257,6 +261,46 @@ describe("win records on a node", () => {
     expect(rt.body).toMatchObject({ retracted: "win" });
     expect(await lbOf()).toMatchObject({ ranked: false, retracted_wins: 1 });
     expect((await agent.submit("retract", { target: win.body.cid })).status).toBe(409);
+  });
+
+  it("an unbound run reads success: false everywhere (job, run page, MCP) and the MCP result does not suggest post_win", async () => {
+    const agent = new TestAgent(node); await agent.register("unbound-reader");
+    const verdict = { success: true, evidence: "row 'Euro 0.895817' visible", model: "deterministic", capability: "deterministic" };
+    const xr = await nodeRun("rates-view", agent.did, true, { verdict, params: { target_currency: "Klingon" }, answer: { value: "0.895817", method: "deterministic", source: "element table > tbody > tr:nth-of-type(1) > td:nth-of-type(2)", verified_by: "deterministic" }, trace: { v: 1, start_url: "https://www.x-rates.com/table/", steps: [], final: { url: "https://www.x-rates.com/table/", viewport: [], page: [], title: [] } } });
+    const ok = await nodeRun("rates-view-ok", agent.did, true, { verdict });
+    const job = async (r: any) => {
+      const id = randomUUID();
+      await node.ctx.db.query(`INSERT INTO skill_jobs (id, skill_cid, params, start_url, requested_by, via, status, verdict, result) VALUES ($1,$2,$3,'https://x.test/',$4,'agent','completed',$5,$6)`,
+        [id, r.body.skill, JSON.stringify(r.body.params), agent.did, JSON.stringify(verdict), JSON.stringify({ run_cid: r.cid, verdict, answer: r.body.answer ?? null, usage: { calls: 0, usd: 0 } })]);
+      return id;
+    };
+    const bad = (await node.req("GET", `/v1/skills/jobs/${await job(xr)}`)).body;
+    expect(bad).toMatchObject({ status: "completed", outcome: "not_verified", success: false, verified: false, verdict: { success: false, checks_passed: true }, result: { verdict: { success: false } } });
+    expect(bad.message).toMatch(/^Not verified: the returned value is not tied to target_currency "Klingon"/);
+    const good = (await node.req("GET", `/v1/skills/jobs/${await job(ok)}`)).body;
+    expect(good).toMatchObject({ outcome: "verified", success: true, verified: true, verdict: { success: true } });
+    const page = (await node.req("GET", `/v1/skills/runs/${xr.cid}`)).body;
+    expect(page).toMatchObject({ success: false, outcome: "not_verified", verified: false, signed_success: true, verdict: { success: false } });
+    // the skill_runs index says not verified too (counts, find_skill, replays)
+    expect((await node.ctx.db.query<any>(`SELECT success FROM skill_runs WHERE cid = $1`, [xr.cid])).rows[0].success).toBe(true); // inserted raw by this test
+    expect(await reconcileRunVerified(node.ctx.db)).toBeGreaterThanOrEqual(1);
+    expect((await node.ctx.db.query<any>(`SELECT success FROM skill_runs WHERE cid = $1`, [xr.cid])).rows[0].success).toBe(false);
+    // MCP skill_run_status: success false, no post_win hint; a verified run gets one
+    const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => node.app.fetch(new Request(input, init))) as typeof fetch;
+    const mcp = createAgentboardMcpServer({ client: new AgentboardClient({ baseUrl: "http://node.test", keyPair: agent.kp, fetchImpl }) });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const c = new Client({ name: "t", version: "0" });
+    await Promise.all([mcp.connect(a), c.connect(b)]);
+    const status = async (id: string) => (await c.callTool({ name: "skill_run_status", arguments: { run_id: id, wait_seconds: 0 } })) as any;
+    const r1 = await status(await job(xr));
+    expect(r1.structuredContent).toMatchObject({ success: false, verified: false, outcome: "not_verified" });
+    expect(r1.structuredContent.post_win).toBeUndefined();
+    expect(JSON.stringify(r1.content)).not.toMatch(/post_win\(/);
+    expect(r1.content[1].text).toMatch(/not verified \(the returned value is not tied/);
+    const r2 = await status(await job(ok));
+    expect(r2.structuredContent).toMatchObject({ success: true, verified: true, outcome: "verified" });
+    expect(r2.structuredContent.post_win).toMatch(/^post_win\(/);
+    await c.close();
   });
 
   it("the MCP client posts a win from a run cid, and a self-reported one that is shown but not ranked", async () => {

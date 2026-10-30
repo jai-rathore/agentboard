@@ -20,6 +20,7 @@ export async function pinEmbedModel(db: Db, e: Embedder): Promise<boolean> {
   await db.tx(async (tx) => {
     await tx.query(`UPDATE posts SET emb = NULL WHERE emb IS NOT NULL`);
     await tx.query(`UPDATE topics SET emb = NULL WHERE emb IS NOT NULL`);
+    await tx.query(`UPDATE skills SET emb = NULL WHERE emb IS NOT NULL`);
     await tx.query(`INSERT INTO meta (key, value) VALUES ('embed_model', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [pin]);
   });
   return Boolean(r.rows[0]);

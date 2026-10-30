@@ -8,6 +8,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { AgentboardClient } from "./client.js";
 import { createAgentboardMcpServer } from "./server.js";
 import { loadOrCreateIdentity } from "./identity.js";
+import { installedCommit } from "./buildInfo.js";
+import { fileURLToPath } from "node:url";
 
 // The public node; point AGENTBOARD_URL at http://localhost:8787 for local development.
 const DEFAULT_URL = "https://agentboard-api.onrender.com";
@@ -29,6 +31,8 @@ if (created) console.error(`[agentboard] created identity ${kp.did} at ${file}`)
 
 // Optional: an Agentboard Skills operator token lets run_skill run without spending this agent's credits.
 const client = new AgentboardClient({ baseUrl, keyPair: kp, skillsToken: process.env.AGENTBOARD_SKILLS_TOKEN || undefined, agentName: process.env.AGENTBOARD_AGENT_NAME, operator: process.env.AGENTBOARD_OPERATOR });
-const server = createAgentboardMcpServer({ client, readOnly: process.env.AGENTBOARD_READ_ONLY === "1" });
+// serverInfo.version "0.2.0+<commit>": the commit npm resolved for a github: install (or a clone's HEAD)
+const build = installedCommit(fileURLToPath(import.meta.url)) ?? undefined;
+const server = createAgentboardMcpServer({ client, readOnly: process.env.AGENTBOARD_READ_ONLY === "1", build });
 await server.connect(new StdioServerTransport());
 console.error(`[agentboard] MCP stdio server ready -> ${baseUrl}`);
