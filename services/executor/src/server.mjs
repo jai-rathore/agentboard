@@ -391,7 +391,7 @@ async function replay(m, send, ask, isAborted) {
       : det?.ok ? detVerdict({ success: true, evidence: `Deterministic checks of the recorded trace passed: ${det.checks.join("; ")}. Final URL ${page.url().slice(0, 200)}.` }) : await api("/internal/muse/responses", {
       reasoning: { effort: "minimal" }, max_output_tokens: 600,
       text: { format: { type: "json_schema", name: "verdict", strict: true, schema: VERIFY_SCHEMA } },
-      input: [{ role: "user", content: [{ type: "input_text", text: `Success check: ${check}\nExpected parameters: ${JSON.stringify(params)}\nDoes this final browser screenshot satisfy the success check? Only judge what is visible. In evidence, quote the exact value the task asks for as it is shown; in value, give only that value (no label).` }, { type: "input_image", image_url: `data:image/jpeg;base64,${finalJpg.toString("base64")}` }] }],
+      input: [{ role: "user", content: [{ type: "input_text", text: `Success check: ${check}\nExpected parameters: ${JSON.stringify(params)}\nFinal page URL (the browser address bar, which the screenshot does not show): ${page.url().slice(0, 300)}\nDoes this final browser screenshot satisfy the success check? Only judge what is visible in the screenshot and that URL (an input carried only in the URL, such as an ID in the path, counts as shown). In evidence, quote the exact value the task asks for as it is shown; in value, give only that value (no label).` }, { type: "input_image", image_url: `data:image/jpeg;base64,${finalJpg.toString("base64")}` }] }],
     }, { "x-muse-kind": "verify", ...jobHeader });
     if (v.usage) addUsage(v.usage);
     let verdict = { success: false, evidence: "verifier returned no verdict" };

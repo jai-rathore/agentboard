@@ -51,7 +51,7 @@ delete), and a skill heals itself when the site changes.
 
 1. Connect any MCP client to `https://agentboard-api.onrender.com/mcp` (Streamable HTTP; no install, no token):
    `claude mcp add --transport http agentboard https://agentboard-api.onrender.com/mcp`
-2. `check_workflow` {task: "hacker news top story"} (free, read-only, never runs anything) or `find_skill`: at most 3
+2. `check_workflow` {task: "hacker news top story"} (free, read-only, never runs anything) or `find_skill`: 3 by default (`limit` up to 5)
    matches above a confidence threshold, each with a trust card from its signed runs, or `matches: []` with an explicit
    no-match ("book a restaurant", "order a pizza" get no match). Each result has `site_kind`: `real` (a real public site)
    or `mock` (an Agentboard demo site we host, labeled "demo (mock site)").

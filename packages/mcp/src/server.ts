@@ -81,7 +81,7 @@ Workflow:
 0. check_workflow({task, site?}) first: free, read-only, never runs anything. It says whether a recently verified
    workflow exists, with its trust card (last verified run, recent failures, distinct inputs and identities, time and
    cost, who pays), or "no_match".
-1. find_skill (alias: search_skills) with the task in plain words, plus the site or domain if you know it: at most 3
+1. find_skill (alias: search_skills) with the task in plain words, plus the site or domain if you know it: 3 by default (limit up to 5)
    matches above a confidence threshold, or matches: [] with a no-match message.
 2. get_skill on the best match: params with examples, steps, success check, risk flags, approval steps,
    verified replay count and self-healed versions.
@@ -149,7 +149,7 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite,
   const fmtMs = (ms?: number | null) => { if (ms == null) return null; const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 
   // ---- browser skills first: they are what most agents connect for
-  const findSkillSchema = { query: z.string().min(1).describe('the task in plain words, e.g. "create a support ticket for dana@globex.com"'), limit: z.number().int().min(1).max(10).optional().describe("max results (default and cap: 3)") };
+  const findSkillSchema = { query: z.string().min(1).describe('the task in plain words, e.g. "create a support ticket for dana@globex.com"'), limit: z.number().int().min(1).max(10).optional().describe("max results: default 3, up to 5 (larger values return at most 5); only matches above the confidence threshold are returned, so there may be fewer") };
   const findSkill = wrap(async ({ query, limit }: { query: string; limit?: number }) => {
     const r = await client.findSkills(query, limit ?? 3);
     const skills = (r.skills ?? []).map(({ recording_ms: _r, ...s }: any) => ({ ...s, approvals_per_run: s.approval_required_steps?.length ?? 0, how_to_run: howToRun(s.cid, s.public_replay, s.slug) }));
@@ -168,7 +168,7 @@ export function createAgentboardMcpServer({ client, readOnly = !client.canWrite,
   });
   server.registerTool("find_skill", {
     title: "Find a browser skill for a website task",
-    description: `Find a verified browser skill for a task on a website or web app (fill a form, file or look up a ticket, add to cart, export a report). Skills were recorded once by a person, turned into steps, and replay-verified in a headless browser. Returns at most 3 matches above a confidence threshold, each with cid, name, site, site_kind (real site, or an Agentboard demo/mock site), params with examples, risk flags, steps that need human approval, how_to_run and a trust card computed from its signed runs; or matches: [] with a no-match message. check_workflow is the cheaper first call; neither runs anything.${remote ? " This HTTP endpoint does not offer run_skill; allowlisted skills can be tried with try_skill." : ""}`,
+    description: `Find a verified browser skill for a task on a website or web app (fill a form, file or look up a ticket, add to cart, export a report). Skills were recorded once by a person, turned into steps, and replay-verified in a headless browser. Returns up to 3 matches (limit: up to 5) above a confidence threshold, each with cid, name, site, site_kind (real site, or an Agentboard demo/mock site), params with examples, risk flags, steps that need human approval, how_to_run and a trust card computed from its signed runs; or matches: [] with a no-match message. check_workflow is the cheaper first call; neither runs anything.${remote ? " This HTTP endpoint does not offer run_skill; allowlisted skills can be tried with try_skill." : ""}`,
     inputSchema: findSkillSchema, annotations: ro,
   }, findSkill);
   server.registerTool("search_skills", {

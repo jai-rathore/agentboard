@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { AppContext } from "./context.js";
 import { HttpError } from "./context.js";
 import { museResponses, museSpend, type MuseKind } from "./services/muse.js";
-import { MAX_MATCHES, NO_MATCH_MESSAGE, CONTRIBUTE_HINT, hostWords } from "./services/skillMatch.js";
+import { DEFAULT_MATCHES, NO_MATCH_MESSAGE, CONTRIBUTE_HINT, hostWords } from "./services/skillMatch.js";
 import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
 import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, createAgentFundedJob, refundAgentRun } from "./services/skillJobs.js";
 import { verifyRequestAuth } from "./requestAuth.js";
@@ -164,7 +164,7 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     const siteKey = site.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
     // the site's name words (wikipedia.org -> wikipedia), not its TLD, join the query
     const siteWords = siteKey ? (siteKey.includes(".") ? hostWords(`https://${siteKey}`) : siteKey) : "";
-    let found = await findSkills(ctx, siteWords ? `${task} ${siteWords}` : task, MAX_MATCHES);
+    let found = await findSkills(ctx, siteWords ? `${task} ${siteWords}` : task, DEFAULT_MATCHES);
     if (siteKey) found = found.filter((s: any) => { try { const h = new URL(String(s.start_url).replace(/\{\{[^}]*\}\}/g, "x")).hostname.replace(/^www\./, ""); return h === siteKey || h.endsWith(`.${siteKey}`) || h.split(".").includes(siteKey); } catch { return false; } });
     const best = found[0];
     return c.json({
@@ -179,7 +179,7 @@ export function mountSkills(app: Hono, ctx: AppContext) {
   app.get("/v1/skills/find", async (c) => {
     const q = c.req.query("q") ?? "";
     const t0 = Date.now();
-    const skills = await findSkills(ctx, q, Number(c.req.query("limit") ?? MAX_MATCHES));
+    const skills = await findSkills(ctx, q, Number(c.req.query("limit") ?? DEFAULT_MATCHES));
     // `skills` is kept for older clients; `matches` is the same list. An empty list is an explicit no-match.
     return c.json({ query: q, matches: skills, skills, lookup_ms: Date.now() - t0, model_calls: 0, cost_usd: 0,
       ...(q.trim() && !skills.length ? { no_match: { message: NO_MATCH_MESSAGE, contribute: CONTRIBUTE_HINT } } : {}) });

@@ -20,7 +20,7 @@ import { siteKind, SITE_LABEL, replayCountsBySlug } from "./skillMetrics.js";
 import { submitColdRun, benchmarkForJob } from "./benchmark.js";
 import { recomputeKarma } from "./reputation.js";
 import { hybridSkillSearch } from "./skillSearch.js";
-import { MAX_MATCHES, queryTerms, coverage, skillVocab, inputVocab, matchScore, selectMatches } from "./skillMatch.js";
+import { DEFAULT_MATCHES, MAX_MATCHES, UNFILLED_INPUT_PENALTY, queryTerms, coverage, skillVocab, inputVocab, inputsUnfilled, matchScore, passesGate, selectMatches } from "./skillMatch.js";
 import { trustCards } from "./trustCard.js";
 import { cosine } from "./embeddings.js";
 
@@ -477,18 +477,17 @@ export const RRF_WEIGHT = 0.15;
  * find_skill: hybrid retrieval (services/skillSearch.ts: FTS + pg_trgm on name and summary + bge-small embeddings over
  * name, summary, params and steps, fused with RRF) over the latest active version of each skill, plus any skill whose
  * own words or verified inputs cover the query. Then the confidence gate (skillMatch.ts): an absolute match score
- * (cosine + 0.3 x the share of the query's words found in the skill or its verified inputs), at most MAX_MATCHES (3)
- * results, and [] when nothing clears it, so an off-domain task gets an explicit no-match. Each result carries a
+ * (cosine + 0.3 x the share of the query's words found in the skill or its verified inputs), DEFAULT_MATCHES (3) results unless the caller asks for up to MAX_MATCHES (5), and [] when nothing clears it, so an off-domain task gets an explicit no-match. Each result carries a
  * trust card (trustCard.ts) computed from the signed records. An empty query lists the latest skills (no gate).
  */
-export async function findSkills(ctx: AppContext, q: string, limit = MAX_MATCHES, opts: { trust?: boolean } = {}) {
+export async function findSkills(ctx: AppContext, q: string, limit = DEFAULT_MATCHES, opts: { trust?: boolean } = {}) {
   const query = q.trim().slice(0, 300);
   let picked: { cid: string; score: number; cos: number | null; cov: number; ranks?: Record<string, number> }[];
   const latest = (await ctx.db.query<any>(`SELECT l.*, rec.body_text FROM (${latestSkillsSql}) l JOIN records rec ON rec.cid = l.cid`)).rows;
   const byCid = new Map(latest.map((r) => [r.cid, { r, body: JSON.parse(r.body_text) }]));
   if (!query) picked = latest.sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at)).slice(0, 10).map((r) => ({ cid: r.cid, score: 1, cos: null, cov: 0 }));
   else {
-    const n = Math.min(MAX_MATCHES, Math.max(1, Number.isFinite(limit) ? limit : MAX_MATCHES));
+    const n = Math.min(MAX_MATCHES, Math.max(1, Number.isFinite(limit) ? Math.floor(limit) : DEFAULT_MATCHES));
     const terms = queryTerms(query);
     // the inputs of each skill's verified runs (any version): a task phrased by its inputs ("population of Seoul") is covered
     const inputs = new Map<string, Set<string>>();
@@ -512,8 +511,11 @@ export async function findSkills(ctx: AppContext, q: string, limit = MAX_MATCHES
       const mock = siteKind(ctx, x.body.source?.start_url) === "mock";
       const cv = cov.get(c.cid) ?? 0;
       const score = matchScore(c.cos, cv);
-      return [{ ...c, cov: cv, score, rank: score + RRF_WEIGHT * c.rel + (mock ? 0 : REAL_SITE_BOOST) + 0.02 * Math.tanh(Number(x.r.verified_runs) / 5) }];
+      const unfilled = inputsUnfilled(terms, { slug: x.r.slug, name: x.r.name, summary: x.r.summary, params: x.body.skill?.params, start_url: x.body.source?.start_url });
+      return [{ ...c, cov: cv, score, unfilled, noInputs: !(x.body.skill?.params ?? []).length, rank: score + RRF_WEIGHT * c.rel + (mock ? 0 : REAL_SITE_BOOST) + 0.02 * Math.tanh(Number(x.r.verified_runs) / 5) }];
     });
+    // the query gives no input value and a skill that needs none also matches: skills that would need one rank below it
+    if (cands.some((c) => c.noInputs && passesGate(c.cos, c.cov, ctx.embedder.thresholds))) for (const c of cands) if (c.unfilled) c.rank -= UNFILLED_INPUT_PENALTY;
     picked = selectMatches(cands, ctx.embedder.thresholds, n);
   }
   if (!picked.length) return [];

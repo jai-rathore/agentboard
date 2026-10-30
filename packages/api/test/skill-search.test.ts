@@ -11,6 +11,7 @@ import { makeNode, type TestNode } from "./helpers.js";
 import { appendToLog } from "../src/services/log.js";
 import { findSkills } from "../src/services/skills.js";
 import { indexSkills, skillSearchText } from "../src/services/skillSearch.js";
+import { hostWords, inputsUnfilled, queryTerms } from "../src/services/skillMatch.js";
 
 const CATALOG: { slug: string; skill: any; source: { start_url: string } }[] = JSON.parse(readFileSync(new URL("./fixtures/skills-catalog.json", import.meta.url), "utf8"));
 const local = process.env.SKILL_SEARCH_LOCAL_EMBED === "1";
@@ -78,16 +79,17 @@ describe(`find_skill hybrid search (${local ? "bge-small" : "hash embedder"})`, 
     ["dollars to yen exchange rate", "x-rates-exchange-rate"],
     ["latest release of a rust crate", "crates-io-version"],
     ["hacker news top story", "hacker-news-top-story"],
+    ["top story on HN", "hacker-news-top-story"], // "HN" is the site's alias; the HN search skill needs a search term the query does not give
     ["github repository star count", "github-repo-stars-release"],
     ["search hacker news for sqlite", "hn-search-top-result"],
     ["create a support ticket", "create-a-support-ticket"],
     ["dollars to yen", "x-rates-exchange-rate"], // "yen" only in a verified run's inputs
     ["population of Seoul", "wikipedia-infobox-fact"], // every word in a verified run's inputs, low cosine
     ...(local ? [["dollars to yen", "x-rates-exchange-rate"], ["convert USD to EUR", "x-rates-exchange-rate"], ["latest version of a python package", "pypi-package-version"]] : []),
-  ])("true positive, at most 3 results, each with a trust card: %s -> %s", async (q, slug) => {
+  ])("true positive, at most 5 results when asked, each with a trust card: %s -> %s", async (q, slug) => {
     const r = await node.req("GET", `/v1/skills/find?q=${encodeURIComponent(q)}&limit=10`);
     expect(r.body.matches[0].slug).toBe(slug);
-    expect(r.body.matches.length).toBeLessThanOrEqual(3);
+    expect(r.body.matches.length).toBeLessThanOrEqual(5);
     expect(r.body.no_match).toBeUndefined();
     const t = r.body.matches[0].trust;
     expect(t.task).toBe(r.body.matches[0].name);
@@ -110,6 +112,29 @@ describe(`find_skill hybrid search (${local ? "bge-small" : "hash embedder"})`, 
     expect(t.actions).toMatch(/^read-only/);
     expect(t.approvals).toBe("none");
     expect(t.when_not_to_use.join(" ")).toMatch(/1 failed run/);
+  });
+
+  it("limit: 3 by default, a caller may ask for up to 5, still only matches above the threshold", async () => {
+    const q = "latest version of a package";
+    const def = await node.req("GET", `/v1/skills/find?q=${encodeURIComponent(q)}`);
+    const five = await node.req("GET", `/v1/skills/find?q=${encodeURIComponent(q)}&limit=5`);
+    const ten = await node.req("GET", `/v1/skills/find?q=${encodeURIComponent(q)}&limit=10`);
+    expect(def.body.matches.length).toBeLessThanOrEqual(3);
+    expect(five.body.matches.length).toBeLessThanOrEqual(5);
+    expect(five.body.matches.length).toBeGreaterThanOrEqual(def.body.matches.length);
+    expect(ten.body.matches.map((m: any) => m.slug)).toEqual(five.body.matches.map((m: any) => m.slug));
+    expect(five.body.matches.slice(0, def.body.matches.length).map((m: any) => m.slug)).toEqual(def.body.matches.map((m: any) => m.slug));
+    expect((await node.req("GET", `/v1/skills/find?q=${encodeURIComponent("order a pizza")}&limit=5`)).body.matches).toEqual([]);
+  });
+
+  it("site aliases and unfilled inputs", () => {
+    expect(hostWords("https://news.ycombinator.com/")).toBe("news ycombinator hn hacker news");
+    const hnSearch = CATALOG.find((c) => c.slug === "hn-search-top-result")!;
+    const s = { slug: hnSearch.slug, name: hnSearch.skill.name, summary: hnSearch.skill.summary, params: hnSearch.skill.params, start_url: hnSearch.source.start_url };
+    expect(inputsUnfilled(queryTerms("top story on HN"), s)).toBe(true); // no search term in the query
+    expect(inputsUnfilled(queryTerms("search hacker news for sqlite"), s)).toBe(false); // "sqlite" fills it (it is only the recording's example)
+    const top = CATALOG.find((c) => c.slug === "hacker-news-top-story")!;
+    expect(inputsUnfilled(queryTerms("top story on HN"), { slug: top.slug, name: top.skill.name, summary: top.skill.summary, params: top.skill.params, start_url: top.source.start_url })).toBe(false); // takes no input
   });
 
   it("check_workflow: read-only, no cost; site narrows to that host", async () => {

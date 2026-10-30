@@ -7,12 +7,18 @@
  * verified runs (so "population of Seoul" finds the Wikipedia infobox skill that was verified on Seoul / Population).
  * A candidate matches when its cosine is high on its own, or reasonable with more than half of the words covered, or
  * low but with every word covered (thresholds per embedder in embeddings.ts). Results within MARGIN of the best one are
- * kept, at most MAX_MATCHES.
+ * kept, DEFAULT_MATCHES unless the caller asks for more (at most MAX_MATCHES).
  */
 import type { EmbedThresholds } from "./embeddings.js";
 import { tokenize } from "./embeddings.js";
 
-export const MAX_MATCHES = 3;
+/** Results returned when the caller does not ask (DEFAULT_MATCHES) and the most a caller may ask for (MAX_MATCHES). */
+export const DEFAULT_MATCHES = 3;
+export const MAX_MATCHES = 5;
+/** Ranking only: when a skill that takes no input matches, a skill that needs an input the query does not give (every
+ * query word is already in the skill's own text, none left to be the search term) ranks below it ("top story on HN":
+ * the front page, not an HN search). */
+export const UNFILLED_INPUT_PENALTY = 0.15;
 export const TERM_WEIGHT = 0.3;
 export const MARGIN = 0.2;
 
@@ -31,17 +37,29 @@ const SYNONYMS: Record<string, string> = {
 };
 const norm = (toks: string[]) => toks.filter((t) => !FILLER.has(t)).map((t) => SYNONYMS[t] ?? t);
 
-/** Words of a host name worth matching: "en.wikipedia.org" -> wikipedia; "pkg.go.dev" -> pkg, go. */
+/** What people call a site whose host name does not say it. */
+const SITE_ALIASES: Record<string, string> = {
+  "news.ycombinator.com": "hn hacker news",
+  "find-and-update.company-information.service.gov.uk": "companies house uk company register",
+};
+/** Words of a host name worth matching: "en.wikipedia.org" -> wikipedia; "pkg.go.dev" -> pkg, go; plus SITE_ALIASES. */
 export function hostWords(url: string | null | undefined): string {
   try {
     const h = new URL(String(url ?? "").replace(/\{\{[^}]*\}\}/g, "x")).hostname.replace(/^www\./, "");
-    return h.split(".").slice(0, -1).filter((w) => !/^(en|m|api|app|vercel)$/.test(w)).join(" ");
+    return [...h.split(".").slice(0, -1).filter((w) => !/^(en|m|api|app|vercel)$/.test(w)), SITE_ALIASES[h] ?? ""].filter(Boolean).join(" ");
   } catch { return ""; }
 }
 
-export function skillVocab(s: { slug: string; name: string; summary: string; params?: { name?: string; description?: string; example?: string }[] | null; start_url?: string | null }): Set<string> {
+export function skillVocab(s: { slug: string; name: string; summary: string; params?: { name?: string; description?: string; example?: string }[] | null; start_url?: string | null }, opts: { examples?: boolean } = {}): Set<string> {
   return new Set(norm(tokenize([s.name, s.summary, s.slug.replace(/-/g, " "), hostWords(s.start_url),
-    ...(s.params ?? []).map((p) => `${String(p.name ?? "").replace(/_/g, " ")} ${p.description ?? ""} ${p.example ?? ""}`)].join(" "))));
+    ...(s.params ?? []).map((p) => `${String(p.name ?? "").replace(/_/g, " ")} ${p.description ?? ""} ${opts.examples === false ? "" : p.example ?? ""}`)].join(" "))));
+}
+
+/** The skill takes inputs but every query word is part of its own text (not an example value): nothing in the query fills them. */
+export function inputsUnfilled(terms: string[], s: Parameters<typeof skillVocab>[0]): boolean {
+  if (!(s.params ?? []).length || !terms.length) return false;
+  const own = skillVocab(s, { examples: false });
+  return terms.every((t) => own.has(t));
 }
 
 /** Folds input values (a verified run's params) the same way. */
@@ -65,7 +83,7 @@ export function passesGate(cos: number | null, cov: number, th: Pick<EmbedThresh
 }
 
 /** Gate, then keep the ones within MARGIN of the best score (sorted by `rank`, which may add a small prior), at most `max`. */
-export function selectMatches<T extends { cos: number | null; cov: number; rank: number }>(cands: T[], th: Pick<EmbedThresholds, "skillStrongCos" | "skillTermCos" | "skillAllTermsCos">, max = MAX_MATCHES): T[] {
+export function selectMatches<T extends { cos: number | null; cov: number; rank: number }>(cands: T[], th: Pick<EmbedThresholds, "skillStrongCos" | "skillTermCos" | "skillAllTermsCos">, max = DEFAULT_MATCHES): T[] {
   const ok = cands.filter((c) => passesGate(c.cos, c.cov, th)).sort((a, b) => b.rank - a.rank);
   if (!ok.length) return [];
   const best = Math.max(...ok.map((c) => matchScore(c.cos, c.cov)));

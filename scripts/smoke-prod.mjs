@@ -126,21 +126,21 @@ if (process.env.SKIP_API !== "1") {
     return "12 tools (11 read-only + try_skill), server card matches";
   });
 
-  await check("API find_skill precision: off-domain tasks get an explicit no-match; true positives first, at most 3, with a trust card", async () => {
+  await check("API find_skill precision: off-domain tasks get an explicit no-match; true positives first, at most 5 when asked, with a trust card", async () => {
     for (const q of ["book a restaurant reservation", "book a flight from SFO to JFK", "order a pizza"]) {
       const r = (await req(`${API}/v1/skills/find?q=${encodeURIComponent(q)}`)).json;
       assert(Array.isArray(r?.matches) && r.matches.length === 0, `"${q}" matched ${(r?.matches ?? []).map((s) => s.slug).join(", ")}`);
       assert(/no recently verified workflow/i.test(r.no_match?.message ?? ""), `"${q}": no no_match message`);
     }
-    for (const [q, slug] of [["dollars to yen", "x-rates-exchange-rate"], ["latest release of a rust crate", "crates-io-version"]]) {
+    for (const [q, slug] of [["dollars to yen", "x-rates-exchange-rate"], ["latest release of a rust crate", "crates-io-version"], ["top story on HN", "hacker-news-top-story"]]) {
       const r = (await req(`${API}/v1/skills/find?q=${encodeURIComponent(q)}&limit=10`)).json;
       assert(r?.matches?.[0]?.slug === slug, `"${q}" -> ${(r?.matches ?? []).map((s) => s.slug).join(", ") || "nothing"}, want ${slug}`);
-      assert(r.matches.length <= 3, `"${q}": ${r.matches.length} results`);
+      assert(r.matches.length <= 5, `"${q}": ${r.matches.length} results`);
       assert(r.matches[0].trust?.task && r.matches[0].trust?.runs_7d, `"${q}": no trust card`);
     }
     const c = (await req(`${API}/v1/workflows/check?task=${encodeURIComponent("order a pizza")}`)).json;
     assert(c?.verdict === "no_match" && c.executed === false && c.cost_usd === 0, `check_workflow pizza: ${c?.verdict}`);
-    return "restaurant/flight/pizza: no match; dollars to yen, rust crate: first; check_workflow read-only";
+    return "restaurant/flight/pizza: no match; dollars to yen, rust crate, top story on HN: first; check_workflow read-only";
   });
 
   await check("API /v1/benchmarks and /v1/benchmarks/latest (latest headline benchmark: verified and reuse cheaper; 204 when none)", async () => {
