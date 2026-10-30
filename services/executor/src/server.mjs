@@ -13,7 +13,7 @@ import { chromium } from "playwright-core";
 import { approvalFor, inspectInPage, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL, FIND_TOOL } from "./policy.mjs";
 import { makeGif } from "./gif.mjs";
 import { scrollPlan } from "./scroll.mjs";
-import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep, deriveRecipeInPage, applyRecipeInPage, answerCandidates, pickValue, storeRecipe, fillRecipe, cleanSteps, valueBinding, missingInputs, describeMissing } from "./trace.mjs";
+import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep, deriveRecipeInPage, applyRecipeInPage, answerCandidates, DATE_RE, pickValue, storeRecipe, fillRecipe, cleanSteps, valueBinding, missingInputs, describeMissing } from "./trace.mjs";
 import { probeInPage, scrollToTextInPage, snapPoint, INTERACTIVE, SNAP_RADIUS, addressBarUrl, isAddressBarKey } from "./click.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
@@ -402,7 +402,9 @@ async function replay(m, send, ask, isAborted) {
       // the verifier's own value first (a version or number inside it before the whole text), then what the answers quote
       const vv = String(verdict.value ?? "").trim().slice(0, 200);
       const isInput = Object.values(params).some((x) => String(x).trim().toLowerCase() === vv.toLowerCase());
-      const vvParts = vv && !isInput ? [...answerCandidates(vv, params).filter((x) => /\d/.test(x) && x !== vv), vv] : [];
+      // (a date is one value: "31 December 2025" is not split into its day number and year)
+      const vvDates = [...vv.matchAll(new RegExp(DATE_RE, "gi"))].map((d) => d[0]);
+      const vvParts = vv && !isInput ? [...answerCandidates(vv, params).filter((x) => /\d/.test(x) && x !== vv && !vvDates.some((d) => d !== x && d.includes(x))), vv] : [];
       const derived = await page.evaluate(deriveRecipeInPage, { candidates: [...new Set([...vvParts, ...answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params)])].slice(0, 14), labels: Object.values(params).filter((x) => String(x).length >= 2) }).catch(() => null);
       const stored = storeRecipe(derived, params);
       const got = await extractWith(stored);
