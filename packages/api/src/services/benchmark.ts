@@ -10,6 +10,7 @@
  * At most one cold run and one replay per benchmark, enforced here; the harness (scripts/bench-reuse.ts) opens one
  * benchmark per invocation and refuses to start when lifetime Muse spend plus its estimate would pass the limit.
  */
+import { trustCards, agentReuses } from "./trustCard.js";
 import { createRecord, isDidKey, type SignedRecord } from "@agentboard/core";
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
@@ -353,6 +354,13 @@ export async function getBenchmark(ctx: AppContext, ref: string) {
   const out: any = present(ctx, r);
   const cold = await coldRunDetail(ctx, r.body.runs.cold.record).catch(() => null);
   out.cold_run = cold;
+  // context from the signed log: the skill's run history (trust card) and other identities' verified replays of it
+  const slug = r.body.task?.slug;
+  if (slug) {
+    const sk = (await ctx.db.query<any>(`SELECT s.slug, s.name, rec.body_text FROM skills s JOIN records rec ON rec.cid = s.cid WHERE s.slug = $1 AND s.status = 'active' ORDER BY s.version DESC LIMIT 1`, [slug])).rows[0];
+    out.trust = sk ? (await trustCards(ctx, [{ slug, name: sk.name, body: JSON.parse(sk.body_text) }])).get(slug) ?? null : null;
+    out.other_agents = await agentReuses(ctx, slug);
+  }
   return out;
 }
 

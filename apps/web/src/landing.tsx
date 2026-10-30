@@ -57,6 +57,7 @@ function usePoll<T>(path: string, ms = 20000) {
   return state;
 }
 
+const n0 = (x: unknown) => Number(x ?? 0).toLocaleString("en-US");
 function BigMetrics() {
   const r = usePoll<any>("/v1/skills/metrics", 30000);
   const m = r.data;
@@ -65,18 +66,19 @@ function BigMetrics() {
   // Lead with the strongest true numbers; replays on real sites lead once there are any. The real vs demo (mock)
   // breakdown is always shown right below, never hidden.
   const real = m?.replays?.real_site ?? 0;
+  const av = m?.avoided;
+  // Lead with avoided work (estimated only from signed records: see the note), then verification and failures.
   const cells: [string, string][] = [
-    ...(real > 0 ? [[d(real), "replays on real sites"] as [string, string]] : []),
+    ...(av?.counted_replays > 0 ? [[n0(av.model_calls), "model calls avoided (est.)"], [`$${Number(av.usd).toFixed(2)}`, "Muse cost avoided (est.)"]] as [string, string][] : []),
+    [d(av?.zero_model_call_verified_replays), "verified replays with 0 model calls"],
     [m ? `${m.runs?.verified ?? 0}/${m.runs?.total ?? 0}` : "–", "signed runs verified"],
-    [d(m?.replays?.total), "replays of published skills"],
-    [d(m?.human?.clicks_saved), "clicks & typed fields done by agents"],
-    [d(m?.heals), m?.heals === 1 ? "self-heal after a site redesign" : "self-heals after a site redesign"],
-    [m ? fmtDur(m.human?.time_saved_ms ?? 0) : "–", "human time saved"],
+    [d(m?.runs?.failed), "failed runs, shown in public"],
+    ...(real > 0 ? [[d(real), "replays on real sites"] as [string, string]] : []),
   ].slice(0, 5) as [string, string][];
   return <section className="big-metrics" aria-label="Live metrics">
     {cells.map(([n, l]) => <div key={l}><b>{n}</b><span>{l}</span></div>)}
     <p className="small metrics-split">{m ? <>Skills: <b>{m.skills_by_site?.real ?? 0}</b> on real sites · <b>{m.skills_by_site?.mock ?? 0}</b> demo (mock site). Replays: <b>{real}</b> on real sites · <b>{m.replays?.mock_site ?? 0}</b> on demo (mock) sites · <b>{m.runs?.distinct_agents ?? 0}</b> distinct agent{m.runs?.distinct_agents === 1 ? "" : "s"} · Muse spend so far <b>${Number(m.muse?.usd ?? 0).toFixed(2)}</b>.</> : "Loading live counts…"}</p>
-    <p className="small muted metrics-note">Live from the signed log. A replay is a run of a published skill; the run that published it is not counted as a replay. Demo (mock) sites are pages we host to show the mechanism. <Link to="/skills/reuse">See every run →</Link></p>
+    <p className="small muted metrics-note">Live from the signed log. Avoided = each verified replay that made no model call, for a skill with signed cold benchmarks, times the median model calls and cost of those cold runs{av ? ` (${av.counted_replays} replays of ${av.skills_with_cold_benchmark} skill${av.skills_with_cold_benchmark === 1 ? "" : "s"} counted; skills without a benchmark are not estimated)` : ""}. A replay is a run of a published skill; the run that published it is not counted as a replay. Demo (mock) sites are pages we host to show the mechanism. <Link to="/skills/reuse">See every run →</Link></p>
   </section>;
 }
 
@@ -151,9 +153,9 @@ export function Landing() {
   return <>
     <section className="landing-top">
       <span className="eyebrow">Meta Global AI Developer Hackathon · Build for Your World</span>
-      <h1>Show it once.<br />Any MCP agent can reuse it.</h1>
-      <p className="subhead"><b>AI agents redo the same web tasks from scratch</b>, paying model calls for every page and every click. Show a task once: Muse Spark turns it into a verified skill that any MCP agent can find and replay with new inputs.</p>
-      <p className="persona small">For developers and teams whose agents work on websites that have no API. No human clicks except approving risky steps (submit, buy, send, delete); every replay is verified and signed.</p>
+      <h1>Stop paying twice<br />for the same web task.</h1>
+      <p className="subhead"><b>AI agents redo multi-step website tasks from scratch</b>, paying model calls for every page and every click. Agentboard keeps a task that was done once as a verified workflow: the next agent checks first (free, read-only), replays it with its own inputs and skips the model calls. Every run is public and signed, failures included.</p>
+      <p className="persona small">For developers whose agents work on public websites with no handy API. If nothing verified matches, it says so. No human clicks except approving risky steps (submit, buy, send, delete).</p>
       <div className="try-grid">
         <TryItNow />
         <figure className="hero-media">
@@ -178,7 +180,7 @@ export function Landing() {
       <BenchmarkStat empty={<p className="small bench-pending">How we measure the saving: two fresh agents do the same task on the same input, one from scratch and one by finding and replaying the skill, with model calls, tokens and cost from their signed runs. <Link to="/benchmark">Method →</Link></p>} />
       <MetaModels />
       <p className="small problem"><b>Problem statement: Build for Your World.</b> “{PROBLEM_STATEMENT}” Our domain: agents that operate websites. A browser task is learned once and reused by every agent that needs it, verified each time, instead of being re-learned from scratch.</p>
-      <p className="small"><b>Evaluate in 60 seconds from an agent:</b> connect any MCP client to <code>{API}/mcp</code>, then <code>find_skill</code> → <code>try_skill</code> → <code>skill_run_status</code> → <code>verify_record</code>. <Link to="/docs#evaluate">Details →</Link></p>
+      <p className="small"><b>Evaluate in 60 seconds from an agent:</b> connect any MCP client to <code>{API}/mcp</code>, then <code>check_workflow</code> (free) → <code>try_skill</code> → <code>skill_run_status</code> → <code>verify_record</code>. <Link to="/docs#evaluate">Details →</Link></p>
     </section>
     <ActivityFeed />
   </>;
@@ -201,7 +203,7 @@ export function DocsPage() {
     <h2 id="evaluate">Evaluate in 60 seconds</h2>
     <ol className="flow-list">
       <li>Connect any MCP client to <code>{API}/mcp</code> (Streamable HTTP; no install, no token): <code>claude mcp add --transport http agentboard {API}/mcp</code></li>
-      <li><code>find_skill</code>, e.g. "hacker news top story". Each result says <code>site_kind</code>: a real site, or <SiteBadge kind="mock" /> (a page we host to show the mechanism).</li>
+      <li><code>check_workflow</code> (free, read-only, never runs anything) or <code>find_skill</code>, e.g. "hacker news top story": at most 3 matches above a confidence threshold, each with a trust card from its signed runs, or an explicit no-match. Each result says <code>site_kind</code>: a real site, or <SiteBadge kind="mock" /> (a page we host to show the mechanism).</li>
       <li><code>try_skill</code> with the slug and your inputs. The first call returns a short challenge question; call again with <code>challenge_id</code> and <code>answer</code>. It starts a real browser replay on the public site and returns a <code>run_id</code>. Capped (a few per network per day and a small daily budget for the whole node; it says <code>public_replay_disabled</code> when switched off) and only for allowlisted skills that never submit, buy, send or delete.</li>
       <li><code>skill_run_status</code> with the <code>run_id</code> until it completes; the result has <code>run_record</code>, the signed run record's cid.</li>
       <li><code>verify_record</code> with that cid checks its content hash and Ed25519 signature. The <Link to="/skills/reuse">run page</Link> shows the inputs, step screenshots, the verdict, the models and an in-browser signature check.</li>

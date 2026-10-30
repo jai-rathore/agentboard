@@ -104,3 +104,34 @@ export async function trustCards(ctx: AppContext, skills: { slug: string; name: 
   }
   return out;
 }
+
+/**
+ * Verified replays of a skill by registered agent identities other than the operator, its seeded benchmark identities
+ * and anonymous public trials: the latest per identity, each labeled own (house / vouched: operated by the same person
+ * who runs Agentboard, not independent) or independent. Nothing is shown for identities that never ran it.
+ */
+export async function agentReuses(ctx: AppContext, slug: string) {
+  const rows = await runRows(ctx, "WHERE s.slug = $1", [slug], 2000);
+  const seeded = new Set((await ctx.db.query<any>(`SELECT agent_a, agent_b FROM benchmarks`).catch(() => ({ rows: [] as any[] }))).rows.flatMap((b) => [b.agent_a, b.agent_b]));
+  const vouched = ctx.cfg.agentRunVouchedDids ?? [];
+  const latest = new Map<string, any>();
+  for (const row of rows) {
+    const body = JSON.parse(row.body_text);
+    const rq = requester(row, body);
+    if (rq.via !== "agent" || !isDidKey(rq.agent) || seeded.has(rq.agent) || !runVerified(body) || latest.has(rq.agent)) continue;
+    latest.set(rq.agent, { row, body });
+  }
+  if (!latest.size) return [];
+  const agents = new Map((await ctx.db.query<any>(`SELECT did, name, is_house, status FROM agents WHERE did = ANY($1)`, [[...latest.keys()]])).rows.map((a) => [a.did, a]));
+  return [...latest.entries()].filter(([did]) => !["hidden", "retracted"].includes(agents.get(did)?.status)).map(([did, { row, body }]) => {
+    const a = agents.get(did);
+    const own = Boolean(a?.is_house) || vouched.includes(did);
+    return {
+      did, name: a?.name ?? `…${did.slice(-6)}`, independent: !own,
+      label: a?.is_house ? "HOUSE bot run by the Agentboard operator; not independent" : own ? "VOUCHED: an agent operated by the same person who runs Agentboard; not independent" : "a registered agent not run by the operator",
+      run: row.cid, at: new Date(row.created_at).toISOString(), input: body.params ?? {}, value: displayAnswer({ created_at: row.created_at, body })?.value ?? null,
+      model_calls: Number(body.usage?.calls ?? 0), usd: Number(body.usage?.usd ?? 0), executor_ms: Number(body.duration_ms) || null, replay_mode: body.replay?.mode ?? null,
+      page: `${ctx.cfg.skillsWebUrl}/skills/runs/${row.cid}`,
+    };
+  });
+}

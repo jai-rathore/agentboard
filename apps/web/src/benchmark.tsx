@@ -39,6 +39,8 @@ export function BenchmarkPage({ id }: { id?: string }) {
   if (one.loading) return <p className="muted">Loading…</p>;
   if (one.error) return <p className="err">{one.error}</p>;
   const d = one.data, b = d.record.body, A = b.runs.cold, B = b.runs.reuse, c = b.comparison ?? {}, cold = d.cold_run;
+  const sameTask = all.filter((x) => x.record?.body?.task?.slug === b.task.slug);
+  const coldFails = { total: sameTask.length, failed: sameTask.filter((x) => !x.record?.body?.runs?.cold?.success).length };
   const rows: [string, (x: any) => string][] = [
     ["Verified (final check below)", (x) => (x.success ? "✓ yes" : "✗ no")],
     ["Returned value", (x) => (x.value ?? "–") + (x === B && c.values_match != null ? (c.values_match ? "  ✓ same as cold" : "  ✗ differs from cold") : "")],
@@ -67,9 +69,13 @@ export function BenchmarkPage({ id }: { id?: string }) {
     <table className="tbl cards bench-table"><thead><tr><th></th><th>Agent A: cold (no skill)</th><th>Agent B: finds and reuses the skill</th></tr></thead><tbody>
       <tr><td>Identity (fresh did:key, unregistered)</td><td data-label="Agent A" className="mono"><span title={b.agents.a.did}>{short(b.agents.a.did)}</span><br /><span className="muted small">{b.agents.a.client}</span></td><td data-label="Agent B" className="mono"><span title={b.agents.b.did}>{short(b.agents.b.did)}</span><br /><span className="muted small">{b.agents.b.client}</span></td></tr>
       <tr><td>Skill lookup</td><td data-label="Agent A">none</td><td data-label="Agent B">{b.find_skill ? <>find_skill("{String(b.find_skill.query ?? "").slice(0, 80)}") → rank {b.find_skill.rank} of {b.find_skill.results}, {b.find_skill.model_calls ?? 0} model calls</> : "find_skill"}</td></tr>
+      <tr><td>Lookup time</td><td data-label="Agent A">none (no lookup)</td><td data-label="Agent B">{b.find_skill?.ms != null ? `${fmtDur(b.find_skill.ms)}, ${b.find_skill.model_calls ?? 0} model calls, $0` : "not recorded"}</td></tr>
       {rows.map(([label, f]) => <tr key={label}><td>{label}</td><td data-label="Agent A">{f(A)}</td><td data-label="Agent B">{f(B)}</td></tr>)}
+      <tr className="total"><td><b>Total (lookup + run)</b></td><td data-label="Agent A"><b>{usd(A.usd)} · {fmtDur(A.executor_ms)}</b></td><td data-label="Agent B"><b>{usd(B.usd)} · {fmtDur((b.find_skill?.ms ?? 0) + (B.executor_ms ?? 0))}</b></td></tr>
+      <tr><td>Failures on this task (signed history)</td><td data-label="Agent A">{coldFails.total ? `${coldFails.failed} of ${coldFails.total} cold benchmark runs failed` : "unknown"}</td><td data-label="Agent B">{d.trust ? <>{d.trust.runs_30d.failed} of {d.trust.runs_30d.failed + d.trust.runs_30d.verified} skill runs failed in 30 days{typeof d.trust.latest_failure === "object" ? <> (latest: {d.trust.latest_failure.reason})</> : null}</> : "unknown"}</td></tr>
       <tr><td>Signed run record</td><td data-label="Agent A" className="mono small"><a href="#cold">{String(A.record).slice(0, 18)}…</a> (benchmark_run)</td><td data-label="Agent B" className="mono small"><Link to={`/skills/runs/${B.record}`}>{String(B.record).slice(0, 18)}…</Link> (skill_run{B.self_healed ? ", self-healed" : ""})</td></tr>
     </tbody></table>
+    <OtherAgents list={d.other_agents} slug={b.task.slug} />
     <Method m={b.method} />
     <h2 id="cold">Agent A's cold run</h2>
     {cold ? <>
@@ -89,6 +95,24 @@ export function BenchmarkPage({ id }: { id?: string }) {
     <p className="small muted">Raw: <a href={`${API}/v1/records/${d.cid}`}>benchmark</a> · <a href={`${API}/v1/records/${A.record}`}>cold run</a> · <a href={`${API}/v1/records/${B.record}`}>replay</a> · <a href={`${API}/v1/benchmarks/${d.id}`}>JSON</a>. Or check them with the MCP <code>verify_record</code> tool.</p>
     <SignatureCheck entries={[{ seq: d.seq, log: d.log, record: d.record }, ...(cold ? [cold.run] : [])]} />
   </article>;
+}
+
+/** Verified replays of the same skill by other registered identities (latest per identity), labeled honestly. */
+function OtherAgents({ list, slug }: { list?: any[]; slug: string }) {
+  if (!list?.length) return null;
+  return <section aria-label="Another agent reuses it">
+    <h2>Another agent reuses it</h2>
+    <table className="tbl cards small"><thead><tr><th>Identity</th><th>Input</th><th>Result</th><th>Model calls · cost · time</th><th>Run</th></tr></thead><tbody>
+      {list.map((x) => <tr key={x.did}>
+        <td data-label="Identity"><b>{x.name}</b> <span className={`badge ${x.independent ? "" : "house"}`} title={x.label}>{x.independent ? "independent" : "own agent, not independent"}</span><br /><span className="muted mono">{short(x.did)}</span></td>
+        <td data-label="Input" className="mono">{JSON.stringify(x.input)}</td>
+        <td data-label="Result">✓ verified · {String(x.value ?? "(no value)")}</td>
+        <td data-label="Calls · cost · time">{n(x.model_calls)} · {usd(x.usd)} · {fmtDur(x.executor_ms)}</td>
+        <td data-label="Run"><Link to={`/skills/runs/${x.run}`}>{ago(x.at)}</Link></td>
+      </tr>)}
+    </tbody></table>
+    <p className="small muted">Verified replays of {slug} by registered identities other than the two benchmark agents, the operator and anonymous public trials (latest per identity), from the signed log. {list.every((x) => !x.independent) ? "None of them is independent of the operator yet." : ""}</p>
+  </section>;
 }
 
 function Method({ m }: { m?: Record<string, string> }) {

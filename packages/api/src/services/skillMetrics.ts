@@ -78,6 +78,8 @@ export async function skillMetrics(ctx: AppContext) {
   const agents = new Set<string>();
   const replays = { total: 0, verified: 0, real_site: 0, mock_site: 0, real_site_verified: 0, mock_site_verified: 0, new_inputs: 0, self_healed: 0, by_trigger: { operator: 0, agent: 0, public: 0, web: 0 } as Record<string, number> };
   let publishRuns = 0;
+  const zeroCall = new Map<string, number>(); // verified replays with no model call, by slug
+  const zeroMs = new Map<string, number[]>();
   for (const row of rows) {
     const b = JSON.parse(row.body_text);
     const rq = requester(row, b);
@@ -89,6 +91,7 @@ export async function skillMetrics(ctx: AppContext) {
       if (k.site_kind === "real") { replays.real_site++; if (row.success) replays.real_site_verified++; } else { replays.mock_site++; if (row.success) replays.mock_site_verified++; }
       if (k.new_inputs) replays.new_inputs++;
       if (k.self_healed) replays.self_healed++;
+      if (row.success && !Number(b.usage?.calls ?? 0)) { zeroCall.set(row.slug, (zeroCall.get(row.slug) ?? 0) + 1); if (Number(b.duration_ms) > 0) zeroMs.set(row.slug, [...(zeroMs.get(row.slug) ?? []), Number(b.duration_ms)]); }
       replays.by_trigger[rq.via] = (replays.by_trigger[rq.via] ?? 0) + 1;
     }
     if (rq.via === "agent") { agentRuns++; agents.add(rq.agent!); }
@@ -104,6 +107,21 @@ export async function skillMetrics(ctx: AppContext) {
     const rec = b.time?.recording_ms;
     if (rec != null) { timed++; savedMs += Math.max(0, rec - ap * APPROVAL_HUMAN_MS); if (Number(b.time.run_ms ?? b.duration_ms) < rec) faster++; }
   }
+  // Avoided work: each verified zero-model-call replay of a skill that has signed cold benchmarks, times the median
+  // model calls / cost / executor time of those cold runs. Skills without a benchmark are left out (not estimated).
+  const colds = (await ctx.db.query<any>(`SELECT b.skill_slug AS slug, r.body->'runs'->'cold' AS cold FROM benchmarks b JOIN records r ON r.cid = b.record_cid`).catch(() => ({ rows: [] as any[] }))).rows.filter((x) => x.cold?.success);
+  const med = (xs: number[]) => { const v = [...xs].sort((a, b) => a - b); const m = v.length >> 1; return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
+  const avoided = { zero_model_call_verified_replays: [...zeroCall.values()].reduce((a, b) => a + b, 0), counted_replays: 0, model_calls: 0, usd: 0, browser_ms_saved: 0, skills_with_cold_benchmark: 0 };
+  for (const [slug, n] of zeroCall) {
+    const c = colds.filter((x) => x.slug === slug).map((x) => x.cold);
+    if (!c.length) continue;
+    avoided.skills_with_cold_benchmark++; avoided.counted_replays += n;
+    avoided.model_calls += n * med(c.map((x) => Number(x.model_calls) || 0));
+    avoided.usd += n * med(c.map((x) => Number(x.usd) || 0));
+    const ms = zeroMs.get(slug) ?? [];
+    if (ms.length) avoided.browser_ms_saved += n * Math.max(0, med(c.map((x) => Number(x.executor_ms) || 0)) - med(ms));
+  }
+  avoided.usd = Math.round(avoided.usd * 10000) / 10000; avoided.model_calls = Math.round(avoided.model_calls); avoided.browser_ms_saved = Math.round(avoided.browser_ms_saved);
   const spend = await museSpend(ctx);
   const kinds = (await ctx.db.query<any>(`SELECT kind, SUM(calls)::int AS calls, SUM(cost_micro)::float8 AS c FROM muse_spend GROUP BY kind ORDER BY kind`)).rows;
   return {
@@ -111,6 +129,7 @@ export async function skillMetrics(ctx: AppContext) {
     skills_by_site: skillSites,
     // Reuse: runs of a published version. The publishing run (part of the recording) is never counted here.
     replays: { ...replays, publishing_runs: publishRuns, note: "Replays exclude each skill's publishing run (the verification of the recording). mock_site = Agentboard's own /demo/ sites (helpdesk and shop mocks)." },
+    avoided: { ...avoided, note: "Estimate from signed records only: each verified replay that made no model call, for a skill with signed cold benchmarks, times the median model calls and Muse cost of those cold runs. browser_ms_saved: the cold runs' median executor time minus the replays' median, per replay. Skills without a cold benchmark are not counted." },
     runs: { total: rows.length, verified: succeeded, failed: rows.length - succeeded, success_rate: rows.length ? Math.round((succeeded / rows.length) * 1000) / 1000 : null, by_agents: agentRuns, distinct_agents: agents.size, that_healed: healRuns },
     human: {
       clicks_per_run: 0, // the agent does every click; a human only approves risky steps

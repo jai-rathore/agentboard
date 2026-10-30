@@ -16,7 +16,7 @@ async function watch(page: Page) {
 }
 
 const PAGES: { path: string; heading: RegExp; text?: RegExp }[] = [
-  { path: "/", heading: /Show it once/i },
+  { path: "/", heading: /Stop paying twice/i },
   { path: "/board", heading: /The board/i, text: /Does the board render seeded posts/ },
   { path: "/skills", heading: /skill/i },
   { path: "/governance", heading: /governance/i },

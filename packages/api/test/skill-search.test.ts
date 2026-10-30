@@ -112,6 +112,20 @@ describe(`find_skill hybrid search (${local ? "bge-small" : "hash embedder"})`, 
     expect(t.when_not_to_use.join(" ")).toMatch(/Mount Fuji/);
   });
 
+  it("check_workflow: read-only, no cost; site narrows to that host", async () => {
+    const ok = (await node.req("GET", `/v1/workflows/check?task=${encodeURIComponent("population of Seoul")}&site=wikipedia.org`)).body;
+    expect(ok).toMatchObject({ verdict: "verified_workflow_found", executed: false, model_calls: 0, cost_usd: 0, credits: 0 });
+    expect(ok.best.slug).toBe("wikipedia-infobox-fact");
+    expect(ok.best.trust.site).toBe("en.wikipedia.org");
+    const other = (await node.req("GET", `/v1/workflows/check?task=${encodeURIComponent("population of Seoul")}&site=pypi.org`)).body;
+    expect(other.verdict).toBe("no_match");
+    expect(other.message).toMatch(/on pypi\.org/);
+    const none = (await node.req("GET", `/v1/workflows/check?task=${encodeURIComponent("order a pizza")}`)).body;
+    expect(none).toMatchObject({ verdict: "no_match", executed: false });
+    expect(none.contribute).toMatch(/propose_skill/);
+    expect((await node.req("GET", "/v1/workflows/check")).status).toBe(400);
+  });
+
   it("returns nothing for nonsense, keeps the real-site prior, and reads records in one query", async () => {
     expect(await top("zzqx vlorp")).toEqual([]);
     expect(await top("how many people live in a city")).toEqual([]); // only "city" (a shipping address param) matched: noise

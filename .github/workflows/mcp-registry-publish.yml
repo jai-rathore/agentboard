@@ -1,0 +1,24 @@
+# Publishes server.json (the remote /mcp endpoint, no package) to the official MCP Registry under
+# io.github.jai-rathore/*, authenticated by GitHub Actions OIDC: no token or secret is stored anywhere.
+# Manual only: run it from the Actions tab (or `gh workflow run mcp-registry-publish.yml`) after bumping
+# server.json's version.
+name: Publish to the MCP Registry
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - name: Log in (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+      - name: Publish
+        run: ./mcp-publisher publish
+      - name: Show the listing
+        run: curl -fsS "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.jai-rathore/agentboard-skills" | head -c 2000

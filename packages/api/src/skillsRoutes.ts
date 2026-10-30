@@ -3,7 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { AppContext } from "./context.js";
 import { HttpError } from "./context.js";
 import { museResponses, museSpend, type MuseKind } from "./services/muse.js";
-import { MAX_MATCHES, NO_MATCH_MESSAGE, CONTRIBUTE_HINT } from "./services/skillMatch.js";
+import { MAX_MATCHES, NO_MATCH_MESSAGE, CONTRIBUTE_HINT, hostWords } from "./services/skillMatch.js";
 import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
 import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, createAgentFundedJob, refundAgentRun } from "./services/skillJobs.js";
 import { verifyRequestAuth } from "./requestAuth.js";
@@ -161,8 +161,10 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     const task = (c.req.query("task") ?? c.req.query("q") ?? "").trim(), site = (c.req.query("site") ?? "").trim().toLowerCase();
     if (!task) throw new HttpError(400, "task_required", "pass task (the task in plain words) and optionally site");
     const t0 = Date.now();
-    let found = await findSkills(ctx, site ? `${task} ${site.replace(/^https?:\/\//, "").replace(/^www\./, "")}` : task, MAX_MATCHES);
     const siteKey = site.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+    // the site's name words (wikipedia.org -> wikipedia), not its TLD, join the query
+    const siteWords = siteKey ? (siteKey.includes(".") ? hostWords(`https://${siteKey}`) : siteKey) : "";
+    let found = await findSkills(ctx, siteWords ? `${task} ${siteWords}` : task, MAX_MATCHES);
     if (siteKey) found = found.filter((s: any) => { try { const h = new URL(String(s.start_url).replace(/\{\{[^}]*\}\}/g, "x")).hostname.replace(/^www\./, ""); return h === siteKey || h.endsWith(`.${siteKey}`) || h.split(".").includes(siteKey); } catch { return false; } });
     const best = found[0];
     return c.json({
