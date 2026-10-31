@@ -45,6 +45,11 @@ const norm = (toks: string[]) => toks.filter((t) => !FILLER.has(t)).map((t) => S
 const SITE_ALIASES: Record<string, string> = {
   "news.ycombinator.com": "hn hacker news",
   "find-and-update.company-information.service.gov.uk": "companies house uk company register",
+  // featured skills: the names people use for these registers, since there is no embedding model to bridge them
+  "sanctionssearch.ofac.treas.gov":
+    "ofac us treasury sanctions sanctioned sdn specially designated nationals blocked persons screen check vendor supplier counterparty",
+  "myfloridalicense.com": "florida fl dbpr department business professional regulation professional license lookup",
+  "newjersey.mylicense.com": "new jersey nj dca division consumer affairs business registration entity status lookup",
 };
 /** Words of a host name worth matching: "en.wikipedia.org" -> wikipedia; "pkg.go.dev" -> pkg, go; plus SITE_ALIASES. */
 export function hostWords(url: string | null | undefined): string {

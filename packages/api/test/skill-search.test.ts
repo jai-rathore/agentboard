@@ -65,6 +65,20 @@ describe("find_skill hybrid search (lexical: FTS, trigram, hashing vectors)", ()
     // task words folded without an embedding model
     ["file a support ticket", "create-a-support-ticket"], // file -> create, ahead of the ticket status lookup
     ["convert dollars to yen", "x-rates-exchange-rate"], // convert -> exchange
+    // recall without embeddings: register names people use for the featured skills (SITE_ALIASES in skillMatch.ts)
+    ["check a Florida professional license", "florida-license-status"],
+    ["Department of Business and Professional Regulation license search", "florida-license-status"],
+    ["look up a DBPR license", "florida-license-status"],
+    ["sanctions check", "ofac-sanctions-search"],
+    ["check a name against the SDN list", "ofac-sanctions-search"],
+    ["is this company on the specially designated nationals list", "ofac-sanctions-search"],
+    ["blocked persons list search", "ofac-sanctions-search"],
+    ["screen a vendor", "ofac-sanctions-search"],
+    ["screen a supplier against sanctions lists", "ofac-sanctions-search"],
+    ["NJ business registration", "nj-business-license-status"],
+    ["New Jersey business registration lookup", "nj-business-license-status"],
+    ["NJ entity status", "nj-business-license-status"],
+    ["New Jersey Division of Consumer Affairs license lookup", "nj-business-license-status"],
   ])("%s -> %s", async (q, slug) => {
     expect((await top(q))[0]).toBe(slug);
   });
@@ -75,6 +89,10 @@ describe("find_skill hybrid search (lexical: FTS, trigram, hashing vectors)", ()
     "book a flight from SFO to JFK", "find cheap flights", "order a pizza", "order pizza delivery", "buy concert tickets",
     "check the weather in Paris", "rent a car", "download this month's invoice from a vendor portal", "send an email",
     "book a hotel room", "track my package", "what is the stock price of Apple", "translate text to French", "schedule a meeting",
+    // near misses for the register aliases above
+    "check license plate", "renew my driver license", "check email", "check a vendor invoice", "latest news on Russia sanctions",
+    "weather in New Jersey", "Florida driver license renewal", "register to vote in New Jersey", "California contractor license lookup",
+    "Texas business entity status", "screen recording",
   ])("no match: %s", async (q) => {
     expect(await top(q)).toEqual([]);
     const r = await node.req("GET", `/v1/skills/find?q=${encodeURIComponent(q)}`);
