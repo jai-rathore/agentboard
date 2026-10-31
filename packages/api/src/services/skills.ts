@@ -10,6 +10,7 @@
  *              step, or the elements actually used no longer carry the recorded names), Spark rewrites the
  *              steps from what it saw and the node publishes a signed next version linked to the run.
  */
+import { realityOf, realityRank } from "./reality";
 import { createRecord, sha256Hex, effectiveRiskFlags, gatedSteps, publicReplaySafety, GATED_FLAGS, runVerified, type SignedRecord } from "@agentboard/core";
 import { z } from "zod";
 import type { AppContext } from "../context.js";
@@ -466,8 +467,9 @@ export async function listSkills(ctx: AppContext, q?: string) {
   const rows = await withSite(ctx, (await ctx.db.query<any>(`${latestSkillsSql}
       AND ($1::text IS NULL OR lower(s.name || ' ' || s.summary || ' ' || s.slug) LIKE $1)
     ORDER BY s.created_at DESC LIMIT 100`, [like])).rows);
-  // real-site skills first, newest first within each group
-  return [...rows.filter((r) => r.site_kind === "real"), ...rows.filter((r) => r.site_kind !== "real")];
+  // painful real-site tasks first (docs/REALITY_CHECK.md), then the rest of the real sites, easy lookups, demo (mock)
+  // sites; newest first within each group
+  return rows.map((r, i) => ({ r: { ...r, reality: realityOf(r.slug, r.site_kind) }, i })).sort((a, b) => realityRank(a.r.slug, a.r.site_kind) - realityRank(b.r.slug, b.r.site_kind) || a.i - b.i).map((x) => x.r);
 }
 
 /** Ranking prior (added to the match score, never to the gate): real sites a little ahead of Agentboard's demo (mock) sites. */
@@ -486,7 +488,7 @@ export async function findSkills(ctx: AppContext, q: string, limit = DEFAULT_MAT
   let picked: { cid: string; score: number; cos: number | null; cov: number; ranks?: Record<string, number> }[];
   const latest = (await ctx.db.query<any>(`SELECT l.*, rec.body_text FROM (${latestSkillsSql}) l JOIN records rec ON rec.cid = l.cid`)).rows;
   const byCid = new Map(latest.map((r) => [r.cid, { r, body: JSON.parse(r.body_text) }]));
-  if (!query) picked = latest.sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at)).slice(0, 10).map((r) => ({ cid: r.cid, score: 1, cos: null, cov: 0 }));
+  if (!query) picked = latest.sort((a, b) => realityRank(a.slug, siteKind(ctx, JSON.parse(a.body_text).source?.start_url)) - realityRank(b.slug, siteKind(ctx, JSON.parse(b.body_text).source?.start_url)) || +new Date(b.created_at) - +new Date(a.created_at)).slice(0, 10).map((r) => ({ cid: r.cid, score: 1, cos: null, cov: 0 }));
   else {
     const n = Math.min(MAX_MATCHES, Math.max(1, Number.isFinite(limit) ? Math.floor(limit) : DEFAULT_MATCHES));
     const terms = queryTerms(query);
@@ -531,7 +533,7 @@ export async function findSkills(ctx: AppContext, q: string, limit = DEFAULT_MAT
       ...(query ? { match: Math.round(score * 100) / 100, match_detail: { semantic: cos == null ? null : Math.round(cos * 100) / 100, term_coverage: Math.round(cv * 100) / 100 }, ...(ranks ? { matched_by: Object.keys(ranks) } : {}) } : {}),
       params: body.skill.params, start_url: body.source?.start_url ?? null, success_check: body.skill.success_check,
       risk_flags: effectiveRiskFlags(body.skill), approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, intent: body.skill.steps[g.index].intent, flags: g.flags })),
-      site_kind: siteKind(ctx, body.source?.start_url), site_label: SITE_LABEL[siteKind(ctx, body.source?.start_url)],
+      site_kind: siteKind(ctx, body.source?.start_url), site_label: SITE_LABEL[siteKind(ctx, body.source?.start_url)], reality: realityOf(r.slug, siteKind(ctx, body.source?.start_url)),
       verified_runs: r.verified_runs, runs: r.runs, ...(counts.get(r.slug) ?? { replays: 0, verified_replays: 0, new_input_replays: 0 }), recording_ms: rec, healed: Boolean(body.healed_from),
       public_replay: publicReplayable(ctx, r.slug, body.skill),
       url: `${ctx.cfg.skillsWebUrl}/s/${r.cid}`,

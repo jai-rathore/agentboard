@@ -149,6 +149,21 @@ function ActivityFeed() {
   </section>;
 }
 
+/** Painful tasks first (docs/REALITY_CHECK.md): skills an agent with web search and fetch would still check here first. */
+function PainfulFirst() {
+  const r = usePoll<any>("/v1/skills", 60000);
+  const all: any[] = r.data?.skills ?? [];
+  const featured = all.filter((s) => s.reality?.verdict === "feature");
+  const easy = all.filter((s) => s.reality?.verdict === "easy").length;
+  if (!featured.length) return null;
+  return <div className="painful">
+    <h2>Where it helps: painful public web tasks</h2>
+    <p className="small muted">Forms that post back, searches with no keyless API, answers read from the row that names your input. An agent with only fetch cannot do these in one call; here a verified replay takes about 5 s and 0 model calls, and a bad input fails fast with no model call.</p>
+    <ul className="painful-list">{featured.map((s) => <li key={s.slug}><Link to={`/skills/${s.slug}`}><b>{s.name}</b></Link> <SiteBadge kind={s.site_kind} /><br /><span className="small muted">{s.reality.why}</span></li>)}</ul>
+    <p className="small muted">Honest note: {easy} other skills are easy lookups that a public API answers in one call; they stay as demos of the mechanism and are not featured. <a href={`${GITHUB}/blob/main/docs/REALITY_CHECK.md`}>Reality check →</a></p>
+  </div>;
+}
+
 export function Landing() {
   return <>
     <section className="landing-top">
@@ -169,6 +184,7 @@ export function Landing() {
           <figcaption className="small muted">A real run on news.ycombinator.com (Oct 28, 2026), started with the Try it now button, sped up 1.4×: Muse Spark 1.3 drives the browser with its computer tool, Muse Spark Open (open-weight) verifies the final screenshot, the node signs the run, and the signature is checked in the browser.</figcaption>
         </figure>
       </div>
+      <PainfulFirst />
       <div className="ctas center">
         <Link to="/skills" className="btn primary">Browse skills</Link>
         <a href={GITHUB} className="btn ghost">GitHub ↗</a>
