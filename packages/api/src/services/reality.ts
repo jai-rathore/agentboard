@@ -4,14 +4,17 @@
  *   keep    : works and is verified, but a capable agent can usually do it in one fetch; listed, not featured
  *   easy    : a public JSON API answers it in one call; kept as a mechanism demo, never featured
  *   demo    : a page Agentboard hosts to show the mechanism (mock site)
+ *   retired : replaced by an honestly named skill; its signed history stays readable by slug, but it is not listed or found
  * Unknown slugs (new skills) are "keep" until reviewed. Listing and the empty-query find_skill order by this.
  */
-export type Verdict = "feature" | "keep" | "easy" | "demo";
+export type Verdict = "feature" | "keep" | "easy" | "demo" | "retired";
 export const REALITY: Record<string, { verdict: Verdict; why: string }> = {
   "ofac-sanctions-search": { verdict: "feature", why: "ASP.NET postback search (viewstate) with fuzzy scoring: a fetch-only agent cannot submit it; the program is read from the row that names the input" },
   "florida-license-status": { verdict: "feature", why: "POST-only license search with no public API; the status is read from the results row whose license number is the input" },
+  "nj-business-license-status": { verdict: "feature", why: "ASP.NET postback search with tightly stacked boxes that a model agent mis-clicks (cold: 16 calls, not verified); no lookup API (only bulk roster downloads); the status is read from the results row whose license number is the input" },
   "companies-house-last-accounts": { verdict: "keep", why: "the official API needs a registered key, but the company page is one GET by number, so a fetch-capable agent rarely needs a skill" },
-  "fmcsa-carrier-authority": { verdict: "keep", why: "USDOT status from SAFER (the API needs a webkey); a direct GET URL exists, and it returns USDOT status, not operating authority yet" },
+  "fmcsa-usdot-status": { verdict: "keep", why: "USDOT status from SAFER Company Snapshot (the QCMobile API needs a webkey), with a verified no-hit on 'Record Not Found'; but a direct GET URL exists, so a fetch-capable agent can often do it" },
+  "fmcsa-carrier-authority": { verdict: "retired", why: "renamed to fmcsa-usdot-status: it returned USDOT status, never operating authority" },
   "wikipedia-infobox-fact": { verdict: "easy", why: "the Wikipedia API or one page fetch answers it" },
   "x-rates-exchange-rate": { verdict: "easy", why: "free FX APIs answer it in one call" },
   "pypi-package-version": { verdict: "easy", why: "pypi.org/pypi/<name>/json answers it in one call" },
@@ -22,9 +25,10 @@ export const REALITY: Record<string, { verdict: Verdict; why: string }> = {
   "hn-search-top-result": { verdict: "easy", why: "the Algolia HN search API answers it in one call" },
   "github-repo-stars-release": { verdict: "easy", why: "the GitHub REST API answers it in one call" },
 };
-const ORDER: Record<Verdict, number> = { feature: 0, keep: 1, easy: 2, demo: 3 };
+const ORDER: Record<Verdict, number> = { feature: 0, keep: 1, easy: 2, demo: 3, retired: 4 };
 export function realityOf(slug: string, siteKind?: string): { verdict: Verdict; why: string } {
   if (siteKind === "mock") return { verdict: "demo", why: "a page Agentboard hosts to show the mechanism, not a real site" };
   return REALITY[slug] ?? { verdict: "keep", why: "not reviewed yet" };
 }
 export const realityRank = (slug: string, siteKind?: string) => ORDER[realityOf(slug, siteKind).verdict];
+export const isRetired = (slug: string) => REALITY[slug]?.verdict === "retired";

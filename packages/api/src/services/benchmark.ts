@@ -183,6 +183,8 @@ function metricsOf(body: any, extra?: { calls: number; input_tokens: number; cac
     // skill_run only: how the replay ran (trace = deterministic, no model calls; trace+recovery; model = hinted model run)
     ...(body.replay ? { replay_mode: String(body.replay.mode), verifier: String(body.replay.verifier ?? "model") } : {}),
     ...(body.answer?.value != null ? { value: String(body.answer.value) } : {}),
+    // a verified negative (packages/core runOutcome): the site's declared no-results wording, tied to the input
+    ...(body.outcome === "no_match" ? { outcome: "no_match" } : {}),
     ...(body.answer?.model_text ? { answer_text: String(body.answer.model_text).slice(0, 400) } : {}),
   };
 }
@@ -307,6 +309,7 @@ function present(ctx: AppContext, rec: { cid: string; author: string; created_at
   };
 }
 
+const said = (r: any) => (!r.success ? "not verified" : r.outcome === "no_match" ? "verified: no hit (the site's declared no-results wording, tied to the input)" : "verified");
 /** One sentence, from the signed record only. */
 export function headlineOf(b: any): string {
   const A = b.runs?.cold, B = b.runs?.reuse, c = b.comparison ?? {};
@@ -314,10 +317,10 @@ export function headlineOf(b: any): string {
   const usd = (x: number) => `$${Number(x).toFixed(4)}`;
   const calls = (k: number) => `${k} model call${k === 1 ? "" : "s"}`;
   if (B.model_calls === 0 && A.model_calls > 0) {
-    const verified0 = c.both_verified ? "Both runs verified." : `Cold run ${A.success ? "verified" : "not verified"}; replay ${B.success ? "verified" : "not verified"}.`;
+    const verified0 = c.both_verified && A.outcome === B.outcome ? (B.outcome === "no_match" ? "Both runs verified: no hit." : "Both runs verified.") : `Cold run ${said(A)}; replay ${said(B)}.`;
     return `Same task and input, two agents: reusing the ${b.task?.slug} skill replayed its recorded trace with no model calls (${usd(B.usd)}${B.verifier === "deterministic" ? ", checked deterministically" : ""}${B.value ? `, returned "${B.value}"` : ""}); doing it cold took ${calls(A.model_calls)} (${usd(A.usd)}). ${verified0}${c.values_match === true ? " Both returned the same value." : c.values_match === false ? ` The values differ (cold: "${c.cold_value ?? "?"}").` : ""}`;
   }
-  const verified = c.both_verified ? "Both runs verified." : `Cold run ${A.success ? "verified" : "not verified"}; replay ${B.success ? "verified" : "not verified"}.`;
+  const verified = c.both_verified && A.outcome === B.outcome ? (B.outcome === "no_match" ? "Both runs verified: no hit." : "Both runs verified.") : `Cold run ${said(A)}; replay ${said(B)}.`;
   return `Same task and input, two agents: reusing the ${b.task?.slug} skill took ${calls(B.model_calls)} (${usd(B.usd)}); doing it cold took ${calls(A.model_calls)} (${usd(A.usd)})${c.usd_ratio ? `, ${c.usd_ratio}x the cost` : ""}. ${verified}`;
 }
 

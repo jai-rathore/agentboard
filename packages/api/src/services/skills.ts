@@ -10,7 +10,7 @@
  *              step, or the elements actually used no longer carry the recorded names), Spark rewrites the
  *              steps from what it saw and the node publishes a signed next version linked to the run.
  */
-import { realityOf, realityRank } from "./reality";
+import { isRetired, realityOf, realityRank } from "./reality";
 import { createRecord, sha256Hex, effectiveRiskFlags, gatedSteps, publicReplaySafety, GATED_FLAGS, runVerified, isNoMatch, NO_MATCH_TIES, type SignedRecord } from "@agentboard/core";
 import { z } from "zod";
 import type { AppContext } from "../context.js";
@@ -475,7 +475,7 @@ export async function listSkills(ctx: AppContext, q?: string) {
     ORDER BY s.created_at DESC LIMIT 100`, [like])).rows);
   // painful real-site tasks first (docs/REALITY_CHECK.md), then the rest of the real sites, easy lookups, demo (mock)
   // sites; newest first within each group
-  return rows.map((r, i) => ({ r: { ...r, reality: realityOf(r.slug, r.site_kind) }, i })).sort((a, b) => realityRank(a.r.slug, a.r.site_kind) - realityRank(b.r.slug, b.r.site_kind) || a.i - b.i).map((x) => x.r);
+  return rows.filter((r) => !isRetired(r.slug)).map((r, i) => ({ r: { ...r, reality: realityOf(r.slug, r.site_kind) }, i })).sort((a, b) => realityRank(a.r.slug, a.r.site_kind) - realityRank(b.r.slug, b.r.site_kind) || a.i - b.i).map((x) => x.r);
 }
 
 /** Ranking prior (added to the match score, never to the gate): real sites a little ahead of Agentboard's demo (mock) sites. */
@@ -492,7 +492,8 @@ export const RRF_WEIGHT = 0.15;
 export async function findSkills(ctx: AppContext, q: string, limit = DEFAULT_MATCHES, opts: { trust?: boolean } = {}) {
   const query = q.trim().slice(0, 300);
   let picked: { cid: string; score: number; cos: number | null; cov: number; ranks?: Record<string, number> }[];
-  const latest = (await ctx.db.query<any>(`SELECT l.*, rec.body_text FROM (${latestSkillsSql}) l JOIN records rec ON rec.cid = l.cid`)).rows;
+  // retired slugs (reality.ts) keep their signed history but are never listed or found
+  const latest = (await ctx.db.query<any>(`SELECT l.*, rec.body_text FROM (${latestSkillsSql}) l JOIN records rec ON rec.cid = l.cid`)).rows.filter((r) => !isRetired(r.slug));
   const byCid = new Map(latest.map((r) => [r.cid, { r, body: JSON.parse(r.body_text) }]));
   if (!query) picked = latest.sort((a, b) => realityRank(a.slug, siteKind(ctx, JSON.parse(a.body_text).source?.start_url)) - realityRank(b.slug, siteKind(ctx, JSON.parse(b.body_text).source?.start_url)) || +new Date(b.created_at) - +new Date(a.created_at)).slice(0, 10).map((r) => ({ cid: r.cid, score: 1, cos: null, cov: 0 }));
   else {
