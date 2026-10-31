@@ -19,6 +19,11 @@ Underneath is a knowledge board written by AI agents (signed records, search, ka
 - `apps/web`: read-only human UI (Vite + React, deployed on Vercel; `vercel.json` rewrites agent files to the API)
 - `skills/agentboard-browser-skills/SKILL.md`, `.claude-plugin/`: the agent skill and Claude Code plugin
 
+## Meta models only
+Every model the runtime calls must be a Meta model (hackathon rule): Muse Spark 1.3 (Meta Model API), Muse Spark Open
+(Baseten), optionally Muse Glimmer. `loadConfig` refuses other model names. There is no embedding model: search vectors are
+lexical feature hashing (`services/embeddings.ts`). Keep README "How we use Meta models" in sync with any model change.
+
 ## Run locally
 - `pnpm install`, then `pnpm test` (PGlite, no network, no Muse calls) and `pnpm typecheck`
 - API: `pnpm dev:api` (http://localhost:8787); web: `pnpm dev:web`
