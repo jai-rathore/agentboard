@@ -48,8 +48,31 @@ export function runValueBinding(body: any): BindingResult {
   return valueBinding({ params: body?.params, value: a?.value ?? null, finalUrlTemplate: body?.trace?.final?.url ?? null, finalUrl, rowLabel: answerRowLabel(a?.source), titleParams: Array.isArray(body?.trace?.final?.title) ? body.trace.final.title : null });
 }
 
-/** A run counts as verified only when it succeeded and its value (if any) is tied to its inputs. */
-export const runVerified = (body: any) => body?.success === true && runValueBinding(body).ok;
+/**
+ * A verified negative ("Verified: no hit"): a skill that declares an empty-result signal (skill.empty_result.text, the
+ * site's own "no results" wording) may end a run with outcome "no_match" when the final page shows that wording AND the
+ * page is tied to every input: the input is in the final URL, echoed in the search field, carried by the search request
+ * that loaded the page (a POST form), or shown on the page. Anything else that returns no value is "not verified".
+ */
+export const NO_MATCH_TIES = ["url", "field", "query", "page"] as const;
+export function noMatchTie(body: any): { ok: boolean; by: Record<string, string>; missing: string[]; reason: string } {
+  if (body?.outcome !== "no_match") return { ok: false, by: {}, missing: [], reason: "not a no-match run" };
+  const nm = body?.no_match ?? {};
+  const by: Record<string, string> = typeof nm.by === "object" && nm.by ? nm.by : {};
+  if (!String(nm.signal ?? "").trim()) return { ok: false, by, missing: [], reason: "no empty-result signal was matched" };
+  const params = Object.entries(body?.params ?? {}).filter(([, v]) => String(v ?? "").trim().length >= 2);
+  const missing = params.filter(([k]) => !(NO_MATCH_TIES as readonly string[]).includes(by[k])).map(([k]) => k);
+  return missing.length
+    ? { ok: false, by, missing, reason: `the empty result is not tied to ${missing.join(", ")}` }
+    : { ok: true, by, missing, reason: `the site said "${String(nm.signal).slice(0, 80)}" for exactly these inputs (${Object.entries(by).map(([k, how]) => `${k}: ${how === "field" ? "echoed in the search field" : how === "query" ? "sent in the search request" : how === "url" ? "page URL" : "shown on the page"}`).join(", ")})` };
+}
+/** A verified no-hit run (see noMatchTie). */
+export const isNoMatch = (body: any) => body?.success === true && noMatchTie(body).ok;
+
+/** A run counts as verified only when it succeeded and its value (if any) is tied to its inputs; a no-hit run, when its empty result is tied to its inputs. */
+export const runVerified = (body: any) => body?.success === true && (body?.outcome === "no_match" ? noMatchTie(body).ok : runValueBinding(body).ok);
+/** "verified" (a value), "no_match" (Verified: no hit) or "not_verified" (something broke, or the result is not tied to the inputs). */
+export const runOutcome = (body: any): "verified" | "no_match" | "not_verified" => (isNoMatch(body) ? "no_match" : runVerified(body) ? "verified" : "not_verified");
 
 /** When the executor started labeling a row value with the row it was actually read from (commit 560497b, live 16:18 UTC). */
 export const ROW_LABEL_FIX_AT = "2026-10-29T16:18:05Z";

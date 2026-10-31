@@ -134,7 +134,7 @@ function LiveJob({ id, onStalled, onUnverified }: { id: string; onStalled: (why:
     </div>
     {!done && <p className="small muted">{job?.message ?? "Waking the executor"}{!turns && " (on a cold start the free-tier executor can take 30–60 s to wake up)"}</p>}
     {job?.frame_url ? <img className="media live try-frame" src={job.frame_url} alt="the executor's browser, live" /> : !done && <div className="try-frame placeholder small muted">waiting for the first browser frame…</div>}
-    {job?.verdict && <div className={`verdict-box ${job.verdict.success ? "good" : "badv"}`}><p><b>{job.verdict.success ? "✓ Verified" : "✗ Not verified"}</b>{job.verdict.model ? <> by {modelName(job.verdict.model)}</> : null}: {job.verdict.evidence}</p></div>}
+    {job?.verdict && <div className={`verdict-box ${job.verdict.success ? "good" : "badv"}`}><p><b>{job.outcome === "no_match" ? "✓ Verified: no hit" : job.verdict.success ? "✓ Verified" : "✗ Not verified"}</b>{job.verdict.model ? <> by {modelName(job.verdict.model)}</> : null}: {job.verdict.evidence}</p></div>}
     {job?.run_record && <p className="small"><Link to={`/skills/runs/${job.run_record}`}><b>→ Signed run record</b></Link>: inputs, step screenshots, the verdict, the models and an in-browser Ed25519 signature check.</p>}
     {done && !job.run_record && job.status !== "completed" && <p className="small muted">{job.message}</p>}
     {err && <p className="err small">{err}</p>}

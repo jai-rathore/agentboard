@@ -414,3 +414,28 @@ describe.skipIf(!chromium)("click then type: a click that lands on a dropdown mo
     await p.close();
   });
 });
+
+describe("verified negative: a declared empty-result signal tied to the input", async () => {
+  const { noMatchCheck, textFieldValuesInPage } = await import("../src/trace.mjs");
+  const SIG = "Your search has not returned any results";
+  const OFAC = "Lookup Results: 0 Found\nName\tAddress\tType\tProgram(s)\tList\tScore\n\nYour search has not returned any results.\n";
+  it("OFAC: the wording plus the name echoed in the search field is a verified no hit", () => {
+    expect(noMatchCheck({ signal: SIG, params: { name: "TOYOTA MOTOR CORPORATION" }, pageText: OFAC, url: "https://sanctionssearch.ofac.treas.gov/", fields: ["TOYOTA MOTOR CORPORATION", "100"], request: null })).toMatchObject({ ok: true, by: { name: "field" } });
+  });
+  it("Florida: the wording plus the license number in the POST that loaded the page", () => {
+    const fl = "LICENSEE SEARCH OPTIONS\nThere were no records found matching the search criteria. If you suspect unlicensed activity";
+    expect(noMatchCheck({ signal: "There were no records found matching the search criteria", params: { license_number: "CBC0000001" }, pageText: fl, url: "https://www.myfloridalicense.com/wl11.asp?mode=2&search=LicNbr", fields: [], request: { url: "https://www.myfloridalicense.com/wl11.asp?mode=2&search=LicNbr", post: "hSID=&hSearchType=LicNbr&LicNbr=CBC0000001&Search1=Search" } })).toMatchObject({ ok: true, by: { license_number: "query" } });
+  });
+  it("is not a no hit without the wording, or when the page is not tied to the input (a stale or different query)", () => {
+    expect(noMatchCheck({ signal: SIG, params: { name: "TOYOTA" }, pageText: "Lookup Results: 1 Found\nTOYOTA", url: "https://x.test/", fields: ["TOYOTA"], request: null }).ok).toBe(false);
+    expect(noMatchCheck({ signal: SIG, params: { name: "TOYOTA MOTOR CORPORATION" }, pageText: OFAC, url: "https://x.test/", fields: ["SOMEONE ELSE"], request: { url: "https://x.test/", post: "q=SOMEONE+ELSE" } })).toMatchObject({ ok: false });
+    expect(noMatchCheck({ signal: "", params: { name: "X Y" }, pageText: OFAC, url: "", fields: [], request: null }).ok).toBe(false);
+  });
+  it.skipIf(!chromium)("reads visible text-field values (a postback keeps the query in its box)", async () => {
+    if (!browser) return;
+    const p = await browser.newPage();
+    await p.setContent(`<form><input id="n" value="TOYOTA MOTOR CORPORATION"><input type="hidden" value="secret"><input value=""></form>`);
+    expect(await p.evaluate(textFieldValuesInPage)).toEqual(["TOYOTA MOTOR CORPORATION"]);
+    await p.close();
+  });
+});

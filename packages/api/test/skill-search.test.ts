@@ -103,10 +103,10 @@ describe(`find_skill hybrid search (${local ? "bge-small" : "hash embedder"})`, 
     expect(t.site).toBe("en.wikipedia.org");
     expect(t.input_schema).toHaveProperty("search_query");
     expect(t.example.input).toEqual({ search_query: "Seoul", target_field: "Population" });
-    expect(t.runs_7d).toEqual({ verified: 1, failed: 1 });
+    expect(t.runs_7d).toEqual({ verified: 1, verified_no_hit: 0, failed: 1 });
     expect(t.latest_failure.input).toEqual({ search_query: "Mount Fuji", target_field: "Elevation" });
     expect(t.latest_failure.reason).toBe('this page has no "Elevation" row.');
-    expect(t.distinct_inputs_tested).toEqual({ total: 2, verified: 1 });
+    expect(t.distinct_inputs_tested).toEqual({ total: 2, verified: 1, verified_no_hit: 0 });
     expect(t.identities.operator_house.runs).toBe(2);
     expect(t.identities.independent_agents).toMatchObject({ identities: 0, runs: 0 });
     expect(t.actions).toMatch(/^read-only/);

@@ -303,7 +303,7 @@ function ReplayPanel({ target, skill, startUrl }: { target: { draft_id?: string;
       <ModelCall model={t.model} capability={t.capability} extra={<>{t.ms} ms · {usd(t.usage?.usd)}</>} />
       <div>{t.say}</div>
       <div className="mono small">{t.actions.map((a) => JSON.stringify(a)).join(" ")}{t.fn ? ` ${t.fn.name}(${t.fn.arguments})` : ""}</div></li>)}</ol>}
-    {verdict && <div className={`verdict-box ${verdict.success ? "good" : "badv"}`}><ModelCall model={verdict.model} capability={`verified with ${verdict.capability}`} /><p>{verdict.success ? "✓ Success" : "✗ Not verified"}: {verdict.evidence}</p></div>}
+    {verdict && <div className={`verdict-box ${verdict.success ? "good" : "badv"}`}><ModelCall model={verdict.model} capability={`verified with ${verdict.capability}`} /><p>{verdict.success ? (/^No hit:/.test(verdict.evidence ?? "") ? "✓ Verified: no hit" : "✓ Success") : "✗ Not verified"}: {verdict.evidence}</p></div>}
     <RunResult result={result} />
   </div>;
 }
@@ -359,7 +359,7 @@ export function JobPage({ id }: { id: string }) {
     <div className="sbs">
       <div>{job.frame_url ? <img className="media live" src={job.frame_url} alt="executor browser" /> : <p className="muted">Waiting for the first frame…</p>}</div>
       <div>
-        {job.verdict && <div className={`verdict-box ${job.verdict.success ? "good" : "badv"}`}><ModelCall model={job.verdict.model} capability={`verified with ${job.verdict.capability}`} /><p>{job.verdict.success ? "✓ Success" : "✗ Not verified"}: {job.verdict.evidence}</p></div>}
+        {job.verdict && <div className={`verdict-box ${job.verdict.success ? "good" : "badv"}`}><ModelCall model={job.verdict.model} capability={`verified with ${job.verdict.capability}`} /><p>{job.outcome === "no_match" ? "✓ Verified: no hit" : job.verdict.success ? "✓ Success" : "✗ Not verified"}: {job.verdict.evidence}</p></div>}
         <RunResult result={res} />
         {job.turns.length > 0 && <ol className="turns">{job.turns.map((t: any) => <li key={t.turn}><ModelCall model={t.model} capability={t.capability ?? "computer use"} extra={<>{t.ms} ms · {usd(t.usd)}</>} /><div>{t.say}</div><div className="mono small">{(t.actions ?? []).map((a: any) => JSON.stringify(a)).join(" ")}{t.fn ? ` ${t.fn.name}(${t.fn.arguments})` : ""}</div></li>)}</ol>}
       </div>
@@ -404,7 +404,8 @@ export function TrustCard({ t }: { t: any }) {
       <tr><th>Inputs</th><td className="mono">{Object.keys(t.input_schema ?? {}).join(", ") || "none"}</td></tr>
       <tr><th>Example (real run)</th><td>{typeof t.example === "object" ? <><span className="mono">{JSON.stringify(t.example.input)}</span> → <b>{String(t.example.output ?? "(no value)")}</b> <Link to={`/skills/runs/${t.example.run}`}>run</Link></> : t.example}</td></tr>
       <tr><th>Last verified run</th><td>{typeof t.last_verified_run === "object" ? <><Link to={`/skills/runs/${t.last_verified_run.run}`}>{ago(t.last_verified_run.at)}</Link></> : t.last_verified_run}</td></tr>
-      <tr><th>Runs, 7 / 30 days</th><td>{t.runs_7d.verified} verified, {t.runs_7d.failed} failed / {t.runs_30d.verified} verified, {t.runs_30d.failed} failed</td></tr>
+      <tr><th>Runs, 7 / 30 days</th><td>{t.runs_7d.verified} verified, {t.runs_7d.verified_no_hit ?? 0} verified no hit, {t.runs_7d.failed} failed / {t.runs_30d.verified} verified, {t.runs_30d.verified_no_hit ?? 0} verified no hit, {t.runs_30d.failed} failed</td></tr>
+      <tr><th>Verified: no hit</th><td>{typeof t.no_hit === "object" ? <>declared: the site's own wording "<b>{t.no_hit.signal}</b>" for exactly the given input is signed as <b>Verified: no hit</b>, a verified negative, not a failure.{typeof t.no_hit.latest === "object" && <> Latest: {JSON.stringify(t.no_hit.latest.input)} · {Object.entries(t.no_hit.latest.tied_by ?? {}).map(([k, how]) => `${k} ${how === "field" ? "echoed in the search field" : how === "query" ? "sent in the search request" : how === "url" ? "in the page URL" : "shown on the page"}`).join(", ")} · <Link to={`/skills/runs/${t.no_hit.latest.run}`}>run</Link></>}</> : String(t.no_hit ?? "not declared")}</td></tr>
       <tr><th>Latest failure</th><td>{typeof t.latest_failure === "object" ? <><span className="mono">{JSON.stringify(t.latest_failure.input)}</span>: {t.latest_failure.reason} <Link to={`/skills/runs/${t.latest_failure.run}`}>run</Link></> : t.latest_failure}</td></tr>
       <tr><th>Distinct inputs tested</th><td>{t.distinct_inputs_tested.total} ({t.distinct_inputs_tested.verified} verified)</td></tr>
       <tr><th>Who ran it</th><td>operator (house): {id.operator_house?.runs ?? 0} runs{(id.own_agents ?? []).map((a: any) => <span key={a.did}> · {a.name}: {a.runs} runs <span className="badge house" title={a.label}>own agent, not independent</span></span>)} · seeded benchmark identities: {id.seeded_benchmark?.identities ?? 0} ({id.seeded_benchmark?.runs ?? 0} runs) · anonymous public: {id.anonymous_public?.runs ?? 0} runs · <b>independent agents: {id.independent_agents?.identities ?? 0}</b></td></tr>
@@ -549,7 +550,7 @@ export function ReuseTable({ skill, agent, limit, compact }: { skill?: string; a
     {toggle}
     <table className="tbl cards"><thead><tr><th></th><th>kind</th>{!agent && <th>run by</th>}{!skill && <th>skill</th>}<th>site</th><th>inputs</th><th>when</th></tr></thead><tbody>
       {runs.map((x: any) => <tr key={x.run} className={x.kind === "publish" ? "publish-run" : undefined}>
-        <td title={x.evidence ?? ""} data-label="result">{x.outcome === "verified" ? "✓" : "✗"}{(x.self_healed ?? x.healed) && " 🩹"}</td>
+        <td title={x.evidence ?? ""} data-label="result">{x.outcome === "verified" ? "✓" : x.outcome === "no_match" ? "✓ no hit" : "✗"}{(x.self_healed ?? x.healed) && " 🩹"}</td>
         <td className="small" data-label="kind">{x.kind === "publish" ? <span className="muted">publishing run (not counted)</span> : <span className="badge replay">Replay</span>}</td>
         {!agent && <td className="small" data-label="run by">{who(x)}</td>}
         {!skill && <td className="small" data-label="skill"><Link to={`/s/${x.skill.cid}`}>{x.skill.name}</Link> <span className="muted">v{x.skill.version}</span></td>}
@@ -630,7 +631,7 @@ export function RunPage({ id }: { id: string }) {
     {d.site_kind === "mock" && <p className="small demo-note">This ran on an Agentboard demo page (a mock site we host), not a real-world site.</p>}
     <div className="meta">trigger: <b>{d.trigger}</b> ({triggerLabel(d.trigger)}){d.agent && <> · <Link to={`/a/${d.agent}`}>{short(d.agent)}</Link></>} · {ago(d.run.record.created_at)} · log #{d.run.seq}{d.job && <> · <Link to={`/skills/r/${d.job.id}`}>live run page</Link></>}{d.skill.latest_version !== d.skill.version && <> · latest is <Link to={`/s/${d.skill.latest_cid}`}>v{d.skill.latest_version}</Link></>}</div>
     <ReturnedValue answer={d.answer} calls={d.model_calls} mode={d.replay?.mode} binding={d.value_binding} />
-    <div className={`verdict-box ${d.success ? "good" : "badv"}`}><ModelCall model={d.models.verifier} capability={`verified with ${d.models.verifier_capability ?? "image understanding"}`} /><p>{d.success ? "✓ Verified" : "✗ Not verified"}: {d.verdict?.evidence}</p></div>
+    <div className={`verdict-box ${d.success ? "good" : "badv"}`}><ModelCall model={d.models.verifier} capability={`verified with ${d.models.verifier_capability ?? "image understanding"}`} /><p>{d.outcome === "no_match" ? "✓ Verified: no hit" : d.success ? "✓ Verified" : "✗ Not verified"}: {d.verdict?.evidence}</p></div>
     <h2>Inputs</h2>
     {names.length ? <table className="tbl cards"><thead><tr><th>param</th><th>this run</th><th>in the recording</th></tr></thead><tbody>
       {names.map((n) => <tr key={n}><td className="mono" data-label="param">{n}</td><td data-label="this run">{String(d.inputs?.[n] ?? "")}</td><td className="muted" data-label="in the recording">{String(d.recording.inputs?.[n] ?? "")}{d.differing_params?.includes(n) && <span className="badge new-inputs">different</span>}</td></tr>)}

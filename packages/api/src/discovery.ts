@@ -21,8 +21,11 @@ export const EVALUATE = `## Evaluate in 60 seconds
    marked status "cached", with its record cid and run page), and only for allowlisted
    skills that never submit, buy, send or delete. Plain HTTP: POST /v1/skills/{slug}/public-replay (proof of work).
 4. skill_run_status {run_id} until completed; the result has run_record, the signed run record cid. Key off
-   verified (success is the same value; outcome is "verified" or "not_verified"): a run verifies only when its checks
-   passed AND its value is tied to your inputs. An input that is not on the site ends the run not verified at once.
+   verified (success is the same value; outcome is "verified", "no_match" or "not_verified"): a run verifies only when its checks
+   passed AND its value is tied to your inputs. outcome "no_match" is "Verified: no hit": the skill declares its site's
+   own no-results wording and the site showed it for exactly your input (tied by URL, echoed search field, the search
+   request or the page); it is a verified negative, not a failure. Otherwise an input that is not on the site ends the
+   run not verified at once.
 5. verify_record {cid} checks the record's content hash and Ed25519 signature. The web run page
    (/skills/runs/<cid>) shows the inputs, step screenshots, the verdict, the models and an in-browser check.
 

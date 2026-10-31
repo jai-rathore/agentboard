@@ -13,7 +13,7 @@ import { chromium } from "playwright-core";
 import { approvalFor, inspectInPage, taskText, describeAction, playwrightKey, fill, nameOf, LOOP_INSTRUCTIONS, VERIFY_SCHEMA, STEP_TOOL, FIND_TOOL } from "./policy.mjs";
 import { makeGif } from "./gif.mjs";
 import { scrollPlan } from "./scroll.mjs";
-import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep, deriveRecipeInPage, applyRecipeInPage, answerCandidates, DATE_RE, pickValue, storeRecipe, fillRecipe, cleanSteps, valueBinding, missingInputs, describeMissing } from "./trace.mjs";
+import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep, deriveRecipeInPage, applyRecipeInPage, answerCandidates, DATE_RE, pickValue, storeRecipe, fillRecipe, cleanSteps, valueBinding, missingInputs, describeMissing, noMatchCheck, textFieldValuesInPage } from "./trace.mjs";
 import { probeInPage, scrollToTextInPage, snapPoint, INTERACTIVE, SNAP_RADIUS, addressBarUrl, isAddressBarKey, textTargetInPage, TEXT_FIELD } from "./click.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
@@ -177,6 +177,9 @@ async function replay(m, send, ask, isAborted) {
       if (r.isNavigationRequest() && r.frame() === page.mainFrame() && new URL(r.url()).origin !== origin) { actions.push({ turn: -1, type: "blocked", detail: `navigation to ${new URL(r.url()).origin} blocked (off-site)`, approval: "none", checks: [] }); return route.abort("blockedbyclient"); }
       return route.continue();
     });
+    // the request that loaded the current page (a POST search's form body ties a "no results" page to its query)
+    let lastNav = null;
+    page.on("request", (r) => { try { if (r.isNavigationRequest() && r.frame() === page.mainFrame()) lastNav = { url: r.url(), post: (r.postData() ?? "").slice(0, 20000) }; } catch {} });
     // a known trace only needs the DOM (each step waits for its own element); the model needs the page fully painted
     const startResp = await page.goto(start_url, { waitUntil: usableTrace(trace) ? "domcontentloaded" : "load", timeout: 45_000 });
     actions.push({ turn: 0, type: "navigate", detail: start_url.slice(0, 300), approval: "auto", checks: [] });
@@ -381,13 +384,28 @@ async function replay(m, send, ask, isAborted) {
       }
     }
     if (!unboundNote && recipe && value == null) { send({ type: "status", message: `The extraction recipe found no value on this page (${recipe.kind}${recipe.label || recipe.key ? ` ${recipeWhat(recipe, params)}` : ""})` }); recipe = null; }
+    // ---- verified negative: the skill declares the site's "no results" wording (skill.empty_result); a deterministic
+    // replay that ends on it, with the page tied to every input, is "Verified: no hit" (outcome no_match, 0 model calls).
+    // Anything else with no value stays "not verified" (fail-fast or the verifier below).
+    let noMatch = null;
+    if (value == null && replayInfo.mode === "trace" && skill.empty_result?.text) {
+      const fields = await page.evaluate(textFieldValuesInPage).catch(() => []);
+      const nm = noMatchCheck({ signal: skill.empty_result.text, params, pageText: texts.page || (await pageText()), url: page.url(), fields, request: lastNav });
+      if (nm.ok) {
+        const how = Object.entries(nm.by).map(([k, h]) => `${k} "${String(params[k]).slice(0, 60)}" ${h === "field" ? "is echoed in the search field" : h === "query" ? "was sent in the search request that loaded this page" : h === "url" ? "is in the page URL" : "is shown on the page"}`).join("; ");
+        noMatch = { signal: String(skill.empty_result.text).slice(0, 200), by: nm.by, evidence: `No hit: the site says "${skill.empty_result.text}" and ${how}.`.slice(0, 400) };
+        failFast = null; recipe = null;
+        send({ type: "status", message: `Verified: no hit. ${noMatch.evidence}` });
+      } else send({ type: "status", message: `No verified no-hit: ${nm.reason}` });
+    }
     // the final screenshot shows the extracted value (scrolled into view) for the record and any verifier call
     if (value != null) await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: true }).catch(() => {});
     const finalJpg = await shoot("final");
     // a zero-model replay has no turns to animate: its evidence is the final screenshot (no GIF to encode)
     if (replayInfo.mode !== "trace") gifFrames.push(await page.screenshot({ type: "png" }));
     let det = null;
-    if (failFast) {
+    if (noMatch) replayInfo.verifier = "deterministic";
+    else if (failFast) {
       replayInfo.fail_fast = failFast.slice(0, 300);
       send({ type: "status", message: `Not verified: ${failFast}. No model recovery: the input is not on the site` });
     } else if (replayInfo.mode === "trace") {
@@ -401,7 +419,7 @@ async function replay(m, send, ask, isAborted) {
       else send({ type: "status", message: `Deterministic check inconclusive (${det.reason}); asking the verifier` });
     }
     const detVerdict = (o) => ({ model: "deterministic", usage: null, response: { output: [{ type: "message", content: [{ text: JSON.stringify(o) }] }] } });
-    const v = failFast ? detVerdict({ success: false, evidence: `Not verified: ${failFast}. Final URL ${page.url().slice(0, 200)}.` })
+    const v = noMatch ? detVerdict({ success: true, evidence: `${noMatch.evidence} Final URL ${page.url().slice(0, 200)}.` }) : failFast ? detVerdict({ success: false, evidence: `Not verified: ${failFast}. Final URL ${page.url().slice(0, 200)}.` })
       : det?.ok ? detVerdict({ success: true, evidence: `Deterministic checks of the recorded trace passed: ${det.checks.join("; ")}. Final URL ${page.url().slice(0, 200)}.` }) : await api("/internal/muse/responses", {
       reasoning: { effort: "minimal" }, max_output_tokens: 600,
       text: { format: { type: "json_schema", name: "verdict", strict: true, schema: VERIFY_SCHEMA } },
@@ -410,9 +428,9 @@ async function replay(m, send, ask, isAborted) {
     if (v.usage) addUsage(v.usage);
     let verdict = { success: false, evidence: "verifier returned no verdict" };
     try { verdict = JSON.parse((v.response.output ?? []).filter((o) => o.type === "message").flatMap((o) => o.content ?? []).map((c) => c.text ?? "").join("")); } catch {}
-    const verdictFull = { success: Boolean(verdict.success), evidence: String(verdict.evidence ?? "").slice(0, 1500), model: v.model, capability: failFast ? "deterministic: the input is not on the site (no model call)" : det?.ok ? "deterministic: trace post-conditions and final-page checks (no model call)" : "image understanding + structured output" };
+    const verdictFull = { success: Boolean(verdict.success), evidence: String(verdict.evidence ?? "").slice(0, 1500), model: v.model, capability: noMatch ? "deterministic: the site's declared no-results wording, tied to the inputs (no model call)" : failFast ? "deterministic: the input is not on the site (no model call)" : det?.ok ? "deterministic: trace post-conditions and final-page checks (no model call)" : "image understanding + structured output" };
     // No recipe yet (a model run, or an old trace): find the answer the model or verifier quoted on the page and keep how to read it.
-    if (verdictFull.success && value == null) {
+    if (verdictFull.success && value == null && !noMatch) {
       // the verifier's own value first (a version or number inside it before the whole text), then what the answers quote
       const vv = String(verdict.value ?? "").trim().slice(0, 200);
       const isInput = Object.values(params).some((x) => String(x).trim().toLowerCase() === vv.toLowerCase());
@@ -437,23 +455,24 @@ async function replay(m, send, ask, isAborted) {
     const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "record" ? `results row "${rowLabel}"` : recipe.kind === "row" ? `infobox/table row "${rowLabel}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier", model_text: finalMessage ? finalMessage.slice(0, 400) : null, binding: { ok: binding.ok, checked: binding.checked, by: binding.by, reason: binding.reason.slice(0, 300), ...(unboundNote ? { rejected: unboundNote.slice(0, 300) } : {}) } };
     // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
     const steps = cleanSteps(recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })));
-    const runTrace = verdictFull.success && (steps.length || recipe) ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: keepRowInputs(finalChecks(texts, params, page.url()), [...rowBound, ...Object.entries(binding.by ?? {}).filter(([, how]) => how === "row").map(([k]) => k)]), ...(recipe ? { extract: recipe } : noValue ? { no_value: true } : {}) } : null;
+    const runTrace = verdictFull.success && !noMatch && (steps.length || recipe) ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: keepRowInputs(finalChecks(texts, params, page.url()), [...rowBound, ...Object.entries(binding.by ?? {}).filter(([, how]) => how === "row").map(([k]) => k)]), ...(recipe ? { extract: recipe } : noValue ? { no_value: true } : {}) } : null;
     if (replayInfo.mode === "trace" && !failFast) send({ type: "status", message: `Final page read, value extracted and checked in ${Date.now() - tFinal} ms` });
     send({ type: "verdict", ...verdictFull, final_message: finalMessage, value });
     const gif = gifFrames.length ? makeGif(gifFrames) : null;
     const run = {
       ...target, ...(m.job_id ? { job_id: m.job_id } : {}), start_url: /\{\{\s*[a-z0-9_]+\s*\}\}/i.test(startTpl) ? startTpl : start_url, params, success: verdictFull.success, step_changes: stepChanges, human_ms: humanMs, verdict: verdictFull, turns: replayInfo.mode === "trace" ? 0 : Math.min(turn, MAX_TURNS), actions: actions.slice(0, 200), usage, model: replayInfo.mode === "trace" ? "none (recorded trace)" : v.model,
       ...(runTrace ? { trace: runTrace } : {}), ...(target.skill_cid ? { replay: replayInfo } : {}), answer,
+      ...(noMatch ? { outcome: "no_match", no_match: noMatch } : {}),
       final_jpeg_b64: finalJpg.toString("base64"), ...(gif ? { gif_b64: gif.toString("base64") } : {}),
       executor: { name: "agentboard-executor", chromium: `headless-shell ${browser.version()}`, viewport: `${W}x${H}` }, duration_ms: Date.now() - t0,
     };
-    if (verdictFull.success && target.skill_cid) send({ type: "status", message: "Verified. Checking whether the skill's steps still match the site…" });
+    if (verdictFull.success && target.skill_cid && !noMatch) send({ type: "status", message: "Verified. Checking whether the skill's steps still match the site…" });
     const published = await api("/internal/skills/runs", run);
     if (published.healed) send({ type: "healing", message: `Self-healed: published v${published.healed.version} with ${published.healed.changes.length} step change(s)`, healed: published.healed });
-    else if (verdictFull.success && target.skill_cid) send({ type: "healing", message: published.drift?.stale_steps?.length || published.drift?.reported?.length ? "Verified, but the site drifted and the skill could not be healed automatically" : "Verified: the skill's steps still match the site" });
+    else if (verdictFull.success && target.skill_cid && !noMatch) send({ type: "healing", message: published.drift?.stale_steps?.length || published.drift?.reported?.length ? "Verified, but the site drifted and the skill could not be healed automatically" : "Verified: the skill's steps still match the site" });
     verdictFull.success ? stats.succeeded++ : stats.failed++;
     stats.last = { at: new Date().toISOString(), success: verdictFull.success, turns: run.turns, usd: Math.round(usage.usd * 1e6) / 1e6 };
-    return { ...published, verdict: verdictFull, turns: run.turns, usage, duration_ms: run.duration_ms, replay: run.replay ?? null, answer, value };
+    return { ...published, verdict: verdictFull, turns: run.turns, usage, duration_ms: run.duration_ms, replay: run.replay ?? null, answer, value, outcome: noMatch ? "no_match" : verdictFull.success ? "value" : "not_verified", ...(noMatch ? { no_match: noMatch } : {}) };
   } catch (e) {
     stats.failed++;
     throw e;

@@ -625,3 +625,34 @@ const inputsNamedIn = (fields, params) => {
   return [...names].filter((n) => params?.[n] != null && String(params[n]).trim().length >= 2).map((n) => [n, String(params[n])]);
 };
 export const describeMissing = (missing) => missing.map((x) => `${x.param} "${x.value}"`).join(", ");
+
+/**
+ * Verified negative (skill.empty_result): the final page shows the skill's declared no-results wording AND the page is
+ * tied to every input, by (first that holds) the final URL, a text field still holding the input (a postback echoes the
+ * query), the search request that loaded the page (a POST form's body), or the page text. Returns { ok, by, reason }.
+ * Pure: the caller passes what it read off the page (innerText, URL, text-field values, the last main-frame request).
+ */
+const squash = (x) => String(x ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+export function noMatchCheck({ signal, params, pageText, url, fields, request }) {
+  const sig = squash(signal);
+  if (sig.length < 6) return { ok: false, by: {}, reason: "no empty-result signal declared" };
+  if (!squash(pageText).includes(sig)) return { ok: false, by: {}, reason: `the page does not say "${signal}"` };
+  let u = String(url ?? ""); try { u = decodeURIComponent(u.replace(/\+/g, " ")); } catch {}
+  const form = new URLSearchParams(String(request?.post ?? "")); const sent = [...form.values()].map(squash);
+  let reqUrl = String(request?.url ?? ""); try { reqUrl = decodeURIComponent(reqUrl.replace(/\+/g, " ")); } catch {}
+  const by = {}, missing = [];
+  for (const [k, v] of Object.entries(params ?? {})) {
+    const val = squash(v);
+    if (val.length < 2) continue;
+    if (squash(u).includes(val)) by[k] = "url";
+    else if ((fields ?? []).some((f) => squash(f) === val)) by[k] = "field";
+    else if (sent.includes(val) || squash(reqUrl).includes(val)) by[k] = "query";
+    else if (val.length >= 4 && squash(pageText).includes(val)) by[k] = "page";
+    else missing.push(k);
+  }
+  return missing.length ? { ok: false, by, reason: `the page says "${signal}" but is not tied to ${missing.join(", ")}` } : { ok: true, by, reason: "tied" };
+}
+/** Runs in the page: values of the visible text fields (a postback keeps the searched query in its box). */
+export function textFieldValuesInPage() {
+  return [...document.querySelectorAll('input:not([type]), input[type=text], input[type=search], textarea')].filter((e) => e.offsetParent !== null && e.value).map((e) => String(e.value).slice(0, 300)).slice(0, 40);
+}

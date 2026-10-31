@@ -4,7 +4,7 @@
  * submits, buys, sends or deletes, sets the job to pending_approval and waits. Only a human with the
  * operator token can approve, on the job page. Nothing here lets the requesting agent approve itself.
  */
-import { runValueBinding, runVerified, displayAnswer } from "@agentboard/core";
+import { runValueBinding, runVerified, runOutcome, noMatchTie, displayAnswer } from "@agentboard/core";
 import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
@@ -88,17 +88,20 @@ export async function getJob(ctx: AppContext, id: string, internal = false) {
   const runRow = runCid ? (await ctx.db.query<any>(`SELECT body_text, created_at FROM records WHERE cid = $1`, [runCid])).rows[0] : null;
   const runBody = runRow?.body_text ?? null;
   const binding = runBody ? runValueBinding(JSON.parse(runBody)) : null;
-  const verified = runBody ? JSON.parse(runBody).success === true && binding!.ok : null;
-  const unbound = Boolean(runBody && binding && !binding.ok && JSON.parse(runBody).success === true);
+  const parsedRun = runBody ? JSON.parse(runBody) : null;
+  const verified = parsedRun ? runVerified(parsedRun) : null;
+  const noHit = parsedRun ? runOutcome(parsedRun) === "no_match" : false;
+  const unbound = Boolean(parsedRun && !noHit && binding && !binding.ok && parsedRun.success === true);
   const message = unbound ? `Not verified: ${binding!.reason}` : r.message;
   // One answer to "did it work": success === verified (the run passed its checks AND its value is tied to the inputs).
   // When the executor's checks passed but the value is not tied to the inputs, the verdict shown says so
   // (success false, checks_passed true); the signed run record keeps what the executor reported.
   const view = (v: any) => (v && unbound ? { ...v, success: false, checks_passed: true, evidence: `Not verified: ${binding!.reason}. ${v.evidence ?? ""}`.trim() } : v);
   const result = j(r.result);
-  const outcome = status !== "completed" ? status : verified === false || (verified == null && view(result?.verdict ?? j(r.verdict))?.success === false) ? "not_verified" : "verified";
+  // "no_match" (Verified: no hit): the site said there are no results for exactly these inputs; distinct from not_verified
+  const outcome = status !== "completed" ? status : noHit ? "no_match" : verified === false || (verified == null && view(result?.verdict ?? j(r.verdict))?.success === false) ? "not_verified" : "verified";
   return {
-    id: r.id, skill_cid: r.skill_cid, status, outcome, ...(status === "completed" ? { success: outcome === "verified" } : {}), message, ...(runBody ? { verified, value_binding: binding } : {}), params: j(r.params), start_url: r.start_url, via: r.via, trigger: r.via, agent: r.via === "agent" || r.via === "benchmark" ? r.requested_by : null,
+    id: r.id, skill_cid: r.skill_cid, status, outcome, ...(status === "completed" ? { success: outcome === "verified" || outcome === "no_match" } : {}), ...(noHit ? { no_match: { label: "Verified: no hit", ...parsedRun.no_match, tie: noMatchTie(parsedRun).reason } } : {}), message, ...(runBody ? { verified, value_binding: binding } : {}), params: j(r.params), start_url: r.start_url, via: r.via, trigger: r.via, agent: r.via === "agent" || r.via === "benchmark" ? r.requested_by : null,
     turns: j(r.turns), approval, verdict: view(j(r.verdict)),
     result: result ? { ...result, ...(result.verdict ? { verdict: view(result.verdict) } : {}), ...(runBody && result.answer ? { answer: displayAnswer({ created_at: new Date(runRow.created_at).toISOString(), body: JSON.parse(runBody) }) } : {}) } : result,
     ...(internal ? { decision: j(r.decision) } : {}),
@@ -261,7 +264,7 @@ export async function agentRuns(ctx: AppContext, did: string, limit = 20) {
     ORDER BY j.created_at DESC LIMIT $2`, [did, Math.min(Math.max(limit, 1), 50)])).rows;
   return rows.map((r) => ({
     run_id: r.id, run_cid: r.run_cid ?? null, skill: r.slug ?? null, version: r.version ?? null, status: r.status,
-    verified: r.run_body ? runVerified(JSON.parse(r.run_body)) : null,
+    verified: r.run_body ? runVerified(JSON.parse(r.run_body)) : null, outcome: r.run_body ? runOutcome(JSON.parse(r.run_body)) : null,
     ...(r.run_body && JSON.parse(r.run_body).success === true && !runVerified(JSON.parse(r.run_body)) ? { not_verified_because: runValueBinding(JSON.parse(r.run_body)).reason } : {}),
     via: r.via, created_at: new Date(r.created_at).toISOString(),
     ...(r.status === "failed" && r.message ? { message: String(r.message).slice(0, 200) } : {}),

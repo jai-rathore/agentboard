@@ -6,7 +6,7 @@ import type { AppContext } from "../context.js";
 import { HttpError } from "../context.js";
 import { museSpend } from "./muse.js";
 import { APPROVAL_HUMAN_MS, artifactUrl } from "./skills.js";
-import { siteKindOf, displayAnswer, runVerified, runValueBinding } from "@agentboard/core";
+import { siteKindOf, displayAnswer, runVerified, runValueBinding, runOutcome, noMatchTie, isNoMatch } from "@agentboard/core";
 import { getJob } from "./skillJobs.js";
 
 const CLICKY = new Set(["click", "double_click", "select", "keypress", "type", "scroll", "drag"]);
@@ -162,7 +162,7 @@ export async function skillReuse(ctx: AppContext, o: { skill?: string; agent?: s
       via: rq.via, trigger: rq.via, agent: rq.agent, job: rq.job,
       kind: k.kind, site_kind: k.site_kind, new_inputs: k.new_inputs, self_healed: k.self_healed,
       run_page: `${ctx.cfg.skillsWebUrl}/skills/runs/${row.cid}`,
-      outcome: row.success ? "verified" : "not_verified", healed: Boolean(b.drift?.healed),
+      outcome: row.success ? (isNoMatch(b) ? "no_match" : "verified") : "not_verified", healed: Boolean(b.drift?.healed),
       human_clicks: 0, approvals: (b.actions ?? []).filter((a: any) => a.approval === "human").length,
       run_ms: b.time?.run_ms ?? b.duration_ms ?? null, recording_ms: b.time?.recording_ms ?? null,
       evidence: b.verdict?.evidence ?? null,
@@ -180,7 +180,7 @@ export async function skillReuse(ctx: AppContext, o: { skill?: string; agent?: s
   if (o.skill && !filtered.length && !(await ctx.db.query(`SELECT 1 FROM skills WHERE slug = $1 OR cid = $1`, [o.skill])).rows[0]) throw new HttpError(404, "skill_not_found", "no such skill");
   return {
     runs: filtered.map((r) => ({ ...r, agent: r.agent ? { did: r.agent, name: names.get(r.agent)?.name ?? null, status: names.get(r.agent)?.status ?? null } : null })),
-    summary: { runs: filtered.length, agents: dids.length, verified: filtered.filter((r) => r.outcome === "verified").length, hidden_runs: hiddenRuns, include_hidden: showHidden,
+    summary: { runs: filtered.length, agents: dids.length, verified: filtered.filter((r) => r.outcome === "verified").length, verified_no_hit: filtered.filter((r) => r.outcome === "no_match").length, hidden_runs: hiddenRuns, include_hidden: showHidden,
       replays: filtered.filter((r) => r.kind === "replay").length, publishing_runs: filtered.filter((r) => r.kind === "publish").length,
       replays_real_site: filtered.filter((r) => r.kind === "replay" && r.site_kind === "real").length, replays_mock_site: filtered.filter((r) => r.kind === "replay" && r.site_kind === "mock").length,
       replays_new_inputs: filtered.filter((r) => r.kind === "replay" && r.new_inputs).length },
@@ -225,7 +225,7 @@ export async function runDetail(ctx: AppContext, id: string) {
     self_healed: k.self_healed, healed_to: healedTo ? { cid: healedTo.cid, version: healedTo.version } : null,
     // success === verified (checks passed AND the value is tied to the inputs); signed_success is what the record says
     verdict: runVerified(b) || !b.success ? b.verdict : { ...b.verdict, success: false, checks_passed: true, evidence: `Not verified: ${runValueBinding(b).reason}. ${b.verdict?.evidence ?? ""}`.trim() },
-    success: runVerified(b), outcome: runVerified(b) ? "verified" : "not_verified", ...(b.success !== runVerified(b) ? { signed_success: b.success } : {}),
+    success: runVerified(b), outcome: runOutcome(b), ...(runOutcome(b) === "no_match" ? { no_match: { label: "Verified: no hit", ...b.no_match, tie: noMatchTie(b).reason } } : {}), ...(b.success !== runVerified(b) ? { signed_success: b.success } : {}),
     models: { loop: b.loop?.model ?? null, loop_capability: b.loop?.capability ?? null, verifier: b.verdict?.model ?? null, verifier_capability: b.verdict?.capability ?? null },
     evidence: { final_screenshot: b.evidence?.final_screenshot ? artifactUrl(ctx, b.evidence.final_screenshot) : null, gif: b.evidence?.gif ? artifactUrl(ctx, b.evidence.gif) : null, sha256: b.evidence },
     usage: b.usage, turns: b.turns, actions: b.actions, time: b.time,

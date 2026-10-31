@@ -4,7 +4,7 @@ import type { AppContext } from "./context.js";
 import { HttpError } from "./context.js";
 import { museResponses, museSpend, type MuseKind } from "./services/muse.js";
 import { DEFAULT_MATCHES, NO_MATCH_MESSAGE, CONTRIBUTE_HINT, hostWords } from "./services/skillMatch.js";
-import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
+import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, declareEmptyResult, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
 import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, createAgentFundedJob, refundAgentRun } from "./services/skillJobs.js";
 import { verifyRequestAuth } from "./requestAuth.js";
 import { hideAgent, hideTopic, grantCredits, listCreditGrants } from "./services/ingest.js";
@@ -153,6 +153,12 @@ export function mountSkills(app: Hono, ctx: AppContext) {
       parent_slug: typeof b.parent_slug === "string" ? b.parent_slug : undefined,
     });
     return c.json(draft, 201);
+  });
+  // operator: declare a skill's empty-result signal (next version, same steps and trace; see declareEmptyResult)
+  app.post("/v1/skills/:slug/empty-result", async (c) => {
+    operator(c.req.header("x-skills-token"));
+    const b = await c.req.json().catch(() => null);
+    return c.json(await declareEmptyResult(ctx, c.req.param("slug"), typeof b?.text === "string" ? b.text : ""), 201);
   });
   app.get("/v1/skills/drafts/:id", async (c) => c.json(await getDraft(ctx, c.req.param("id"))));
   // check_workflow: the no-cost first call for a multi-step website task. Read-only: never runs anything, no model

@@ -4,7 +4,7 @@
  * record. Where there is no data it says "unknown" or "none yet"; nothing is estimated. No model calls.
  */
 import type { AppContext } from "../context.js";
-import { effectiveRiskFlags, gatedSteps, runVerified, displayAnswer, isDidKey } from "@agentboard/core";
+import { effectiveRiskFlags, gatedSteps, runVerified, isNoMatch, displayAnswer, isDidKey } from "@agentboard/core";
 import { runRows, requester, classifyRun, siteKind, SITE_LABEL } from "./skillMetrics.js";
 
 const DAY = 86_400_000;
@@ -39,10 +39,13 @@ export async function trustCards(ctx: AppContext, skills: { slug: string; name: 
     const flags = effectiveRiskFlags(sk);
     const gated = gatedSteps(sk);
     const readOnly = flags.every((f: string) => f === "none");
-    const ok = runs.filter((p) => p.verified), bad = runs.filter((p) => !p.verified);
+    // verified = a value tied to the inputs; no hit = the site said "no results" for exactly these inputs (also verified)
+    const noHit = runs.filter((p) => p.verified && isNoMatch(p.body));
+    const ok = runs.filter((p) => p.verified && !isNoMatch(p.body)), bad = runs.filter((p) => !p.verified);
     const within = (p: (typeof runs)[number], days: number) => now - new Date(p.row.created_at).getTime() <= days * DAY;
-    const window = (days: number) => ({ verified: ok.filter((p) => within(p, days)).length, failed: bad.filter((p) => within(p, days)).length });
+    const window = (days: number) => ({ verified: ok.filter((p) => within(p, days)).length, verified_no_hit: noHit.filter((p) => within(p, days)).length, failed: bad.filter((p) => within(p, days)).length });
     const withValue = ok.find((p) => p.body.answer?.value != null) ?? ok[0];
+    const lastNoHit = noHit[0];
     const lastFail = bad[0];
     const key = (p: (typeof runs)[number]) => JSON.stringify(Object.entries(p.body.params ?? {}).map(([k, v]) => [k, String(v).trim().toLowerCase()]).sort());
     // identities: the operator's own runs, its own agents (house / vouched: run by the same person), the operator's
@@ -79,8 +82,12 @@ export async function trustCards(ctx: AppContext, skills: { slug: string; name: 
       ],
       last_verified_run: ok[0] ? { at: new Date(ok[0].row.created_at).toISOString(), run: ok[0].row.cid } : "none yet",
       runs_7d: window(7), runs_30d: window(30),
+      no_hit: sk.empty_result?.text
+        ? { label: "Verified: no hit", signal: sk.empty_result.text, meaning: `the site said "${sk.empty_result.text}" for exactly the given input (tied by the page URL, the echoed search field, the search request or the page text). This is a verified negative, not a failure.`,
+            latest: lastNoHit ? { at: new Date(lastNoHit.row.created_at).toISOString(), input: lastNoHit.body.params ?? {}, site_says: lastNoHit.body.no_match?.signal ?? sk.empty_result.text, tied_by: lastNoHit.body.no_match?.by ?? {}, run: lastNoHit.row.cid } : "none yet" }
+        : "not declared: a run with no value is reported as not verified",
       latest_failure: lastFail ? { at: new Date(lastFail.row.created_at).toISOString(), input: lastFail.body.params ?? {}, reason: shortReason(String(lastFail.body.verdict?.evidence ?? lastFail.body.replay?.fail_fast ?? "unknown")), run: lastFail.row.cid } : "none yet",
-      distinct_inputs_tested: { total: new Set(runs.map(key)).size, verified: new Set(ok.map(key)).size },
+      distinct_inputs_tested: { total: new Set(runs.map(key)).size, verified: new Set(ok.map(key)).size, verified_no_hit: new Set(noHit.map(key)).size },
       identities: {
         operator_house: { runs: ids.house, label: "the Agentboard operator (web replay panel, operator token, publishing runs)" },
         own_agents: [...ids.own.values()],
@@ -98,7 +105,7 @@ export async function trustCards(ctx: AppContext, skills: { slug: string; name: 
       visibility: VISIBILITY,
       actions: readOnly ? "read-only (navigates, types into search boxes, reads the page)" : `may change data: ${flags.filter((f: string) => f !== "none").join(", ")}`,
       approvals: gated.length ? gated.map((g: any) => `step ${g.index + 1} (${sk.steps?.[g.index]?.intent ?? ""}) pauses until a human approves it`) : "none",
-      on_failure: "Replays the recorded steps with no model calls. If the input is not on the site, the run stops at once (no model call) and is recorded as failed with the reason. If a recorded step no longer fits the page, the executor falls back to the model loop from that step; if that fails too the run is recorded as failed. A value not tied to the inputs is never returned as verified. Failed runs are public like the rest.",
+      on_failure: "Replays the recorded steps with no model calls. If the skill declares the site's no-results wording and the site shows it for exactly this input, the run is signed as Verified: no hit (outcome no_match). Otherwise, if the input is not on the site, the run stops at once (no model call) and is recorded as failed with the reason. If a recorded step no longer fits the page, the executor falls back to the model loop from that step; if that fails too the run is recorded as failed. A value not tied to the inputs is never returned as verified. Failed runs are public like the rest.",
     });
   }
   return out;

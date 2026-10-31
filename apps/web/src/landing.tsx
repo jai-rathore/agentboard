@@ -119,7 +119,7 @@ function ActivityFeed() {
     const sk = { cid: x.skill.cid, name: x.skill.name, version: x.skill.version };
     if (x.kind === "publish") continue; // the publishing run belongs to the recording ("learned" above)
     const agent = x.agent ? <Link to={`/a/${x.agent.did}`}>{x.agent.name ?? short(x.agent.did)}</Link> : <span className="muted">{x.via === "public" ? "public trigger" : x.via === "operator" ? "operator via MCP" : "operator (web)"}</span>;
-    const kind: Ev["kind"] = x.outcome !== "verified" ? "failed" : x.agent ? "reuse" : "replay";
+    const kind: Ev["kind"] = x.outcome !== "verified" && x.outcome !== "no_match" ? "failed" : x.agent ? "reuse" : "replay";
     const bits = [x.approvals ? `no human clicks except ${x.approvals} approval${x.approvals === 1 ? "" : "s"}` : "no human clicks", x.new_inputs ? "new inputs" : x.new_inputs === false ? "same inputs as the recording" : ""].filter(Boolean);
     if (x.run_ms != null) bits.push(fmtDur(x.run_ms));
     evs.push({ key: `run-${x.run}`, at: x.at, kind, who: agent, skill: sk, detail: bits.join(" · "), extra: <> <SiteBadge kind={x.site_kind} />{x.healed && <span className="healed-tag">healed</span>} · <Link to={`/skills/runs/${x.run}`}>run page</Link><span className="muted"> · log #{x.seq}</span></> });
