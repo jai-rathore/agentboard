@@ -92,3 +92,19 @@ describe("search buttons on a posting form", () => {
     expect(approvalFor({ type: "keypress", keys: ["Enter"] }, { ...btn("Search"), tag: "input", type: "text", value: "x" }).approval).toBe("human");
   });
 });
+
+describe("search submit located by a neighbor", () => {
+  it("a Search button described as 'between ... and Clear button' is a search submit; a Clear button is not", () => {
+    const fl = { risk_flags: ["none"], steps: [
+      { action: "type", intent: "Enter the license number to search for", target: "License Number text input field", value: "{{license_number}}" },
+      { action: "click", intent: "Submit the license search", target: "Search button at bottom of form between Licenses Per Page dropdown and Clear button", value: "" },
+    ] };
+    expect(gatedSteps(fl)).toEqual([]);
+    expect(gatedSteps(fl)).toEqual(core.gatedSteps(fl));
+    expect(core.publicReplaySafety(fl).ok).toBe(true);
+    const clear = { risk_flags: ["none"], steps: [{ action: "click", intent: "Clear the search form", target: "Clear button next to the Search button", value: "" }] };
+    expect(core.gatedSteps(clear).length).toBe(1);
+    expect(gatedSteps(clear)).toEqual(core.gatedSteps(clear));
+    expect(core.publicReplaySafety(clear).ok).toBe(false);
+  });
+});

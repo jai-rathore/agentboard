@@ -10,9 +10,11 @@ export const FLAG_WORDS = {
 };
 const commits = (s) => s.action === "click" || s.action === "keypress";
 export const SEARCH_WORDS = /\b(search(es|ing)?|query|look ?up|find)\b/i;
+/** Same as core ownTarget: the target without the neighbors it is located by. */
+export const ownTarget = (t) => String(t ?? "").split(/\b(?:between|next to|beside|besides|below|above|beneath|near|left of|right of|after|before)\b/i)[0];
 export function isSearchSubmit(s) {
   if (!commits(s)) return false;
-  const text = `${s.intent} ${s.target}`;
+  const text = `${s.intent} ${ownTarget(s.target)}`;
   if (!SEARCH_WORDS.test(text)) return false;
   return GATED_FLAGS.every((f) => f === "submits_form" || !FLAG_WORDS[f].test(text));
 }

@@ -34,9 +34,12 @@ export const SEARCH_WORDS = /\b(search(es|ing)?|query|look ?up|find)\b/i;
  * say search/query. Real form submits ("Submit the ticket") and anything that buys, sends or deletes stay gated, and
  * the executor still checks the element itself at run time (a read-only GET/role=search form, or no form at all).
  */
+/** The target without the neighbors it is located by ("Search button between the per-page dropdown and the Clear button"): a
+ * gated word on a neighbor ("Clear") says nothing about the control being clicked. */
+export const ownTarget = (t: string | undefined): string => String(t ?? "").split(/\b(?:between|next to|beside|besides|below|above|beneath|near|left of|right of|after|before)\b/i)[0];
 export function isSearchSubmit(s: StepLike): boolean {
   if (!commits(s)) return false;
-  const text = `${s.intent} ${s.target}`;
+  const text = `${s.intent} ${ownTarget(s.target)}`;
   if (!SEARCH_WORDS.test(text)) return false;
   return GATED_FLAGS.every((f) => f === "submits_form" || !FLAG_WORDS[f].test(text));
 }
