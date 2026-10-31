@@ -13,7 +13,7 @@ export const REALITY: Record<string, { verdict: Verdict; why: string }> = {
   "florida-license-status": { verdict: "feature", why: "POST-only license search with no public API; the status is read from the results row whose license number is the input" },
   "nj-business-license-status": { verdict: "feature", why: "ASP.NET postback search with tightly stacked boxes that a model agent mis-clicks (cold: 16 calls, not verified); no lookup API (only bulk roster downloads); the status is read from the results row whose license number is the input" },
   "companies-house-last-accounts": { verdict: "keep", why: "the official API needs a registered key, but the company page is one GET by number, so a fetch-capable agent rarely needs a skill" },
-  "fmcsa-usdot-status": { verdict: "keep", why: "USDOT status from SAFER Company Snapshot (the QCMobile API needs a webkey), with a verified no-hit on 'Record Not Found'; but a direct GET URL exists, so a fetch-capable agent can often do it" },
+  "fmcsa-usdot-status": { verdict: "keep", why: "USDOT status from SAFER Company Snapshot (the QCMobile API needs a webkey), with a verified no-hit on 'Record Not Found' and INACTIVE from the 'Record Inactive' page (declared result signal); but a direct GET URL exists, so a fetch-capable agent can often do it" },
   "fmcsa-carrier-authority": { verdict: "retired", why: "renamed to fmcsa-usdot-status: it returned USDOT status, never operating authority" },
   "wikipedia-infobox-fact": { verdict: "easy", why: "the Wikipedia API or one page fetch answers it" },
   "x-rates-exchange-rate": { verdict: "easy", why: "free FX APIs answer it in one call" },

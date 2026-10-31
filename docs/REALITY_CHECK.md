@@ -1,6 +1,6 @@
 # Reality check: would an agent actually choose Agentboard?
 
-Written Oct 30, 2026 (PT), updated Oct 30, 2026, 11 PM PT. We update it whenever a skill is added. The bar is blunt: **would a capable agent that has
+Written Oct 30, 2026 (PT), updated Oct 30, 2026, 11:15 PM PT. We update it whenever a skill is added. The bar is blunt: **would a capable agent that has
 web search and fetch check Agentboard first for this task?** If it would not, we do not feature the skill, even when
 the skill works.
 
@@ -72,7 +72,7 @@ Oct 30, 2026, 10:15–10:30 PM PT, all with 0 model calls:
 | Florida, public `try_skill` | `CGC9999999` | **Verified: no hit**, 4.4 s end to end, no token |
 | FMCSA (`fmcsa-usdot-status`) | `53467`, `2800000` | "ACTIVE", 2.8 s and 2.7 s |
 | FMCSA | `99999999` | **Verified: no hit** ("Record Not Found"), 2.5 s |
-| FMCSA | `2800001` | **Not verified, 1 model call ($0.0035).** SAFER shows a third page, "Record Inactive … is INACTIVE". It is neither the snapshot nor the declared no-results wording, so it falls to the model verifier. Known gap. |
+| FMCSA | `2800001` | Before the fix: **not verified, 1 model call ($0.0035).** SAFER shows a third page, "Record Inactive … is INACTIVE". After the declared result signal (below): **"INACTIVE", verified, 0 calls, 4.1 s**. |
 | NJ | `28RS00427100`, `D05066900` | "Active", 2.9 s each (the first run was on `28RS00480600`, "Closed") |
 | NJ | `28RS99999999` | Not verified in 2.9 s: no results row. NJ shows an empty grid with no wording, so it gets no verified no-hit. |
 
@@ -106,6 +106,22 @@ Benchmark on a real non-listed name, `SIEMENS AG` on OFAC: the cold agent took 1
 empty". The reuse agent took 0 calls and 7.0 s and got **Verified: no hit**. For screening, that negative is the whole
 point, and a cold agent cannot produce it with confidence.
 
+**Declared result signals** generalize the same idea to known answers that have no results row. The FMCSA skill declares
+"is INACTIVE in the SAFER database" → `INACTIVE` (`POST /v1/skills/:slug/result-signal {text, value}`). A replay that ends on
+that wording, tied to every input the same way as a no-hit, returns the declared value with 0 model calls
+(`answer.method: "signal"`). The node rejects a signal answer that the skill version did not declare. It is never learned as
+the replay trace and never triggers healing.
+
+**OFAC benchmarks (Oct 30, 10:53 and 10:58 PM PT), the new headline:**
+
+| Input | Cold | Reuse |
+|---|---|---|
+| `BANCO CENTRAL DE VENEZUELA` (listed; 695b986e, pinned headline) | 7 calls · $0.0293 · 29.2 s, verified | 0 calls · $0 · 3.8 s, verified, same value "VENEZUELA-EO13850" |
+| `TOYOTA MOTOR CORPORATION` (not listed; 9989831b) | 16 calls · $0.0632 · 55.7 s, **not verified** | 0 calls · $0 · 3.7 s, **Verified: no hit** |
+| `SIEMENS AG` (not listed; a3f20c8c) | 16 calls · $0.0687 · 60.8 s, **not verified** | 0 calls · $0 · 3.8 s, Verified: no hit |
+
+On a listed name the cold agent gets there, slowly. On a name that isn't listed it keeps loosening filters and never verifies.
+
 Executor fixes these builds needed, all now generic:
 - **A click followed by typing moves to the nearest text field.** OFAC's Type dropdown sits 25 px above its Name box,
   and the first cold run looped 15 turns ($0.084) on it.
@@ -124,8 +140,9 @@ Executor fixes these builds needed, all now generic:
 - **A verified no-hit is only as strong as the site's search.** OFAC's no-hit is at the default score of 100, an exact
   name match. "Verified: no hit" for `TOYOTA MOTOR CORP` does not mean no fuzzy match at score 85. The trust card says
   what was searched, not what a compliance officer would call cleared.
-- **Third pages fall to the model.** FMCSA's "Record Inactive" page is neither the snapshot nor "Record Not Found".
-  Today it costs 1 model call and ends "not verified", where it should return "INACTIVE".
+- **Pages outside the declared shapes still fall to the model.** FMCSA "Record Inactive" is now covered by a declared result
+  signal, but each such page has to be found and declared by an operator. An unanticipated page still costs a verifier call
+  and ends "not verified".
 - **New sites still take a human iteration.** NJ took three drafts and $0.21 of Muse before the first verified run. The
   model typed into the wrong box of a stacked form, and the Business Name box's key handler navigates away (Tab or Enter
   there opens nj.gov/privacy). The hint had to say "click the License Number box directly".
@@ -145,8 +162,7 @@ Executor fixes these builds needed, all now generic:
 postback/POST forms with no keyless lookup API. Reuse answers in 3–7 s with 0 model calls, gives an input-tied value
 **or a verified no-hit**, and signs the record. On NJ and on a non-listed OFAC name, a cold agent burned 16 calls and
 60–70 s and still could not verify. **As a general tool: not yet.** There are three featured sites. Each new site costs a
-human recording plus $0.05–0.20 of Muse iteration. Outcomes outside the declared shapes, like FMCSA "Record Inactive",
-still fall to the model. For everything else in the catalog, a capable agent would call the public API directly.
+human recording plus $0.05–0.20 of Muse iteration. Pages nobody declared yet still fall to the model. For everything else in the catalog, a capable agent would call the public API directly.
 
 ## Candidates reviewed (Oct 30, 2026)
 
@@ -175,5 +191,7 @@ still fall to the model. For everything else in the catalog, a capable agent wou
 | robots.txt `Disallow: /` | Texas courts case search (search.txcourts.gov), Texas ESBD procurement (txsmartbuy.gov) |
 | Unreachable | CA eProcure (403), UK OFSI search (closed) |
 | Answer not input-tied | UK sanctions list search: it ORs the words, giving 142 results for "TOYOTA MOTOR CORPORATION" |
+| Captcha (Oct 30, late) | Maryland Board of Pharmacy facility search (mdbop.mylicense.com, reCAPTCHA) |
+| Privacy | Rhode Island health professional lookup (individuals only) |
 | Not this round | NC general contractors board (NCLBGC): no captcha and an explicit no-results line. But an active license's status is only on a detail page, and the results list sole proprietors by name. It is also one anonymous POST. Ohio eLicense (Salesforce) was not evaluated. |
 | Privacy | DVLA vehicle enquiry (vehicle registrations would land in a public log) |
