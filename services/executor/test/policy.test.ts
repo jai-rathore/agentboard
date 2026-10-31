@@ -81,3 +81,14 @@ describe("executor helpers", () => {
     expect(taskText({ name: "N", summary: "S", steps: [{ intent: "i", action: "type", target: "t", value: "{{e}}" }], success_check: "see {{e}}" }, { e: "x@y.z" })).toMatch(/see x@y.z/);
   });
 });
+
+describe("search buttons on a posting form", () => {
+  it("auto-approves a click on a button labeled exactly Search, still gates Submit or Search and pay", () => {
+    const btn = (value: string) => ({ tag: "input", type: "submit", role: "", text: "", value, label: "", aria: "", placeholder: "", inForm: true, lookupForm: false });
+    expect(approvalFor({ type: "click", x: 1, y: 1 }, btn("Search")).approval).toBe("auto");
+    expect(approvalFor({ type: "click", x: 1, y: 1 }, btn("Look up")).approval).toBe("auto");
+    expect(approvalFor({ type: "click", x: 1, y: 1 }, btn("Submit")).approval).toBe("human");
+    expect(approvalFor({ type: "click", x: 1, y: 1 }, btn("Search and pay")).approval).toBe("human");
+    expect(approvalFor({ type: "keypress", keys: ["Enter"] }, { ...btn("Search"), tag: "input", type: "text", value: "x" }).approval).toBe("human");
+  });
+});

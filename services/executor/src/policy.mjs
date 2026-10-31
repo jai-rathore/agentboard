@@ -48,6 +48,7 @@ export function effectiveRiskFlags(skill) {
 
 /** Words on a control that make activating it a commit (submit, buy, send, delete, ...). */
 const COMMIT_WORDS = /\b(submit|create|send|post|buy|order|pay|checkout|purchase|place|confirm|delete|remove|destroy|publish|save|transfer|book|reserve|reply|share|subscribe|cancel|erase|archive|apply|register|update|file)\b/i;
+const SEARCH_LABEL = /^(search|search now|find|look ?up|lookup|query)$/i;
 const flagsFor = (label, effective) => {
   const hit = GATED_FLAGS.filter((f) => FLAG_WORDS[f].test(label));
   return hit.length ? hit : effective.filter((f) => GATED_FLAGS.includes(f));
@@ -78,6 +79,11 @@ export function approvalFor(action, el, skill = { steps: [], risk_flags: [] }, c
   // text field and no email/password) only navigates to results, so Enter or its search button is fine.
   if (el.lookupForm && (!control || !COMMIT_WORDS.test(`${el.text ?? ""} ${el.aria ?? ""} ${control && el.tag === "input" ? el.value ?? "" : ""}`))) {
     return { approval: "auto", reason: `${isClick ? "click" : isEnter ? "Enter" : "Space"} in a read-only search/lookup form (GET) does not commit anything`, flags: [] };
+  }
+  // A button whose whole label is a search verb ("Search", "Find", "Look up") only queries, even when the page's one big
+  // form posts (ASP.NET WebForms: OFAC's sanctions search, Florida's license search). Anything with a commit word still waits.
+  if (isClick && control && SEARCH_LABEL.test(label) && !COMMIT_WORDS.test(label)) {
+    return { approval: "auto", reason: `click on ${el.tag} "${label.slice(0, 40)}" is a search button: it only queries`, flags: [] };
   }
   const committing = control ? COMMIT_WORDS.test(label) || /^submit$/i.test(el.type ?? "") : isEnter && el.inForm;
   const what = `${isClick ? "click" : isEnter ? "Enter" : "Space"} on ${el.tag}${label ? ` "${label.slice(0, 40)}"` : ""}`;
