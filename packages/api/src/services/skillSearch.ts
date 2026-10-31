@@ -2,7 +2,7 @@
  * Hybrid retrieval for find_skill, the same shape as knowledge search (search.ts):
  *   - Postgres FTS over name (A), slug (A), summary (B) and the steps/params text (C), OR-of-prefixes, ts_rank_cd
  *   - pg_trgm word similarity on name and on summary
- *   - bge-small embeddings over name, summary, params and steps (pgvector cosine)
+ *   - lexical feature-hashing vectors over name, summary, params and steps (pgvector cosine; no embedding model)
  * merged with reciprocal rank fusion. A vector-only hit must be reasonably close, so nonsense finds nothing.
  * The skill index (search_text, emb) is filled lazily for any version that lacks it, and on boot.
  */
@@ -73,7 +73,7 @@ export async function hybridSkillSearch(ctx: AppContext, q: string, candidateSql
     const cos = emb && qvec ? cosine(qvec, emb) : null;
     if (opts.filter === false) return [{ cid: f.id, rrf: f.score, ranks: f.ranks, cos }]; // the caller applies its own gate (skillMatch.ts)
     const onlyVector = Object.keys(f.ranks).length === 1 && f.ranks.vector !== undefined;
-    if (onlyVector && (cos ?? 0) < ctx.embedder.thresholds.vectorOnlyMin) return []; // semantic-only matches must be close
+    if (onlyVector && (cos ?? 0) < ctx.embedder.thresholds.vectorOnlyMin) return []; // vector-only matches must be close
     // a full-text hit on a small share of the query's words (one of four), with no close vector or trigram match, is
     // noise ("how many people live in a city" matching "city" in a shipping address): left out
     const weakText = f.ranks.fts !== undefined && (coverage.get(f.id) ?? 0) < 1 / 3 && f.ranks.trigram_name === undefined && f.ranks.trigram_summary === undefined;

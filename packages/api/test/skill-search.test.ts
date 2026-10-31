@@ -1,8 +1,9 @@
 /**
  * find_skill hybrid retrieval (services/skillSearch.ts) over a copy of the live skill catalog
- * (fixtures/skills-catalog.json: the latest version of each public skill on agentboard-api, Oct 29, 2026).
- * CI uses the offline hashing embedder, so these paraphrases must be found by FTS/trigram plus the lexical vector;
- * set SKILL_SEARCH_LOCAL_EMBED=1 to run the same queries against bge-small (downloads the model).
+ * (fixtures/skills-catalog.json: the latest version of each public skill on agentboard-api, Oct 29, 2026, plus the
+ * featured ofac-sanctions-search, florida-license-status and nj-business-license-status as of Oct 31).
+ * The node has no embedding model (production included): paraphrases must be found by FTS/trigram plus the lexical
+ * feature-hashing vector, and the confidence gate decides the rest.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { readFileSync } from "node:fs";
@@ -14,12 +15,11 @@ import { indexSkills, skillSearchText } from "../src/services/skillSearch.js";
 import { hostWords, inputsUnfilled, queryTerms } from "../src/services/skillMatch.js";
 
 const CATALOG: { slug: string; skill: any; source: { start_url: string } }[] = JSON.parse(readFileSync(new URL("./fixtures/skills-catalog.json", import.meta.url), "utf8"));
-const local = process.env.SKILL_SEARCH_LOCAL_EMBED === "1";
 
-describe(`find_skill hybrid search (${local ? "bge-small" : "hash embedder"})`, () => {
+describe("find_skill hybrid search (lexical: FTS, trigram, hashing vectors)", () => {
   let node: TestNode;
   beforeAll(async () => {
-    node = await makeNode(local ? { offline: false, embedProvider: "local" } : {});
+    node = await makeNode();
     const ctx = node.ctx;
     for (const s of CATALOG) {
       const rec = createRecord(ctx.node, "skill", { slug: s.slug, version: 1, prev: null, skill: s.skill, source: s.source }, new Date(ctx.now()));
@@ -33,6 +33,7 @@ describe(`find_skill hybrid search (${local ? "bge-small" : "hash embedder"})`, 
     };
     await run("x-rates-exchange-rate", { target_currency: "Japanese Yen" }, true, "rate shown");
     await run("wikipedia-infobox-fact", { search_query: "Seoul", target_field: "Population" }, true, "Population row shown");
+    await run("ofac-sanctions-search", { name: "BANCO CENTRAL DE VENEZUELA" }, true, "VENEZUELA-EO13850 row shown");
     await run("wikipedia-infobox-fact", { search_query: "Mount Fuji", target_field: "Elevation" }, false, 'Not verified: this page has no "Elevation" row. Final URL https://en.wikipedia.org/wiki/Mount_Fuji.');
   }, 120_000);
   const cids = new Map<string, string>();
@@ -55,8 +56,15 @@ describe(`find_skill hybrid search (${local ? "bge-small" : "hash embedder"})`, 
     ["ruby gem version", "rubygems-version"],
     ["version of a go module", "go-package-version"],
     ["file a new support ticket", "create-a-support-ticket"],
-    // paraphrases with no shared words need the semantic model (run with SKILL_SEARCH_LOCAL_EMBED=1)
-    ...(local ? [["golang module release", "go-package-version"], ["elevation of mount everest", "wikipedia-infobox-fact"], ["convert dollars to yen", "x-rates-exchange-rate"]] : []),
+    // featured skills, phrased the way the demo and the benchmark ask
+    ["Is BANCO CENTRAL DE VENEZUELA on the OFAC sanctions list?", "ofac-sanctions-search"], // the name is a verified run's input
+    ["screen a company name against the US Treasury OFAC sanctions list", "ofac-sanctions-search"],
+    ["check if a company is on the sanctions list", "ofac-sanctions-search"], // company -> entity (skillMatch SYNONYMS)
+    ["verify a New Jersey pharmacy license by license number", "nj-business-license-status"],
+    ["verify a nurse license in Florida", "florida-license-status"],
+    // task words folded without an embedding model
+    ["file a support ticket", "create-a-support-ticket"], // file -> create, ahead of the ticket status lookup
+    ["convert dollars to yen", "x-rates-exchange-rate"], // convert -> exchange
   ])("%s -> %s", async (q, slug) => {
     expect((await top(q))[0]).toBe(slug);
   });
@@ -85,7 +93,6 @@ describe(`find_skill hybrid search (${local ? "bge-small" : "hash embedder"})`, 
     ["create a support ticket", "create-a-support-ticket"],
     ["dollars to yen", "x-rates-exchange-rate"], // "yen" only in a verified run's inputs
     ["population of Seoul", "wikipedia-infobox-fact"], // every word in a verified run's inputs, low cosine
-    ...(local ? [["dollars to yen", "x-rates-exchange-rate"], ["convert USD to EUR", "x-rates-exchange-rate"], ["latest version of a python package", "pypi-package-version"]] : []),
   ])("true positive, at most 5 results when asked, each with a trust card: %s -> %s", async (q, slug) => {
     const r = await node.req("GET", `/v1/skills/find?q=${encodeURIComponent(q)}&limit=10`);
     expect(r.body.matches[0].slug).toBe(slug);

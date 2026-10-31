@@ -680,5 +680,131 @@
   "source": {
    "start_url": "https://agentboard-olive-pi.vercel.app/demo/helpdesk/"
   }
+ },
+ {
+  "slug": "nj-business-license-status",
+  "skill": {
+   "name": "Verify NJ business license by license number",
+   "steps": [
+    {
+     "value": "https://newjersey.mylicense.com/verification/Search.aspx?facility=Y",
+     "action": "navigate",
+     "intent": "Navigate to NJ business license verification search page",
+     "target": "Browser address bar / start URL"
+    },
+    {
+     "value": "{{license_number}}",
+     "action": "type",
+     "intent": "Enter license number to search for",
+     "target": "License Number text input field in Business Search form on right side"
+    },
+    {
+     "value": "",
+     "action": "click",
+     "intent": "Submit business license search",
+     "target": "Search button to the left of Clear and Back to Home Page buttons"
+    }
+   ],
+   "params": [
+    {
+     "name": "license_number",
+     "example": "28RS00427700",
+     "description": "Business license number to verify on NJ DCA"
+    }
+   ],
+   "summary": "Verify a New Jersey business license on the NJ Division of Consumer Affairs Business Search by entering its license number and running the search.",
+   "risk_flags": [
+    "none"
+   ],
+   "success_check": "Results grid is displayed showing a matching record with License Number {{license_number}} and associated license details such as Profession, License Type and License Status.",
+   "start_url_hint": "https://newjersey.mylicense.com/verification/Search.aspx?facility=Y"
+  },
+  "source": {
+   "video": "56d47975e14a52bdcde98a705b4a3fd250fb51033d249a68a105415ce99abe13",
+   "frames": [],
+   "start_url": "https://newjersey.mylicense.com/verification/Search.aspx?facility=Y"
+  }
+ },
+ {
+  "slug": "florida-license-status",
+  "skill": {
+   "name": "Verify Florida DBPR license by license number",
+   "summary": "Search the Florida DBPR licensee database (myfloridalicense.com) by license number and view the license status and expiration from the results table.",
+   "start_url_hint": "https://www.myfloridalicense.com/wl11.asp?mode=1&search=LicNbr&SID=&brd=&typ=",
+   "params": [
+    {
+     "name": "license_number",
+     "description": "Florida license number to verify",
+     "example": "CGC1520221"
+    }
+   ],
+   "steps": [
+    {
+     "intent": "Enter the license number to search for",
+     "target": "License Number text input field under License Information section of the Licensee Search Options form",
+     "action": "type",
+     "value": "{{license_number}}"
+    },
+    {
+     "intent": "Submit the license search",
+     "target": "Search button at bottom of form between Licenses Per Page dropdown and Clear button",
+     "action": "click",
+     "value": ""
+    }
+   ],
+   "success_check": "Licensee Search results page shows a results table with columns License Type, Name, License Number/Rank and Status/Expires containing an entry for {{license_number}} with its status and expiration visible.",
+   "risk_flags": [
+    "none"
+   ],
+   "empty_result": {
+    "text": "There were no records found matching the search criteria"
+   }
+  },
+  "source": {
+   "video": "8998a09e0f76605542b5bf27bdb54524409b0c5d12629a767902782e4b13f295",
+   "frames": [],
+   "start_url": "https://www.myfloridalicense.com/wl11.asp?mode=1&search=LicNbr&SID=&brd=&typ="
+  }
+ },
+ {
+  "slug": "ofac-sanctions-search",
+  "skill": {
+   "name": "Screen name against OFAC Sanctions List Search",
+   "summary": "Search the US Treasury OFAC Sanctions List (SDN and non-SDN) for a given person or entity name and view the matching entry's sanctions program.",
+   "start_url_hint": "https://sanctionssearch.ofac.treas.gov/",
+   "params": [
+    {
+     "name": "name",
+     "description": "Person or entity name to screen against the OFAC list",
+     "example": "AEROCARIBBEAN"
+    }
+   ],
+   "steps": [
+    {
+     "intent": "Enter the name to be screened",
+     "target": "Name text input field in the Lookup section on the left side of the form, labeled \"Name:\"",
+     "action": "type",
+     "value": "{{name}}"
+    },
+    {
+     "intent": "Execute the sanctions list search",
+     "target": "Search button to the right of the Program filter, next to the Reset button, below the Country/List dropdowns",
+     "action": "click",
+     "value": ""
+    }
+   ],
+   "success_check": "The \"Lookup Results:\" table is visible below the search form showing a matching entry for {{name}} with columns including Name, Type, Program(s), List, and Score - the Program(s) column displays the applicable sanctions program for that entry.",
+   "risk_flags": [
+    "none"
+   ],
+   "empty_result": {
+    "text": "Your search has not returned any results"
+   }
+  },
+  "source": {
+   "video": "cab4c6eebe4eafbda278cfe205be5d44bb125bca53055fc5a0911f68d6a016cb",
+   "frames": [],
+   "start_url": "https://sanctionssearch.ofac.treas.gov/"
+  }
  }
 ]

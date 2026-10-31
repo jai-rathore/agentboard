@@ -2,9 +2,9 @@
  * Hybrid search over posts:
  *   1. optional query understanding (Muse Spark, flat JSON) -> expansion terms
  *   2. parallel retrieval: Postgres FTS (OR-of-prefixes, ranked by ts_rank_cd, AND-matches first),
- *      pgvector cosine ANN, pg_trgm on titles, FTS over answers, trigram on topic names/aliases
+ *      pgvector cosine over lexical feature-hashing vectors (no embedding model), pg_trgm on titles, FTS over answers, trigram on topic names/aliases
  *   3. reciprocal rank fusion, then priors (quality, accepted answer, vote score, freshness)
- *   4. near-duplicate collapse (embedding cosine >= 0.95 folds into the better-ranked result)
+ *   4. near-duplicate collapse (hashing-vector cosine >= 0.95 folds into the better-ranked result)
  *   5. optional listwise LLM rerank of the top 20 (Muse Spark)
  * Every stage degrades gracefully without keys.
  */
@@ -71,7 +71,7 @@ export async function searchPosts(ctx: AppContext, o: SearchOptions): Promise<Se
     orq ? run(`SELECT DISTINCT ON (p.cid) p.cid FROM answers a JOIN posts p ON p.cid = a.post_cid ${where(`a.status = 'visible' AND a.tsv @@ to_tsquery('english', $${n + 1})`)} ORDER BY p.cid LIMIT 30`, [orq]) : Promise.resolve([]),
     run(`SELECT p.cid FROM posts p JOIN topics t ON p.topic_path = t.path ${where(`(t.title % $${n + 1} OR word_similarity($${n + 1}, t.title) > 0.5)`)} ORDER BY similarity(t.title, $${n + 1}) DESC, p.score DESC LIMIT 30`, [q]),
   ]);
-  // A hashing embedder is only a lexical fallback, so it gets less say in the fusion than a real semantic model.
+  // The hashing vector is lexical too (it overlaps FTS and trigram), so it gets less say in the fusion.
   lists.push({ name: "fts", ids: fts, weight: 1 }, { name: "vector", ids: vec, weight: ctx.embedder.model.startsWith("local-hash") ? 0.6 : 1 }, { name: "trigram", ids: trg, weight: 0.7 }, { name: "answers", ids: ans, weight: 0.5 }, { name: "topic", ids: top, weight: 0.4 });
   // The vector list always returns *something*; only count it when it is not the sole signal
   // or when the nearest hit is genuinely close, so nonsense queries return nothing.
@@ -90,7 +90,7 @@ export async function searchPosts(ctx: AppContext, o: SearchOptions): Promise<Se
     const emb = r.emb ? (JSON.parse(r.emb) as number[]) : null;
     const onlyVector = Object.keys(f.ranks).length === 1 && f.ranks.vector !== undefined;
     const vcos = emb ? cosine(qvec, emb) : 0;
-    if (onlyVector && vcos < ctx.embedder.thresholds.vectorOnlyMin) return []; // semantic-only matches must be reasonably close
+    if (onlyVector && vcos < ctx.embedder.thresholds.vectorOnlyMin) return []; // vector-only matches must be reasonably close
     const ageDays = (now - new Date(r.created_at).getTime()) / 86_400_000;
     const prior = 1 + 0.15 * (r.quality ?? 0.5) + (r.accepted_answer ? 0.2 : 0) + 0.1 * Math.tanh(Number(r.score) / 5) + 0.05 * Math.exp(-ageDays / 30);
     return [{ hit: {

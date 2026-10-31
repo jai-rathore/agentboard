@@ -1,8 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { makeNode, TestAgent, type TestNode } from "./helpers.js";
-import { buildContext } from "../src/bootstrap.js";
 import { loadConfig } from "../src/config.js";
-import { HashEmbedder, LocalEmbedder, createEmbedder, cosine, type Embedder } from "../src/services/embeddings.js";
+import { HashEmbedder, createEmbedder, type Embedder } from "../src/services/embeddings.js";
 import { pinEmbedModel, backfillEmbeddings, embedPin } from "../src/services/reembed.js";
 
 const nodes: TestNode[] = [];
@@ -39,28 +38,23 @@ describe("embedding storage", () => {
 });
 
 describe("embedder selection", () => {
-  it("defaults to the in-process bge-small model; Fireworks is opt-in; offline uses the hash embedder", () => {
-    const local = createEmbedder(loadConfig({}));
-    expect(local).toBeInstanceOf(LocalEmbedder);
-    expect(local.model).toBe("Xenova/bge-small-en-v1.5");
-    expect(local.dim).toBe(384);
-    // a Fireworks key alone does not switch providers
-    expect(createEmbedder(loadConfig({ FIREWORKS_API_KEY: "x" }))).toBeInstanceOf(LocalEmbedder);
-    expect(createEmbedder(loadConfig({ EMBED_PROVIDER: "fireworks", FIREWORKS_API_KEY: "x" })).model).toBe("fireworks/qwen3-embedding-8b");
-    expect(() => createEmbedder(loadConfig({ EMBED_PROVIDER: "fireworks" }))).toThrow(/FIREWORKS_API_KEY/);
-    expect(createEmbedder(loadConfig({ AGENTBOARD_OFFLINE: "1" }))).toBeInstanceOf(HashEmbedder);
+  it("is always the lexical hashing embedder: no embedding model, old EMBED_PROVIDER/EMBED_MODEL values are ignored", () => {
+    for (const env of [{}, { EMBED_PROVIDER: "local", EMBED_MODEL: "Xenova/bge-small-en-v1.5" }, { EMBED_PROVIDER: "fireworks", FIREWORKS_API_KEY: "x" }, { AGENTBOARD_OFFLINE: "1" }]) {
+      const e = createEmbedder(loadConfig(env));
+      expect(e).toBeInstanceOf(HashEmbedder);
+      expect(e.model).toBe("local-hash-384");
+      expect(e.dim).toBe(384);
+    }
   });
 });
 
-// Real model run: downloads ~34 MB from Hugging Face on first use, so it is opt-in.
-describe.runIf(process.env.AGENTBOARD_TEST_LOCAL_EMBED === "1")("local bge-small model (opt-in)", () => {
-  it("embeds semantically and plugs into a node end to end", async () => {
-    const e = new LocalEmbedder("Xenova/bge-small-en-v1.5", 384, process.env.EMBED_CACHE_DIR);
-    const [q, rel, irr] = [...(await e.embed(["how do I combine two ranked result lists?"], "query")), ...(await e.embed(["Reciprocal rank fusion merges rankings from several retrievers.", "Bananas are a good source of potassium."], "document"))];
-    expect(q).toHaveLength(384);
-    expect(cosine(q, rel)).toBeGreaterThan(cosine(q, irr) + 0.15);
-    const ctx = await buildContext(loadConfig({}, { embedProvider: "local", registerPowBits: 6, challengeDifficulty: 6, voteCreditMinAgeMs: 0 }), { embedder: e, awaitReembed: true });
-    expect((await ctx.db.query<any>(`SELECT value FROM meta WHERE key = 'embed_model'`)).rows[0].value).toBe("Xenova/bge-small-en-v1.5@384");
-    await ctx.db.close();
-  }, 120_000);
+describe("Meta models only", () => {
+  it("refuses non-Meta model names and -contributor variants", () => {
+    expect(loadConfig({}).metaModel).toBe("muse-spark-1.3");
+    expect(() => loadConfig({ META_MODEL: "gpt-5" })).toThrow(/Meta Muse model/);
+    expect(() => loadConfig({ META_MODEL: "muse-spark-1.3-contributor" })).toThrow(/contributor/);
+    expect(() => loadConfig({ GLIMMER_MODEL: "qwen3-30b" })).toThrow(/Muse Glimmer/);
+    expect(() => loadConfig({ OPEN_WEIGHT_MODEL: "deepseek-ai/DeepSeek-V4.1-Flash" })).toThrow(/Muse Spark Open/);
+    expect(loadConfig({ OPEN_WEIGHT_MODEL: "meta-models/muse-spark-open" }).openWeightModel).toBe("meta-models/muse-spark-open");
+  });
 });

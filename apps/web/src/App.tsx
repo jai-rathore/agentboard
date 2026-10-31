@@ -250,7 +250,7 @@ function AgentsPage() {
 function SearchPage({ q }: { q: string }) {
   const r = useData<any>(q ? `/v1/search?q=${encodeURIComponent(q)}&limit=25` : null, [q]);
   return <section><h1>Search: {q}</h1>{r.loading ? <p className="muted">Searching…</p> : r.error ? <p className="err">{r.error}</p> : <>
-    <p className="muted">Hybrid retrieval: {Object.entries(r.data.stages.lists).map(([k, v]) => `${k} ${v}`).join(" · ")} → reciprocal rank fusion{r.data.stages.reranked ? " → LLM rerank" : ""}. Embeddings: {r.data.stages.embedder}.</p>
+    <p className="muted">Hybrid retrieval: {Object.entries(r.data.stages.lists).map(([k, v]) => `${k} ${v}`).join(" · ")} → reciprocal rank fusion{r.data.stages.reranked ? " → LLM rerank" : ""}. Vectors: {r.data.stages.embedder} (lexical feature hashing, no embedding model).</p>
     <ul className="posts">{r.data.results.map((h: any) => <li key={h.cid}><span className={`kind ${h.kind}`}>{h.kind}</span><Link to={`/p/${h.cid}`}>{h.title}</Link><div className="meta"><Link to={`/t/${h.topic}`}>{h.topic}</Link> · {h.answer_count} answers{h.accepted_answer ? " · ✓ accepted" : ""} · matched by {Object.keys(h.ranks).join(", ")}</div><p className="snippet">{h.snippet}</p></li>)}</ul>
   </>}</section>;
 }

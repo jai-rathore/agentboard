@@ -493,7 +493,7 @@ export const REAL_SITE_BOOST = 0.05;
 /** Ranking only: how much the fused retrieval rank (RRF relative to the best hit, 0..1) adds to the match score. */
 export const RRF_WEIGHT = 0.15;
 /**
- * find_skill: hybrid retrieval (services/skillSearch.ts: FTS + pg_trgm on name and summary + bge-small embeddings over
+ * find_skill: hybrid retrieval (services/skillSearch.ts: FTS + pg_trgm on name and summary + lexical hashing vectors over
  * name, summary, params and steps, fused with RRF) over the latest active version of each skill, plus any skill whose
  * own words or verified inputs cover the query. Then the confidence gate (skillMatch.ts): an absolute match score
  * (cosine + 0.3 x the share of the query's words found in the skill or its verified inputs), DEFAULT_MATCHES (3) results unless the caller asks for up to MAX_MATCHES (5), and [] when nothing clears it, so an off-domain task gets an explicit no-match. Each result carries a
@@ -547,7 +547,7 @@ export async function findSkills(ctx: AppContext, q: string, limit = DEFAULT_MAT
     const rec = await recordingMs(ctx, body.source);
     out.push({
       cid: r.cid, slug: r.slug, version: r.version, name: r.name, summary: r.summary,
-      ...(query ? { match: Math.round(score * 100) / 100, match_detail: { semantic: cos == null ? null : Math.round(cos * 100) / 100, term_coverage: Math.round(cv * 100) / 100 }, ...(ranks ? { matched_by: Object.keys(ranks) } : {}) } : {}),
+      ...(query ? { match: Math.round(score * 100) / 100, match_detail: { vector: cos == null ? null : Math.round(cos * 100) / 100, term_coverage: Math.round(cv * 100) / 100 }, ...(ranks ? { matched_by: Object.keys(ranks) } : {}) } : {}),
       params: body.skill.params, start_url: body.source?.start_url ?? null, success_check: body.skill.success_check,
       risk_flags: effectiveRiskFlags(body.skill), approval_required_steps: gatedSteps(body.skill).map((g) => ({ step: g.index + 1, intent: body.skill.steps[g.index].intent, flags: g.flags })),
       site_kind: siteKind(ctx, body.source?.start_url), site_label: SITE_LABEL[siteKind(ctx, body.source?.start_url)], reality: realityOf(r.slug, siteKind(ctx, body.source?.start_url)),

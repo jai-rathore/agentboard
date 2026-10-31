@@ -34,6 +34,10 @@ const SYNONYMS: Record<string, string> = {
   library: "package", lib: "package",
   most: "top", upvot: "top", best: "top", highest: "top", popular: "top",
   cost: "price",
+  // there is no embedding model (embeddings.ts), so a few common task words are folded here
+  file: "create", submit: "create", raise: "create",
+  convert: "exchange", conversion: "exchange",
+  company: "entity", organization: "entity", organisation: "entity",
 };
 const norm = (toks: string[]) => toks.filter((t) => !FILLER.has(t)).map((t) => SYNONYMS[t] ?? t);
 

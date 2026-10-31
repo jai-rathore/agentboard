@@ -1,4 +1,3 @@
-import { resolve as resolvePath } from "node:path";
 /** Runtime configuration. Secrets come from environment variables only and are never logged. */
 /** Parses AGENT_RUN_VOUCHED_DIDS: comma-separated did:keys (anything else is ignored). */
 export const vouchedDidsFromEnv = (raw?: string) => [...new Set((raw ?? "").split(",").map((x) => x.trim()).filter((x) => /^did:key:z[1-9A-HJ-NP-Za-km-z]{40,60}$/.test(x)))];
@@ -14,14 +13,12 @@ export interface Config {
   metaProxySecret?: string;
   metaBaseUrl: string;
   metaModel: string;
-  fireworksApiKey?: string;
-  fireworksBaseUrl: string;
-  /** local (default, in-process ONNX) | fireworks (opt-in) | hash (tests/offline) */
-  embedProvider: "local" | "fireworks" | "hash";
-  embedModel: string;
+  /**
+   * Always "hash": lexical feature-hashing vectors, no embedding model (services/embeddings.ts). Old EMBED_PROVIDER /
+   * EMBED_MODEL values (local bge-small, fireworks) are ignored with a warning: those non-Meta models were removed.
+   */
+  embedProvider: "hash";
   embedDim: number;
-  embedCacheDir?: string;
-  fireworksEmbedModel: string;
   glimmerBaseUrl?: string;
   glimmerApiKey?: string;
   glimmerModel: string;
@@ -100,6 +97,8 @@ export interface Config {
   openWeightSpendCapUsd: number;
 }
 
+let warned = false;
+const warnOnce = (m: string) => { if (!warned) { warned = true; console.warn(m); } };
 const num = (v: string | undefined, d: number) => (v === undefined || v === "" ? d : Number(v));
 
 export function loadConfig(env: Record<string, string | undefined> = process.env, overrides: Partial<Config> = {}): Config {
@@ -113,13 +112,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     metaProxySecret: env.META_PROXY_SECRET?.trim() || undefined,
     metaBaseUrl: env.META_BASE_URL || "https://api.meta.ai/v1",
     metaModel: env.META_MODEL || "muse-spark-1.3",
-    fireworksApiKey: env.FIREWORKS_API_KEY || undefined,
-    fireworksBaseUrl: env.FIREWORKS_BASE_URL || "https://api.fireworks.ai/inference/v1",
-    embedProvider: (env.EMBED_PROVIDER || "local") as Config["embedProvider"],
-    embedModel: env.EMBED_MODEL || "Xenova/bge-small-en-v1.5",
+    embedProvider: "hash",
     embedDim: 384,
-    embedCacheDir: resolvePath(env.EMBED_CACHE_DIR || ".models"),
-    fireworksEmbedModel: env.FIREWORKS_EMBED_MODEL || "fireworks/qwen3-embedding-8b",
     glimmerBaseUrl: env.GLIMMER_BASE_URL || undefined,
     glimmerApiKey: env.GLIMMER_API_KEY || env.FIREWORKS_API_KEY || undefined,
     glimmerModel: env.GLIMMER_MODEL || "accounts/fireworks/models/muse-glimmer-30b",
@@ -173,7 +167,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   };
   // Contributor-program model variants are never used by this node.
   for (const m of [cfg.metaModel, cfg.glimmerModel, cfg.openWeightModel]) if (/contributor/i.test(m)) throw new Error(`refusing model "${m}": -contributor variants are not allowed`);
-  if (!["local", "fireworks", "hash"].includes(cfg.embedProvider)) throw new Error(`EMBED_PROVIDER must be local, fireworks or hash`);
+  // Meta models only (hackathon rule and project policy): Muse Spark on Meta's API, Muse Spark Open, Muse Glimmer.
+  if (!/^muse-/i.test(cfg.metaModel)) throw new Error(`META_MODEL must be a Meta Muse model, got "${cfg.metaModel}"`);
+  if (!/muse-glimmer/i.test(cfg.glimmerModel)) throw new Error(`GLIMMER_MODEL must be Meta's Muse Glimmer, got "${cfg.glimmerModel}"`);
+  if (!/muse-spark-open/i.test(cfg.openWeightModel)) throw new Error(`OPEN_WEIGHT_MODEL must be Meta's Muse Spark Open, got "${cfg.openWeightModel}"`);
+  if ((env.EMBED_PROVIDER && env.EMBED_PROVIDER !== "hash") || (env.EMBED_MODEL && !/^(none|)$/i.test(env.EMBED_MODEL))) warnOnce(`[agentboard] EMBED_PROVIDER/EMBED_MODEL are ignored: embedding models were removed, search uses lexical feature hashing (no model)`);
   if (!(cfg.llmMaxOutputTokens > 0)) throw new Error("LLM_MAX_OUTPUT_TOKENS must be positive");
   for (const [k, v] of [["SKILLS_OPERATOR_TOKEN", cfg.skillsOperatorToken], ["SKILLS_INTERNAL_SECRET", cfg.skillsInternalSecret]] as const) if (v && v.length < 24) throw new Error(`${k} must be at least 24 characters`);
   if (cfg.metaProxySecret) {
@@ -213,7 +211,7 @@ export function publicConfigSummary(c: Config) {
   return {
     database: c.databaseUrl ? "postgres" : "pglite",
     llm: { daily_call_cap: c.llmDailyCallCap, max_output_tokens: c.llmMaxOutputTokens, meta: Boolean(c.metaApiKey || c.metaProxySecret) && !c.offline && c.llmDailyCallCap > 0, meta_via: c.metaProxySecret ? new URL(c.metaBaseUrl).host : null, glimmer: Boolean(c.glimmerBaseUrl) && !c.offline && c.llmDailyCallCap > 0 },
-    embeddings: c.offline || c.embedProvider === "hash" ? `local-hash-${c.embedDim} (offline fallback)` : c.embedProvider === "fireworks" ? c.fireworksEmbedModel : `${c.embedModel} (in-process)`,
+    embeddings: `local-hash-${c.embedDim} (lexical feature hashing, no model)`,
     challenge: { ttl_ms: c.challengeTtlMs, difficulty_bits: c.challengeDifficulty },
     register_pow_bits: c.registerPowBits,
     checkpoint_every: c.checkpointEvery,
