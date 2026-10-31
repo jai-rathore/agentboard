@@ -9,7 +9,7 @@ API="${API_URL:-https://agentboard-api.onrender.com}"
 EXEC="${EXECUTOR_URL:-https://agentboard-executor.onrender.com}"
 WEB="${WEB_URL:-https://agentboard-olive-pi.vercel.app}"
 KW="${KEEPWARM_URL:-https://agentboard-keepwarm.jaiadityarathore.workers.dev/status.json}"
-HEADLINE="${HEADLINE_BENCHMARK:-44a3528b-dc3c-4f66-a831-e41418f66aae}"
+HEADLINE="${HEADLINE_BENCHMARK:-695b986e-e3db-4a45-8d3d-8315be57cece}"
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 mkdir -p "$LOG_DIR"
 now="$(date '+%Y-%m-%d %H:%M:%S %Z')"; fails=(); parts=()

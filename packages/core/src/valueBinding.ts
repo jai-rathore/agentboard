@@ -10,7 +10,7 @@
  * stands). The executor runs the same check before it calls a value verified (services/executor/src/trace.mjs,
  * kept identical by a test), and the node folds it over old records, so a mirror gets the same answer.
  */
-export interface BindingResult { ok: boolean; checked: boolean; by: Record<string, "url" | "title" | "row">; missing: string[]; reason: string }
+export interface BindingResult { ok: boolean; checked: boolean; by: Record<string, "url" | "title" | "row" | "field" | "query" | "page">; missing: string[]; reason: string }
 
 const norm = (s: unknown) => String(s ?? "").normalize("NFC").toLowerCase().replace(/[\s_+]+/g, " ").replace(/\s+/g, " ").trim();
 const words = (s: string) => norm(s).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 2);
@@ -44,6 +44,8 @@ export function valueBinding(input: { params?: Record<string, unknown>; value?: 
 /** valueBinding for a signed skill_run / benchmark_run body (what the node folds over the log). */
 export function runValueBinding(body: any): BindingResult {
   const a = body?.answer;
+  // a value from the skill's declared result signal (the site's own wording, e.g. "is INACTIVE"): tied like a no-hit
+  if (a?.method === "signal" && a?.value != null) return signalTie(body);
   const finalUrl = String(body?.verdict?.evidence ?? "").match(/Final URL (\S+?)\.?(?:\s|$)/)?.[1] ?? null;
   return valueBinding({ params: body?.params, value: a?.value ?? null, finalUrlTemplate: body?.trace?.final?.url ?? null, finalUrl, rowLabel: answerRowLabel(a?.source), titleParams: Array.isArray(body?.trace?.final?.title) ? body.trace.final.title : null });
 }
@@ -90,4 +92,20 @@ export function displayAnswer(rec: { created_at?: string; body?: any } | null | 
     return { ...a, source: `${m[1]}${m[2]}"`, source_signed: a.source, source_note: `Re-rendered: runs before ${ROW_LABEL_FIX_AT} appended the extraction recipe's sub-row hint ("› ${sub}") to the row label; the value was read under the "${m[2]}" row. The signed record keeps the original text.` };
   }
   return a;
+}
+
+/**
+ * A value read from a declared result signal (skill.result_signals: the site's own wording for a known answer with no
+ * results row, such as FMCSA "… is INACTIVE in the SAFER database" -> INACTIVE): tied to every input the same way as a
+ * verified no-hit (URL, echoed search field, the search request, or page text).
+ */
+export function signalTie(body: any): BindingResult {
+  const sig = body?.answer?.signal ?? {};
+  const by: Record<string, any> = typeof sig.by === "object" && sig.by ? sig.by : {};
+  if (!String(sig.text ?? "").trim()) return { ok: false, checked: true, by, missing: [], reason: "no declared result signal was matched" };
+  const params = Object.entries(body?.params ?? {}).filter(([, v]) => String(v ?? "").trim().length >= 2);
+  const missing = params.filter(([k]) => !(NO_MATCH_TIES as readonly string[]).includes(by[k])).map(([k]) => k);
+  return missing.length
+    ? { ok: false, checked: true, by, missing, reason: `the declared signal is not tied to ${missing.join(", ")}` }
+    : { ok: true, checked: true, by, missing, reason: `the site said "${String(sig.text).slice(0, 80)}" for exactly these inputs (${Object.entries(by).map(([k, how]) => `${k}: ${how}`).join(", ")})` };
 }

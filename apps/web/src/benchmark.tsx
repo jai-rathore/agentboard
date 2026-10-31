@@ -17,9 +17,23 @@ export function BenchmarkStat({ empty }: { empty?: ReactNode } = {}) {
     <div className="bench-big">
       <div><b>{n(runs.reuse.model_calls)} vs {n(runs.cold.model_calls)}</b><span>model calls: reusing agent vs cold agent</span></div>
       <div><b>{usd(runs.reuse.usd)} vs {usd(runs.cold.usd)}</b><span>Muse cost{c.usd_ratio ? ` (${c.usd_ratio}x cheaper)` : runs.reuse.model_calls === 0 ? " (no model calls when reusing)" : ""}</span></div>
+      {runs.reuse.executor_ms && runs.cold.executor_ms ? <div><b>{secs(runs.reuse.executor_ms)} vs {secs(runs.cold.executor_ms)}</b><span>browser time: reusing agent vs cold agent</span></div> : null}
     </div>
     <p className="small">{b.headline} <Link to={`/benchmark?id=${b.id}`}>Method and both signed runs →</Link></p>
+    <NoHitLine />
   </section>;
+}
+
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+/** The verified-negative benchmark (a real name OFAC does not list), read from its signed record. */
+export const NO_HIT_BENCHMARK = "9989831b-bf4b-4233-9e26-5185edce8972";
+function NoHitLine() {
+  const r = useData<any>(`/v1/benchmarks/${NO_HIT_BENCHMARK}`);
+  const b = r.data?.record?.body;
+  const A = b?.runs?.cold, B = b?.runs?.reuse;
+  if (!A || !B || B.outcome !== "no_match" || !B.success) return null;
+  const input = Object.values(b.input ?? {})[0];
+  return <p className="small"><b>And when the answer is “not listed”:</b> on {input ? <>“{String(input)}”, </> : null}a real name OFAC does not list, the cold agent took {n(A.model_calls)} model calls and {A.executor_ms ? secs(A.executor_ms) : "n/a"} and {A.success ? "verified" : <b>still could not verify</b>}; the reusing agent got <b>Verified: no hit</b> in {B.executor_ms ? secs(B.executor_ms) : "n/a"} with {n(B.model_calls)} model calls (the site's own “no results” wording, tied to the input). <Link to={`/benchmark?id=${NO_HIT_BENCHMARK}`}>Both signed runs →</Link></p>;
 }
 
 export function BenchmarkPage({ id }: { id?: string }) {
@@ -42,8 +56,8 @@ export function BenchmarkPage({ id }: { id?: string }) {
   const sameTask = all.filter((x) => x.record?.body?.task?.slug === b.task.slug);
   const coldFails = { total: sameTask.length, failed: sameTask.filter((x) => !x.record?.body?.runs?.cold?.success).length };
   const rows: [string, (x: any) => string][] = [
-    ["Verified (final check below)", (x) => (x.success ? "✓ yes" : "✗ no")],
-    ["Returned value", (x) => (x.value ?? "–") + (x === B && c.values_match != null ? (c.values_match ? "  ✓ same as cold" : "  ✗ differs from cold") : "")],
+    ["Verified (final check below)", (x) => (x.success ? (x.outcome === "no_match" ? "✓ Verified: no hit" : "✓ yes") : "✗ no")],
+    ["Returned value", (x) => (x.outcome === "no_match" ? "no hit (the site's declared no-results wording, tied to the input)" : x.value ?? "–") + (x === B && c.values_match != null ? (c.values_match ? "  ✓ same as cold" : "  ✗ differs from cold") : "")],
     ["Model calls", (x) => n(x.model_calls)],
     ["Input tokens", (x) => n(x.input_tokens)],
     ["Output tokens", (x) => n(x.output_tokens)],
@@ -88,7 +102,7 @@ export function BenchmarkPage({ id }: { id?: string }) {
       </div>
       <ol className="steps">{(cold.actions ?? []).map((a: any, i: number) => <li key={i}><span className="act">{a.type}</span> {a.detail}{a.target && <span className="muted"> on "{a.target}"</span>}</li>)}</ol>
     </> : <p className="muted">Cold run record not found.</p>}
-    {!d.headline_eligible && <div className="verdict-box badv"><p>{!d.verified ? "✗ Not verified" : !d.reuse_cheaper ? "✗ Reuse was not cheaper than cold" : d.values_match === false ? "✗ The two agents returned different values" : "✗ The values were not compared (an older benchmark)"}: this benchmark is shown for the record only; headlines use the latest benchmark where both runs verified, reuse cost less, and both returned the same value.</p></div>}
+    {!d.headline_eligible && <div className="verdict-box badv"><p>{!d.verified ? (!A.success && B.success ? `✗ The cold agent did not verify (the reusing agent did${B.outcome === "no_match" ? ": Verified: no hit" : ""})` : "✗ Not verified") : !d.reuse_cheaper ? "✗ Reuse was not cheaper than cold" : d.values_match === false ? "✗ The two agents returned different values" : "✗ The values were not compared (an older benchmark)"}: this benchmark is shown for the record only; headlines use the latest benchmark where both runs verified, reuse cost less, and both returned the same value.</p></div>}
     <History all={all} current={d.id} />
     <h2>Signed records</h2>
     <p className="small mono">benchmark {d.cid}<br />cold run {A.record}<br />replay {B.record}<br />signed by the node {d.record.author}</p>
@@ -127,7 +141,7 @@ function History({ all, current }: { all: any[]; current?: string }) {
   return <section aria-label="Benchmark history">
     <h2>All benchmarks</h2>
     <ul className="small">{all.map((x) => <li key={x.id}>
-      <span className={x.headline_eligible ? "good" : "badv"}>{!x.verified ? "✗ unverified" : !x.reuse_cheaper ? "✗ verified, reuse not cheaper" : x.values_match === true ? "✓ verified, reuse cheaper, same value" : x.values_match === false ? "✗ values differ" : "✗ values not compared"}</span>{" "}
+      <span className={x.headline_eligible ? "good" : "badv"}>{!x.verified ? (!x.record?.body?.runs?.cold?.success && x.record?.body?.runs?.reuse?.success ? (x.record.body.runs.reuse.outcome === "no_match" ? "✗ cold did not verify; reuse: Verified: no hit" : "✗ cold did not verify; reuse verified") : "✗ unverified") : !x.reuse_cheaper ? "✗ verified, reuse not cheaper" : x.values_match === true ? "✓ verified, reuse cheaper, same value" : x.values_match === false ? "✗ values differ" : "✗ values not compared"}</span>{" "}
       {x.id === current ? <b>{ago(x.created_at)}</b> : <Link to={`/benchmark?id=${x.id}`}>{ago(x.created_at)}</Link>}
       {" · "}{x.record?.body?.task?.slug} <code>{JSON.stringify(x.record?.body?.input ?? {})}</code>
       {" · "}{x.record?.body?.runs?.reuse?.model_calls} vs {x.record?.body?.runs?.cold?.model_calls} model calls

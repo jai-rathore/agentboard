@@ -105,3 +105,45 @@ describe("verified negative: declared empty-result signal", () => {
     void pubRun;
   });
 });
+
+// Declared result signal: the site's own wording for a known answer that has no results row (FMCSA "… is INACTIVE in
+// the SAFER database" -> INACTIVE). A replay that ends on it, tied to the input, returns that value with 0 calls.
+describe("declared result signal", () => {
+  let v3: string, slug: string;
+  const TXT = "is INACTIVE in the SAFER database";
+  const sigRun = (target: string, by: Record<string, string>, value = "INACTIVE", text = TXT) => run({ skill_cid: target }, true, {
+    params: { q: "Nowhereville" }, turns: 0, model: "none (recorded trace)", usage: { calls: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, usd: 0 },
+    verdict: { success: true, evidence: `The site says "${text}" and q "Nowhereville" was sent in the search request. Final URL https://wiki.test/query.asp.`, model: "deterministic", capability: "deterministic" },
+    replay: replay("trace"),
+    answer: { value, method: "signal", source: `site says "${text}"`, signal: { text, by }, verified_by: "deterministic", binding: { ok: true, checked: true, by, reason: "tied" } },
+  });
+  it("the operator declares a result signal: next version, same trace, idempotent", async () => {
+    const latest = (await node.req("GET", "/v1/skills")).body;
+    const any = (latest.skills ?? latest).find((x: any) => x.name === "Wiki infobox fact") ?? (latest.skills ?? latest)[0];
+    slug = any.slug;
+    expect((await node.req("POST", `/v1/skills/${slug}/result-signal`, { text: TXT, value: "INACTIVE" })).status).toBe(401);
+    expect((await node.req("POST", `/v1/skills/${slug}/result-signal`, { text: TXT, value: "" }, op)).status).toBe(400);
+    const d = await node.req("POST", `/v1/skills/${slug}/result-signal`, { text: TXT, value: "INACTIVE" }, op);
+    expect(d.status).toBe(201);
+    expect(d.body).toMatchObject({ unchanged: false, result_signal: { text: TXT, value: "INACTIVE" } });
+    v3 = d.body.cid;
+    const s = (await node.req("GET", `/v1/skills/${v3}`)).body;
+    expect(s.skill.record.body.skill.result_signals).toEqual([{ text: TXT, value: "INACTIVE" }]);
+    expect(s.skill.record.body.skill.empty_result).toBeTruthy(); // earlier declarations are kept
+    expect(s.trace.steps).toHaveLength(4);
+    expect((await node.req("POST", `/v1/skills/${slug}/result-signal`, { text: TXT, value: "INACTIVE" }, op)).body.unchanged).toBe(true);
+  });
+  it("a tied signal run is a verified value, never the replay trace", async () => {
+    const r = await node.req("POST", "/internal/skills/runs", sigRun(v3, { q: "query" }), ex);
+    expect(r.status).toBe(201);
+    const d = (await node.req("GET", `/v1/skills/runs/${r.body.run_cid}`)).body;
+    expect(d).toMatchObject({ outcome: "verified", verified: true });
+    expect((await node.req("GET", `/v1/skills/${v3}`)).body.trace.source).not.toBe(`run:${r.body.run_cid}`);
+  });
+  it("an untied or undeclared signal is not verified or rejected", async () => {
+    const r = await node.req("POST", "/internal/skills/runs", sigRun(v3, {}), ex);
+    expect((await node.req("GET", `/v1/skills/runs/${r.body.run_cid}`)).body).toMatchObject({ outcome: "not_verified", verified: false });
+    expect((await node.req("POST", "/internal/skills/runs", sigRun(v3, { q: "query" }, "ACTIVE"), ex)).status).toBe(400);
+    expect((await node.req("POST", "/internal/skills/runs", sigRun(v3, { q: "query" }, "INACTIVE", "something else entirely"), ex)).status).toBe(400);
+  });
+});

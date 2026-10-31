@@ -55,6 +55,9 @@ export const SkillZ = z.object({
   risk_flags: z.array(z.enum(RISK_FLAGS)).max(7),
   /** Declared empty-result signal: the site's own "no results" wording. A run that ends on it, tied to its inputs, is "Verified: no hit" (outcome no_match). */
   empty_result: z.object({ text: z.string().min(6).max(200) }).optional(),
+  /** Declared result signals: the site's own wording for a known answer that has no results row (FMCSA "… is INACTIVE in
+   * the SAFER database" means INACTIVE). A replay that ends on one, tied to its inputs like a no-hit, returns its value. */
+  result_signals: z.array(z.object({ text: z.string().min(6).max(200), value: z.string().min(1).max(100) })).max(5).optional(),
 });
 export type Skill = z.infer<typeof SkillZ>;
 
@@ -228,9 +231,11 @@ export const RunZ = z.object({
   outcome: z.enum(["value", "no_match"]).optional(),
   no_match: z.object({ signal: S(200), by: z.record(z.string().max(60), z.enum(NO_MATCH_TIES)), evidence: S(400) }).optional(),
   /** The value the run returned, read deterministically off the final page with the trace's extraction recipe. */
-  answer: z.object({ value: S(300).nullable(), method: z.enum(["deterministic", "none"]), source: S(200).nullable(), verified_by: z.enum(["deterministic", "verifier"]), model_text: S(400).nullable().optional(),
+  answer: z.object({ value: S(300).nullable(), method: z.enum(["deterministic", "signal", "none"]),
+    /** method "signal": the skill's declared result signal the page showed, and how each input is tied to that page */
+    signal: z.object({ text: S(200), by: z.record(z.string().max(60), z.enum(NO_MATCH_TIES)) }).optional(), source: S(200).nullable(), verified_by: z.enum(["deterministic", "verifier"]), model_text: S(400).nullable().optional(),
     /** the executor's valueBinding check: is the value tied to the inputs (and a value it refused to return, if any) */
-    binding: z.object({ ok: z.boolean(), checked: z.boolean(), by: z.record(z.string().max(60), z.enum(["url", "title", "row"])), reason: S(300), rejected: S(300).optional() }).optional() }).optional(),
+    binding: z.object({ ok: z.boolean(), checked: z.boolean(), by: z.record(z.string().max(60), z.enum(["url", "title", "row", ...NO_MATCH_TIES])), reason: S(300), rejected: S(300).optional() }).optional() }).optional(),
 });
 export type RunInput = z.infer<typeof RunZ>;
 
@@ -358,13 +363,18 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
   // Deterministic replays never call the model to heal: a trace that ran clean needs nothing, and a trace that failed
   // and was recovered by the model is healed below by publishing the recovered run's trace (no extra model call).
   const traceMode = run.replay?.mode === "trace" || run.replay?.mode === "trace+recovery";
-  const stale = current && run.success && run.outcome !== "no_match" && !traceMode ? [...new Set([...staleSteps(current.body.skill, run.actions), ...run.step_changes.map((c) => c.step)])].sort((a, b) => a - b) : [];
+  const stale = current && run.success && run.outcome !== "no_match" && run.answer?.method !== "signal" && !traceMode ? [...new Set([...staleSteps(current.body.skill, run.actions), ...run.step_changes.map((c) => c.step)])].sort((a, b) => a - b) : [];
   let heal: Awaited<ReturnType<typeof healSkill>> | null = null;
   let healError: string | null = null;
   if (stale.length && current?.latest) {
     try { heal = await healSkill(ctx, current.body.skill, run, stale, job?.via === "public" ? "public" : "default"); } catch (e) { healError = (e as Error).message.slice(0, 300); console.warn(`[skills] heal failed: ${healError}`); }
   }
 
+  // a value read from a declared result signal must be one this skill version declares (text and value)
+  if (run.answer?.method === "signal") {
+    const sig = run.answer.signal, decl = (current?.body?.skill?.result_signals ?? []) as { text: string; value: string }[];
+    if (!sig || !run.success || !decl.some((d) => d.text === sig.text && d.value === run.answer!.value)) throw new HttpError(400, "undeclared_signal", "a signal answer must match one of the skill's declared result_signals");
+  }
   const runSummary = {
     params: run.params, start_url: run.start_url, success: run.success, turns: run.turns, duration_ms: run.duration_ms,
     verdict: { success: run.verdict.success, evidence: run.verdict.evidence, model: run.verdict.model, capability: run.verdict.capability },
@@ -380,11 +390,11 @@ export async function submitRun(ctx: AppContext, run: RunInput) {
     ...(run.replay ? { replay: run.replay } : {}),
     ...(run.answer ? { answer: run.answer } : {}),
     ...(run.outcome === "no_match" && run.no_match ? { outcome: "no_match", no_match: run.no_match } : {}),
-    ...(run.success && run.trace && run.outcome !== "no_match" ? { trace: run.trace } : {}),
+    ...(run.success && run.trace && run.outcome !== "no_match" && run.answer?.method !== "signal" ? { trace: run.trace } : {}),
   };
   const runRec = sysRecord(ctx, "skill_run", { skill: published?.cid ?? skillCid!, ...runSummary });
   let healed: SignedRecord | null = null;
-  const traceHeal = Boolean(current?.latest && run.success && run.trace && run.outcome !== "no_match" && run.replay?.mode === "trace+recovery");
+  const traceHeal = Boolean(current?.latest && run.success && run.trace && run.outcome !== "no_match" && run.answer?.method !== "signal" && run.replay?.mode === "trace+recovery");
   if (traceHeal && current) {
     // Trace self-heal: the stored trace failed at a step, the model recovered and the run verified. Publish the next
     // version with the same steps and the recovered run's trace, so the next replay is deterministic again.
@@ -621,17 +631,43 @@ export type { MuseUsage };
 export async function declareEmptyResult(ctx: AppContext, slug: string, text: string) {
   const t = String(text ?? "").replace(/\s+/g, " ").trim();
   if (t.length < 6 || t.length > 200) throw new HttpError(400, "invalid_empty_result", "empty_result text: the site's exact no-results wording, 6-200 characters");
+  const r = await amendSkill(ctx, slug, (sk) => (sk.empty_result?.text === t ? null : { ...sk, empty_result: { text: t } }), { change: "declared empty-result signal", empty_result: { text: t } });
+  return { ...r, empty_result: { text: t } };
+}
+
+/**
+ * Declare a result signal (operator only): the site's own wording for a known answer that has no results row, and the
+ * value it means (FMCSA "is INACTIVE in the SAFER database" -> INACTIVE). Publishes the next version with the same trace.
+ * A replay that ends on that wording, tied to every input like a no-hit, returns the value with 0 model calls.
+ */
+export async function declareResultSignal(ctx: AppContext, slug: string, text: string, value: string) {
+  const t = String(text ?? "").replace(/\s+/g, " ").trim(), v = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (t.length < 6 || t.length > 200) throw new HttpError(400, "invalid_result_signal", "text: the site's exact wording, 6-200 characters");
+  if (!v || v.length > 100) throw new HttpError(400, "invalid_result_signal", "value: what that wording means, 1-100 characters");
+  const r = await amendSkill(ctx, slug, (sk) => {
+    const cur = (sk.result_signals ?? []) as { text: string; value: string }[];
+    if (cur.some((x) => x.text === t && x.value === v)) return null;
+    const next = [...cur.filter((x) => x.text !== t), { text: t, value: v }];
+    if (next.length > 5) throw new HttpError(400, "too_many_signals", "at most 5 result signals");
+    return { ...sk, result_signals: next };
+  }, { change: "declared result signal", result_signal: { text: t, value: v } });
+  return { ...r, result_signal: { text: t, value: v } };
+}
+
+/** Publish the next version of the latest skill with amended skill fields, the same steps and the same replay trace. */
+async function amendSkill(ctx: AppContext, slug: string, edit: (sk: any) => any | null, note: Record<string, unknown>) {
   const cur: any = await getSkill(ctx, slug);
   const curCid: string = cur.skill.record.cid;
   if (curCid !== cur.latest_cid) throw new HttpError(409, "not_latest", "declare on the latest version");
   const b = cur.skill.record.body;
-  if (b.skill.empty_result?.text === t) return { unchanged: true, cid: curCid, version: b.version };
+  const edited = edit(b.skill);
+  if (!edited) return { unchanged: true, cid: curCid, version: b.version as number };
   const { source: _src, ...trace } = cur.trace ?? {};
   const rec = sysRecord(ctx, "skill", {
     slug: b.slug, version: b.version + 1, prev: curCid,
-    skill: SkillZ.parse({ ...b.skill, empty_result: { text: t } }), source: b.source, recorder: b.recorder,
+    skill: SkillZ.parse(edited), source: b.source, recorder: b.recorder,
     ...(cur.trace ? { trace: TraceZ.parse(trace) } : {}),
-    amended_from: { skill: curCid, change: "declared empty-result signal", empty_result: { text: t }, trace_from: cur.trace?.source ?? null, by: "operator", model: "none", usage: { calls: 0, usd: 0 } },
+    amended_from: { skill: curCid, ...note, trace_from: cur.trace?.source ?? null, by: "operator", model: "none", usage: { calls: 0, usd: 0 } },
     draft: b.draft ?? null,
   });
   const seq = await ctx.db.tx(async (tx) => {
@@ -639,5 +675,5 @@ export async function declareEmptyResult(ctx: AppContext, slug: string, text: st
     await tx.query(`INSERT INTO skills (cid, slug, version, prev_cid, name, summary, created_at, draft_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, [rec.cid, b.slug, b.version + 1, curCid, b.skill.name, b.skill.summary, rec.created_at, b.draft ?? null]);
     return s;
   });
-  return { unchanged: false, cid: rec.cid, version: b.version + 1, seq, empty_result: { text: t } };
+  return { unchanged: false, cid: rec.cid, version: (b.version + 1) as number, seq };
 }

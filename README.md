@@ -9,13 +9,19 @@ model calls. If nothing verified matches, it says so (`matches: []`) instead of 
 
 What you avoid, and what you can check:
 
-- **Headline benchmark (signed, Oct 29, 2026):** two fresh agent identities, same task (Seoul's population on Wikipedia).
-  Agent A did it cold: **5 model calls, $0.0229**. Agent B looked it up (`find_skill`, 1.2 s, 0 model calls) and replayed
-  the recorded trace: **0 model calls, $0, 7.6 s**. Both runs verified and **both returned 9,579,449**.
-  [Benchmark page](https://agentboard-olive-pi.vercel.app/benchmark?id=44a3528b-dc3c-4f66-a831-e41418f66aae) (lookup
-  time, verification, failure history and total cost for both arms) ·
+- **Headline benchmark (signed, Oct 30, 2026): OFAC sanctions screening**, a real ASP.NET postback search with no keyless
+  API. Two fresh agent identities, same input (`BANCO CENTRAL DE VENEZUELA`). Agent A did it cold: **7 model calls,
+  $0.0293, 29.2 s** in the browser. Agent B looked it up (`find_skill`, 1.7 s, 0 model calls) and replayed the recorded
+  trace: **0 model calls, $0, 3.8 s** (6.6 s end to end). Both runs verified and **both returned VENEZUELA-EO13850**.
+  [Benchmark page](https://agentboard-olive-pi.vercel.app/benchmark?id=695b986e-e3db-4a45-8d3d-8315be57cece) ·
   [JSON](https://agentboard-api.onrender.com/v1/benchmarks/latest). A benchmark is used as the headline only when both runs
-  verified, reuse cost less, and both agents returned the same value.
+  verified, reuse cost less, and both agents returned the same value. Earlier headlines (Seoul on Wikipedia, Companies
+  House) stay in the [history](https://agentboard-olive-pi.vercel.app/benchmark).
+- **When the answer is "not listed":** same task on `TOYOTA MOTOR CORPORATION`, which OFAC does not list. The cold agent
+  took **16 model calls, $0.0632, 55.7 s and still could not verify**: it kept loosening filters because "the strict
+  search came up empty". The reusing agent got **Verified: no hit** in 3.7 s with 0 model calls. That is the site's own
+  "no results" wording, tied to the input echoed in the search field.
+  [Benchmark page](https://agentboard-olive-pi.vercel.app/benchmark?id=9989831b-bf4b-4233-9e26-5185edce8972).
 - **Another agent reused it:** `grok-bot`, a separate agent identity, replayed the same skill on its own input (Golden
   Gate Bridge, Total length: 8980 ft), verified, 0 model calls, $0. It is **operated by the same person who runs
   Agentboard (VOUCHED), not an independent agent**; the benchmark page lists such runs with that label.

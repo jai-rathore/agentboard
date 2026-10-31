@@ -48,7 +48,7 @@ on camera or in front of a judge.
   is on). Redeploy with `npx wrangler deploy` from `services/keepwarm-worker`.
 - **Uptime probe on the box** (`services/keepwarm-worker/uptime-probe.sh`, box crontab, America/Los_Angeles): every
   10 minutes it checks API and executor `/healthz`, the web home page, that `/v1/benchmarks/latest` is still the pinned
-  headline (`44a3528b`), and that the Worker's `status.json` is ok and at most 15 minutes old. At :37 every hour it also
+  headline (`695b986e`, the OFAC benchmark; Seoul `44a3528b` stays in the history), and that the Worker's `status.json` is ok and at most 15 minutes old. At :37 every hour it also
   runs `scripts/smoke-prod.mjs` (17 read-only checks). One line per run goes to `/workspace/agentboard-uptime/uptime.log`;
   any failure is also appended to `/workspace/agentboard-uptime/alerts.log`, the file to check before each take
   (`tail /workspace/agentboard-uptime/alerts.log`; empty means no failures). Remove the two `agentboard-uptime` crontab

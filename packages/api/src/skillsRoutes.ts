@@ -4,7 +4,7 @@ import type { AppContext } from "./context.js";
 import { HttpError } from "./context.js";
 import { museResponses, museSpend, type MuseKind } from "./services/muse.js";
 import { DEFAULT_MATCHES, NO_MATCH_MESSAGE, CONTRIBUTE_HINT, hostWords } from "./services/skillMatch.js";
-import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, declareEmptyResult, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
+import { putArtifact, getArtifact, recordSkill, getDraft, submitRun, RunZ, listSkills, findSkills, getSkill, declareEmptyResult, declareResultSignal, artifactUrl, MAX_ARTIFACT_BYTES } from "./services/skills.js";
 import { createJob, dispatchJob, getJob, getJobFrame, jobEvent, JobEventZ, decideJob, createAgentFundedJob, refundAgentRun } from "./services/skillJobs.js";
 import { verifyRequestAuth } from "./requestAuth.js";
 import { hideAgent, hideTopic, grantCredits, listCreditGrants } from "./services/ingest.js";
@@ -159,6 +159,12 @@ export function mountSkills(app: Hono, ctx: AppContext) {
     operator(c.req.header("x-skills-token"));
     const b = await c.req.json().catch(() => null);
     return c.json(await declareEmptyResult(ctx, c.req.param("slug"), typeof b?.text === "string" ? b.text : ""), 201);
+  });
+  // operator: declare a result signal, the site's wording for a known answer with no results row (see declareResultSignal)
+  app.post("/v1/skills/:slug/result-signal", async (c) => {
+    operator(c.req.header("x-skills-token"));
+    const b = await c.req.json().catch(() => null);
+    return c.json(await declareResultSignal(ctx, c.req.param("slug"), typeof b?.text === "string" ? b.text : "", typeof b?.value === "string" ? b.value : ""), 201);
   });
   app.get("/v1/skills/drafts/:id", async (c) => c.json(await getDraft(ctx, c.req.param("id"))));
   // check_workflow: the no-cost first call for a multi-step website task. Read-only: never runs anything, no model

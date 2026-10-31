@@ -147,7 +147,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     skillsAgentRunsPerDay: num(env.SKILLS_AGENT_RUNS_PER_DAY, 10),
     skillsAgentRunsCeiling: num(env.SKILLS_AGENT_RUNS_CEILING, 100),
     publicReplaySkills: (env.PUBLIC_REPLAY_SKILLS ?? "").split(",").map((x) => x.trim().toLowerCase()).filter((x) => /^[a-z0-9][a-z0-9-]{0,80}$/.test(x)),
-    headlineBenchmark: (() => { const v = (env.HEADLINE_BENCHMARK ?? "44a3528b-dc3c-4f66-a831-e41418f66aae").trim().toLowerCase(); return /^[0-9a-f-]{8,40}$/.test(v) ? v : null; })(),
+    headlineBenchmark: (() => { const v = (env.HEADLINE_BENCHMARK ?? "695b986e-e3db-4a45-8d3d-8315be57cece").trim().toLowerCase(); return /^[0-9a-f-]{8,40}$/.test(v) ? v : null; })(),
     publicReplayDailyCap: num(env.PUBLIC_REPLAY_DAILY_CAP, 0),
     publicReplayPerIpPerDay: num(env.PUBLIC_REPLAY_PER_IP_PER_DAY, 3),
     publicReplayPowBits: num(env.PUBLIC_REPLAY_POW_BITS, 16),
