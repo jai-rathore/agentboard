@@ -129,7 +129,9 @@ async function runJob(id) {
 const keepRowInputs = (f, rowBound) => { for (const k of rowBound ?? []) if (![...f.viewport, ...f.page].includes(k)) f.viewport.push(k); return f; };
 /** The extraction recipe is a row named by an input ("{{target_field}}"); the scroll step names the same input. */
 const inputsIn = (t) => [...String(t ?? "").matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi)].map((x) => x[1]);
-const rowNamesInputs = (rc) => Boolean(rc && rc.kind === "row" && inputsIn(rc.label).length);
+const rowNamesInputs = (rc) => Boolean(rc && ((rc.kind === "row" && inputsIn(rc.label).length) || (rc.kind === "record" && inputsIn(rc.key).length)));
+/** What a recipe reads, for messages: the row label, or the record (results row) its input names. */
+const recipeWhat = (rc, params) => (rc?.kind === "record" ? `results row for "${fillText(rc.key, params)}"` : `"${fillText(rc?.label ?? "", params)}" row`);
 const rowNamesInputsOf = (step, rc) => rowNamesInputs(rc) && inputsIn(step.text).length > 0 && inputsIn(step.text).every((k) => inputsIn(rc.label).includes(k));
 
 async function loadTarget(m) {
@@ -347,7 +349,7 @@ async function replay(m, send, ask, isAborted) {
     // a value must be tied to this run's inputs (see valueBinding): the final page is specific to each parameter, or the
     // value comes from the row whose label names it. A fixed recorded element on a shared page (the first row of a rates
     // table) is never returned for another input.
-    const rowLabelOf = async (rc) => (rc?.kind === "row" ? ((await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(rc, params), scroll: false, withLabel: true }).catch(() => null))?.label ?? fillText(rc.label, params)) : null);
+    const rowLabelOf = async (rc) => (rc?.kind === "row" || rc?.kind === "record" ? ((await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(rc, params), scroll: false, withLabel: true }).catch(() => null))?.label ?? (rc.kind === "row" && !rc.key ? fillText(rc.label, params) : null)) : null);
     const bindingOf = async (rc, val) => valueBinding({ params, value: val, finalUrlTemplate: templ(page.url(), params), finalUrl: page.url(), rowLabel: await rowLabelOf(rc), titleParams: finalChecks(texts, params, page.url()).title });
     let unboundNote = null, rowBound = [];
     // a row named by an input ({{target_field}}): when this page has no such row, or its value is not tied to the inputs,
@@ -355,18 +357,18 @@ async function replay(m, send, ask, isAborted) {
     const inputRow = replayInfo.mode === "trace" && rowNamesInputs(recipe);
     if (recipe && value != null) {
       const b = await bindingOf(recipe, value);
-      if (!b.ok) { unboundNote = b.reason; send({ type: "status", message: `Not returning "${value}": ${b.reason}` }); if (inputRow && !failFast) failFast = `the "${fillText(recipe.label, params)}" value found is not tied to the inputs (${b.reason})`; recipe = null; value = null; }
+      if (!b.ok) { unboundNote = b.reason; send({ type: "status", message: `Not returning "${value}": ${b.reason}` }); if (inputRow && !failFast) failFast = `the ${recipeWhat(recipe, params)} value found is not tied to the inputs (${b.reason})`; recipe = null; value = null; }
       else rowBound = Object.entries(b.by).filter(([, how]) => how === "row").map(([k]) => k);
     }
     if (!failFast && !unboundNote && recipe && value == null && replayInfo.mode === "trace") {
       const missing = missingInputs(recipe, params, texts.page);
-      if (missing.length) failFast = `${describeMissing(missing)} is not on the page (no "${fillText(recipe.label, params)}" row)`;
+      if (missing.length) failFast = `${describeMissing(missing)} is not on the page (no ${recipeWhat(recipe, params)})`;
       else if (inputRow) {
         const probe = await page.evaluate(applyRecipeInPage, { recipe: { ...fillRecipe(recipe, params), probe: true }, scroll: false }).catch(() => null);
-        failFast = probe?.found ? `the "${probe.label}" row has no value on this page` : `this page has no "${fillText(recipe.label, params)}" row`;
+        failFast = probe?.found ? `the "${probe.label}" row has no value on this page` : `this page has no ${recipeWhat(recipe, params)}`;
       }
     }
-    if (!unboundNote && recipe && value == null) { send({ type: "status", message: `The extraction recipe found no value on this page (${recipe.kind}${recipe.label ? ` "${fillText(recipe.label, params)}"` : ""})` }); recipe = null; }
+    if (!unboundNote && recipe && value == null) { send({ type: "status", message: `The extraction recipe found no value on this page (${recipe.kind}${recipe.label || recipe.key ? ` ${recipeWhat(recipe, params)}` : ""})` }); recipe = null; }
     // the final screenshot shows the extracted value (scrolled into view) for the record and any verifier call
     if (value != null) await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: true }).catch(() => {});
     const finalJpg = await shoot("final");
@@ -382,7 +384,7 @@ async function replay(m, send, ask, isAborted) {
       // no recipe yet: one verifier call quotes the value, and this run learns where it is on the page (next replays: 0 calls)
       // (an operator run with relearn: true retries learning on a trace marked no_value)
       if (det.ok && !trace.extract && (!trace.no_value || m.relearn)) det = { ok: false, checks: det.checks, reason: "no extraction recipe yet" };
-      if (det.ok && value != null) det.checks.push(`returned value "${value}" read from ${trace.extract.kind === "row" ? `the "${fillText(trace.extract.label, params)}" row` : "the recorded element"}`);
+      if (det.ok && value != null) det.checks.push(`returned value "${value}" read from ${trace.extract.kind === "row" || trace.extract.kind === "record" ? `the ${recipeWhat(trace.extract, params)}` : "the recorded element"}`);
       if (det.ok) replayInfo.verifier = "deterministic";
       else send({ type: "status", message: `Deterministic check inconclusive (${det.reason}); asking the verifier` });
     }
@@ -415,9 +417,9 @@ async function replay(m, send, ask, isAborted) {
     // no_value only when the model's answer quoted no value at all (else learning is retried on the next replay)
     const noValue = value == null && (verdictFull.model === "deterministic" ? Boolean(trace?.no_value) && !m.relearn : answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params).length === 0);
     // the label of the row the value was actually read from (not the recipe's sub-row hint)
-    const matched = value != null && recipe.kind === "row" ? await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: false, withLabel: true }).catch(() => null) : null;
+    const matched = value != null && (recipe.kind === "row" || recipe.kind === "record") ? await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, params), scroll: false, withLabel: true }).catch(() => null) : null;
     const rowLabel = (matched?.label || fillText(recipe?.label ?? "", params)).slice(0, 120);
-    const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "row" ? `infobox/table row "${rowLabel}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier", model_text: finalMessage ? finalMessage.slice(0, 400) : null, binding: { ok: binding.ok, checked: binding.checked, by: binding.by, reason: binding.reason.slice(0, 300), ...(unboundNote ? { rejected: unboundNote.slice(0, 300) } : {}) } };
+    const answer = { value, method: value == null ? "none" : "deterministic", source: value == null ? null : recipe.kind === "record" ? `results row "${rowLabel}"` : recipe.kind === "row" ? `infobox/table row "${rowLabel}"` : `element ${String(recipe.css).slice(0, 100)}`, verified_by: verdictFull.model === "deterministic" ? "deterministic" : "verifier", model_text: finalMessage ? finalMessage.slice(0, 400) : null, binding: { ok: binding.ok, checked: binding.checked, by: binding.by, reason: binding.reason.slice(0, 300), ...(unboundNote ? { rejected: unboundNote.slice(0, 300) } : {}) } };
     // The trace of this run, kept only when it verified: it is what the next replay executes without the model.
     const steps = cleanSteps(recorded.map(({ _before, ...s }) => ({ ...s, changes_url: Boolean(s.changes_url) })));
     const runTrace = verdictFull.success && (steps.length || recipe) ? { v: TRACE_VERSION, start_url: templ(start_url, params), steps, final: keepRowInputs(finalChecks(texts, params, page.url()), [...rowBound, ...Object.entries(binding.by ?? {}).filter(([, how]) => how === "row").map(([k]) => k)]), ...(recipe ? { extract: recipe } : noValue ? { no_value: true } : {}) } : null;

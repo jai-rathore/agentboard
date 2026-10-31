@@ -288,6 +288,9 @@ export const VALUE_RE = {
 export function deriveRecipeInPage({ candidates, labels }) {
   const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
   const low = (s) => norm(s).toLowerCase();
+  // (same rules as applyRecipeInPage: page functions are serialized, so they can't share helpers)
+  const keyMatch = (t, k) => k.length >= 2 && (t === k || t.startsWith(`${k} `) || t.startsWith(k) && k.length >= 6 || (k.length >= 4 && new RegExp(`(^|[^\\p{L}\\p{N}])${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\p{L}\\p{N}])`, "u").test(t)));
+  const tableKey = (t, ls, lw) => { for (let n = t, d = 0; n && d < 3; n = n.parentElement?.closest("table"), d++) { const hit = [...n.querySelectorAll("td")].find((x) => !x.querySelector("table") && ls.some((l) => lw(x.innerText) === lw(l))); if (hit) return ls.find((l) => lw(hit.innerText) === lw(l)); } return null; };
   // a path that selects exactly this element (checked), anchored on a stable id: not an item id such as "score_50289418"
   const cssPath = (el) => {
     const path = [];
@@ -335,8 +338,17 @@ export function deriveRecipeInPage({ candidates, labels }) {
         // no header cell: the row's first cell names an input (a rates table row "Japanese Yen | 157.87 | 0.0063")
         const first = row?.querySelector("td");
         if (first && first !== cell && first.nextElementSibling === cell && labels.some((l) => low(first.innerText) === low(l) || low(first.innerText).startsWith(low(l)))) return { kind: "row", label: norm(first.innerText).slice(0, 200), offset: 0, sample: norm(cell.innerText).slice(0, 300), candidate: c };
+        // a results table (a license search, a sanctions list): another plain cell of the value's row holds an input (the
+        // license number, the listed name), so that row is this input's record; replay reads the same column of that row
+        const plain = (x) => !x.querySelector("table") && norm(x.innerText).length <= 300;
+        const tds = row ? [...row.children].filter((x) => x.tagName === "TD") : [];
+        const keyOf = (x) => labels.find((l) => keyMatch(low(x.innerText), low(l)));
+        const keyCell = tds.includes(cell) && plain(cell) ? tds.find((x) => x !== cell && plain(x) && keyOf(x)) : null;
+        if (keyCell) return { kind: "record", key: keyOf(keyCell), col: tds.indexOf(cell), sample: norm(cell.innerText).slice(0, 300), candidate: c };
         const own = row?.querySelector("th");
-        if (own) return { kind: "row", label: norm(own.innerText).slice(0, 200), offset: 0, sample: norm(cell.innerText).slice(0, 300), candidate: c };
+        // a record page (a carrier snapshot): the value's table, or one around it, also shows an input as a whole cell
+        // ("USDOT Number: | 53467"); the row recipe keeps that input as its key, so the value is tied to it
+        if (own) { const key = tableKey(row.closest("table"), labels, low); return { kind: "row", label: norm(own.innerText).slice(0, 200), offset: 0, sample: norm(cell.innerText).slice(0, 300), candidate: c, ...(key ? { key } : {}) }; }
       }
     }
     return { kind: "css", css: cssPath(el), sample: norm(el.innerText).slice(0, 300), candidate: c };
@@ -350,6 +362,26 @@ export function applyRecipeInPage({ recipe, scroll, withLabel }) {
   const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
   const low = (s) => norm(s).toLowerCase();
   if (recipe.kind === "css") { const el = document.querySelector(recipe.css); show(el); const text = el ? norm(el.innerText || el.textContent).slice(0, 1000) : null; return withLabel && text != null ? { text, label: null } : text; }
+  // (same rules as deriveRecipeInPage)
+  const keyMatch = (t, k) => k.length >= 2 && (t === k || t.startsWith(`${k} `) || t.startsWith(k) && k.length >= 6 || (k.length >= 4 && new RegExp(`(^|[^\\p{L}\\p{N}])${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\p{L}\\p{N}])`, "u").test(t)));
+  if (recipe.kind === "record") {
+    // the row whose plain cell holds the input (its record in a results table); the value is that row's recorded column
+    const k = low(recipe.key);
+    const plain = (x) => !x.querySelector("table") && norm(x.innerText).length <= 300;
+    for (const tr of document.querySelectorAll("tr")) {
+      const tds = [...tr.children].filter((x) => x.tagName === "TD"), td = tds[recipe.col | 0];
+      if (!td || !plain(td)) continue;
+      const keyCell = tds.find((x, j) => j !== (recipe.col | 0) && plain(x) && keyMatch(low(x.innerText), k));
+      const text = norm(td.innerText).slice(0, 1000);
+      if (!keyCell || !text) continue;
+      if (recipe.probe) return { found: true, label: norm(keyCell.innerText).slice(0, 200) };
+      show(td);
+      return withLabel ? { text, label: norm(keyCell.innerText).slice(0, 200) } : text;
+    }
+    return recipe.probe ? { found: false, label: null } : null;
+  }
+  // a row recipe with a key: the value's table (or one around it) must show the input as a whole cell
+  const keyHit = (t) => { const k = low(recipe.key); for (let n = t, d = 0; n && d < 3; n = n.parentElement?.closest("table"), d++) { const hit = [...n.querySelectorAll("td")].find((x) => !x.querySelector("table") && low(x.innerText) === k); if (hit) return norm(hit.innerText); } return null; };
   if (recipe.kind === "row") {
     // Row labels vary by page: "Elevation" / "Highest elevation", "Population" / "Population (2020)[12]" / "Population (Jan 2026)",
     // "Born:" / "• Born". Labels are compared cleaned (footnotes, bullets, a trailing colon dropped), then without a
@@ -417,11 +449,14 @@ export function applyRecipeInPage({ recipe, scroll, withLabel }) {
         if (td && norm(td.innerText)) {
           show(td);
           const text = norm(td.innerText).slice(0, 1000);
+          const key = recipe.key ? keyHit(th.closest("table")) : null;
+          if (recipe.key && key == null) return withLabel ? null : null;
           if (!withLabel) return text;
           // the row the value came from: its own label, plus the sub-row name only when it is one (a "• City" row below the header)
           const clean = (x) => norm(x).replace(/\[[^\]]*\]/g, "").replace(/^[•·\-\s]+/, "").trim();
           const own = clean(rows[k].querySelector("th")?.innerText);
-          return { text, label: k === i ? clean(th.innerText) : block.includes(rows[k]) && own ? `${clean(th.innerText)} › ${own}` : own || clean(th.innerText) };
+          const lbl = k === i ? clean(th.innerText) : block.includes(rows[k]) && own ? `${clean(th.innerText)} › ${own}` : own || clean(th.innerText);
+          return { text, label: key ? `${lbl} (record ${key})` : lbl };
         }
       }
     }
@@ -500,6 +535,8 @@ export function pickValue(text, recipe) {
 /** Template a derived recipe for storage (labels that are inputs become {{param}}). */
 export function storeRecipe(r, params) {
   if (!r) return null;
+  const tplKey = (k) => (templ(k, params).match(/\{\{\s*[a-z0-9_]+\s*\}\}/i)?.[0] ?? templ(k, params)).slice(0, 200);
+  if (r.kind === "record") { const rx = regexFor(r.candidate); return { kind: "record", key: tplKey(r.key), col: Math.max(0, Math.min(40, r.col | 0)), ...(rx ? { regex: rx } : {}), sample: String(r.sample ?? "").slice(0, 300) }; }
   // a label that names an input keeps only the placeholder ("{{target_field}}", not "{{target_field}} (2023)[2]"): matched as a prefix
   const label = r.kind === "row" ? (templ(r.label, params).match(/\{\{\s*[a-z0-9_]+\s*\}\}/i)?.[0] ?? templ(r.label, params)) : "";
   // a row the input names holds any kind of value (pickValue reads a date, a figure or text there): keep the figure regex
@@ -509,9 +546,9 @@ export function storeRecipe(r, params) {
   const askedText = String(fillText(label, params) ?? "").toLowerCase();
   const sideSub = r.sub && /^(urban|metro|density|rank)/i.test(String(r.sub)) && !askedText.includes(String(r.sub).toLowerCase().split(/\s+/)[0]);
   if (sideSub) r = { ...r, sub: undefined, offset: 0 };
-  return { kind: r.kind, ...(r.kind === "row" ? { label: label.slice(0, 200), offset: Math.max(0, Math.min(10, r.offset | 0)), ...(r.sub ? { sub: String(r.sub).slice(0, 120) } : {}) } : { css: String(r.css).slice(0, 320) }), ...(regex ? { regex } : {}), sample: String(r.sample ?? "").slice(0, 300) };
+  return { kind: r.kind, ...(r.kind === "row" ? { label: label.slice(0, 200), offset: Math.max(0, Math.min(10, r.offset | 0)), ...(r.sub ? { sub: String(r.sub).slice(0, 120) } : {}), ...(r.key ? { key: tplKey(r.key) } : {}) } : { css: String(r.css).slice(0, 320) }), ...(regex ? { regex } : {}), sample: String(r.sample ?? "").slice(0, 300) };
 }
-export const fillRecipe = (r, params) => (r.kind === "row" ? { ...r, label: fillText(r.label, params) } : r);
+export const fillRecipe = (r, params) => (r.kind === "row" ? { ...r, label: fillText(r.label, params), ...(r.key ? { key: fillText(r.key, params) } : {}) } : r.kind === "record" ? { ...r, key: fillText(r.key, params) } : r);
 
 // ---------------------------------------------------------------- trace hygiene
 const placeholderLead = (name) => String(name ?? "").match(/^(\s*\{\{\s*[a-z0-9_]+\s*\}\})/i)?.[1]?.trim();
@@ -580,7 +617,7 @@ export function missingInputs(step, params, pageText) {
   if (!step) return [];
   const fields = step.action === "scroll_to_text" ? [step.text]
     : ["click", "double_click", "select_option"].includes(step.action) ? [step.locator?.name, step.locator?.text, step.action === "select_option" ? step.option : null]
-    : step.kind === "row" ? [step.label] : [];
+    : step.kind === "row" ? [step.label, step.key] : step.kind === "record" ? [step.key] : [];
   return inputsNamedIn(fields, params).filter(([, v]) => !has(pageText, v)).map(([name, value]) => ({ param: name, value }));
 }
 const inputsNamedIn = (fields, params) => {

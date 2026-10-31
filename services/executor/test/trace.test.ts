@@ -361,3 +361,41 @@ describe("infobox rows: label variants, dates, sections, honest misses", () => {
     expect(checkFinal(thin, { viewport: "", page: "", title: "" }, { c: "Indian Rupee" }, "https://x.test/table/", { rowBound: ["c"], rowLabel: "Indian Rupee" })).toMatchObject({ ok: true });
   });
 });
+
+describe.skipIf(!chromium)("record recipes: a results-table row the input names (license search, sanctions list) and keyed record pages", () => {
+  const results = (rows: string[][]) => `<table><tr><td><h2>Search results</h2><table id="r"><tr><th>License Type</th><th>Name</th><th>License Number</th><th>Status/Expires</th></tr>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</table></td></tr></table>`;
+  it("learns the row by its input cell and reads the same column for another input; no row means a fail-fast miss", async () => {
+    if (!browser) return;
+    const p = await newPage();
+    await p.setContent(results([["Certified Building Contractor", "CALDEVILLA, MARK", "CBC1263400 Cert Building", "Current, Active 08/31/2028"], ["Certified Electrical", "ARCTIC AIR", "EC13008544 Cert Electrical", "Null and Void, 08/31/2020"]]));
+    const derived = await p.evaluate(deriveRecipeInPage, { candidates: ["Current, Active 08/31/2028"], labels: ["CBC1263400"] });
+    const recipe = storeRecipe(derived, { license_number: "CBC1263400" });
+    expect(recipe).toMatchObject({ kind: "record", key: "{{license_number}}", col: 3 });
+    for (const [lic, want, label] of [["CBC1263400", "Current, Active 08/31/2028", "CBC1263400 Cert Building"], ["EC13008544", "Null and Void, 08/31/2020", "EC13008544 Cert Electrical"]]) {
+      const got = await p.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, { license_number: lic }), withLabel: true });
+      expect(got).toEqual({ text: want, label });
+      expect(execBinding({ params: { license_number: lic }, value: want, finalUrl: "https://example.test/wl11.asp?mode=2", rowLabel: got.label }).ok).toBe(true);
+    }
+    expect(await p.evaluate(applyRecipeInPage, { recipe: fillRecipe(recipe, { license_number: "CGC9999999" }) })).toBeNull();
+    expect(missingInputs(recipe, { license_number: "CGC9999999" }, "Search results CBC1263400")).toEqual([{ param: "license_number", value: "CGC9999999" }]);
+    // a listed name matches its row by whole words ("AEROCARIBBEAN" in "AEROCARIBBEAN AIRLINES"), never a layout cell around the table
+    await p.setContent(`<table><tr><td>AEROCARIBBEAN search page<table><tr><th>Name</th><th>Type</th><th>Program(s)</th></tr><tr><td>AEROCARIBBEAN AIRLINES</td><td>Entity</td><td>CUBA</td></tr></table></td></tr></table>`);
+    const o = storeRecipe(await p.evaluate(deriveRecipeInPage, { candidates: ["CUBA"], labels: ["AEROCARIBBEAN"] }), { name: "AEROCARIBBEAN" });
+    expect(o).toMatchObject({ kind: "record", key: "{{name}}", col: 2 });
+    expect(await p.evaluate(applyRecipeInPage, { recipe: fillRecipe(o, { name: "aerocaribbean" }), withLabel: true })).toEqual({ text: "CUBA", label: "AEROCARIBBEAN AIRLINES" });
+  });
+  it("a labeled row on a record page is tied to the input shown as a whole cell of the same table", async () => {
+    if (!browser) return;
+    const p = await newPage();
+    const page = (dot: string, st: string) => `<table><tr><th>USDOT Number:</th><td>${dot}</td></tr><tr><th>Operating Authority Status:</th><td>${st}</td></tr></table>`;
+    await p.setContent(page("53467", "AUTHORIZED FOR Property"));
+    const r = storeRecipe(await p.evaluate(deriveRecipeInPage, { candidates: ["AUTHORIZED FOR Property"], labels: ["53467"] }), { usdot_number: "53467" });
+    expect(r).toMatchObject({ kind: "row", label: "Operating Authority Status:", key: "{{usdot_number}}" });
+    await p.setContent(page("264184", "NOT AUTHORIZED"));
+    const got = await p.evaluate(applyRecipeInPage, { recipe: fillRecipe(r, { usdot_number: "264184" }), withLabel: true });
+    expect(got.text).toBe("NOT AUTHORIZED");
+    expect(execBinding({ params: { usdot_number: "264184" }, value: got.text, finalUrl: "https://example.test/query.asp", rowLabel: got.label }).ok).toBe(true);
+    // another record's page: the key is not there, so nothing is returned
+    expect(await p.evaluate(applyRecipeInPage, { recipe: fillRecipe(r, { usdot_number: "999" }) })).toBeNull();
+  });
+});
