@@ -14,7 +14,7 @@ import { approvalFor, inspectInPage, taskText, describeAction, playwrightKey, fi
 import { makeGif } from "./gif.mjs";
 import { scrollPlan } from "./scroll.mjs";
 import { TRACE_VERSION, MAX_TRACE_STEPS, templ, fillUrl, fillText, describeInPage, pageTextInPage, finalChecks, checkFinal, traceStep, locate, describeTraceStep, usableTrace, runTraceStep, deriveRecipeInPage, applyRecipeInPage, answerCandidates, DATE_RE, pickValue, storeRecipe, fillRecipe, cleanSteps, valueBinding, missingInputs, describeMissing } from "./trace.mjs";
-import { probeInPage, scrollToTextInPage, snapPoint, INTERACTIVE, SNAP_RADIUS, addressBarUrl, isAddressBarKey } from "./click.mjs";
+import { probeInPage, scrollToTextInPage, snapPoint, INTERACTIVE, SNAP_RADIUS, addressBarUrl, isAddressBarKey, textTargetInPage, TEXT_FIELD } from "./click.mjs";
 
 const PORT = Number(process.env.PORT || 10000);
 const API = (process.env.AGENTBOARD_API || "https://agentboard-api.onrender.com").replace(/\/$/, "");
@@ -283,7 +283,13 @@ async function replay(m, send, ask, isAborted) {
         history.push(`turn ${turn}: scroll_to_text "${q.slice(0, 60)}" -> ${r.found ? "scrolled into view" : "not found on this page"}`);
       }
       const checks = (call?.pending_safety_checks ?? []).map((c) => c.code);
-      for (const a of call?.actions ?? []) {
+      const acts = call?.actions ?? [];
+      for (const [ai, a] of acts.entries()) {
+        // A click followed by typing is aimed at a text field: if it landed on a dropdown or a label, move it to the nearest text field.
+        if (a.type === "click" && acts[ai + 1]?.type === "type" && Number.isFinite(a.x) && Number.isFinite(a.y)) {
+          const t = await page.evaluate(textTargetInPage, { x: a.x, y: a.y, r: 40, sel: TEXT_FIELD }).catch(() => null);
+          if (t) { history.push(`turn ${turn}: click at (${a.x},${a.y}) was on a ${t.from}, not a text field, and typing follows; clicked the text field ${t.px}px away (${t.x},${t.y})`); a.x = t.x; a.y = t.y; }
+        }
         // Snap near-miss clicks onto the nearest link/button (see click.mjs) before the policy inspects the target.
         if ((a.type === "click" || a.type === "double_click") && Number.isFinite(a.x) && Number.isFinite(a.y)) {
           const snap = snapPoint(a.x, a.y, await page.evaluate(probeInPage, { x: a.x, y: a.y, r: SNAP_RADIUS, sel: INTERACTIVE }).catch(() => null));

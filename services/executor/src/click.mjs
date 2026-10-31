@@ -71,3 +71,28 @@ export function scrollToTextInPage({ text }) {
   label.scrollIntoView({ block: "center", inline: "nearest" });
   return { found: true, tag: label.tagName.toLowerCase(), text: (label.innerText || "").trim().slice(0, 80) };
 }
+
+/**
+ * Runs in the page: a click followed by typing is meant for a text field. On a dense form (OFAC's lookup: the Type
+ * dropdown sits 25 px above the Name box) the model's click can land on a <select>, then every keystroke goes to the
+ * dropdown and the run loops on "the filter is stuck open". If the point is not on a text field, return the center of
+ * the nearest visible text field within r px (null when the point is already on one, or none is near).
+ */
+export const TEXT_FIELD = 'input:not([type]), input[type=text], input[type=search], input[type=email], input[type=tel], input[type=number], input[type=url], textarea, [contenteditable=""], [contenteditable=true]';
+export function textTargetInPage({ x, y, r, sel }) {
+  const hit = document.elementFromPoint(x, y);
+  if (hit && hit.closest(sel)) return null;
+  let best = null, bd = Infinity;
+  for (const el of document.querySelectorAll(sel)) {
+    if (el.disabled || el.readOnly) continue;
+    for (const b of el.getClientRects()) {
+      if (b.width < 8 || b.height < 8) continue;
+      const cx = (b.left + b.right) / 2, cy = (b.top + b.bottom) / 2;
+      const top = document.elementFromPoint(cx, cy);
+      if (!top || !(top === el || el.contains(top))) continue;
+      const d = Math.hypot(Math.max(b.left - x, 0, x - b.right), Math.max(b.top - y, 0, y - b.bottom));
+      if (d <= r && d < bd) { bd = d; best = { x: Math.round(cx), y: Math.round(cy), px: Math.round(d), from: hit ? hit.tagName.toLowerCase() : "nothing" }; }
+    }
+  }
+  return best;
+}

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 // @ts-expect-error plain ESM module without types
 import { templ, fillUrl, finalChecks, checkFinal, traceStep, usableTrace, describeInPage, pageTextInPage, locate, runTraceStep, cleanSteps, locLabel, answerCandidates, deriveRecipeInPage, applyRecipeInPage, storeRecipe, fillRecipe, pickValue, regexFor } from "../src/trace.mjs";
 // @ts-expect-error plain ESM module without types
-import { INTERACTIVE } from "../src/click.mjs";
+import { INTERACTIVE, textTargetInPage, TEXT_FIELD } from "../src/click.mjs";
 // @ts-expect-error plain ESM module without types
 import { valueBinding as execBinding, missingInputs, describeMissing } from "../src/trace.mjs";
 import { valueBinding as coreBinding } from "../../../packages/core/src/valueBinding";
@@ -397,5 +397,20 @@ describe.skipIf(!chromium)("record recipes: a results-table row the input names 
     expect(execBinding({ params: { usdot_number: "264184" }, value: got.text, finalUrl: "https://example.test/query.asp", rowLabel: got.label }).ok).toBe(true);
     // another record's page: the key is not there, so nothing is returned
     expect(await p.evaluate(applyRecipeInPage, { recipe: fillRecipe(r, { usdot_number: "999" }) })).toBeNull();
+  });
+});
+
+describe.skipIf(!chromium)("click then type: a click that lands on a dropdown moves to the nearest text field", () => {
+  it("retargets a click on a <select> 25 px above a text box, leaves a direct hit alone", async () => {
+    if (!browser) return;
+    const p = await browser.newPage({ viewport: { width: 960, height: 600 } });
+    await p.setContent(`<div style="position:absolute;left:300px;top:100px"><select id="t" style="width:200px;height:19px;display:block"><option>All</option><option>Entity</option></select><input id="n" style="width:200px;height:21px;margin-top:6px;display:block"></div>`);
+    const sel = await p.evaluate(() => { const r = document.querySelector("#t")!.getBoundingClientRect(); return { x: r.left + 50, y: r.top + 9 }; });
+    const t = await p.evaluate(textTargetInPage, { ...sel, r: 40, sel: TEXT_FIELD });
+    expect(t).toMatchObject({ from: "select" });
+    expect(await p.evaluate(({ x, y }) => (document.elementFromPoint(x, y) as HTMLElement).id, t!)).toBe("n");
+    const on = await p.evaluate(() => { const r = document.querySelector("#n")!.getBoundingClientRect(); return { x: r.left + 5, y: r.top + 5 }; });
+    expect(await p.evaluate(textTargetInPage, { ...on, r: 40, sel: TEXT_FIELD })).toBeNull();
+    await p.close();
   });
 });
