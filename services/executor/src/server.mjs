@@ -23,6 +23,8 @@ const MAX_TURNS = Math.min(Number(process.env.MAX_TURNS || 15), 15);
 const APPROVAL_WAIT_MS = 10 * 60_000;
 const W = 960, H = 600;
 const CHROMIUM_ARGS = ["--disable-dev-shm-usage", "--no-zygote", "--single-process", "--disable-gpu", "--disable-extensions", "--disable-background-networking", "--mute-audio", "--js-flags=--max-old-space-size=128", "--renderer-process-limit=1"];
+/** A site's own "no such record" wording on a lookup result page. */
+export const NO_RECORD_RE = /\b(record not found|no records? (matching|were found|found)|no (results|matches) (found|for|were found)|returned no results|did not return any results|0 results found)\b/i;
 const SELECT_TOOL = { type: "function", name: "select_option", description: "Choose an option in the native dropdown (<select>) that was just clicked or is focused. Use the visible option text.", parameters: { type: "object", properties: { option: { type: "string" } }, required: ["option"], additionalProperties: false } };
 
 const stats = { started_at: new Date().toISOString(), runs: 0, succeeded: 0, failed: 0, busy: false, last: null };
@@ -358,6 +360,7 @@ async function replay(m, send, ask, isAborted) {
     const rowLabelOf = async (rc) => (rc?.kind === "row" || rc?.kind === "record" ? ((await page.evaluate(applyRecipeInPage, { recipe: fillRecipe(rc, params), scroll: false, withLabel: true }).catch(() => null))?.label ?? (rc.kind === "row" && !rc.key ? fillText(rc.label, params) : null)) : null);
     const bindingOf = async (rc, val) => valueBinding({ params, value: val, finalUrlTemplate: templ(page.url(), params), finalUrl: page.url(), rowLabel: await rowLabelOf(rc), titleParams: finalChecks(texts, params, page.url()).title });
     let unboundNote = null, rowBound = [];
+    const inputsOf = (tpl) => [...String(tpl ?? "").matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi)].map((m) => ({ param: m[1], value: params[m[1]] })).filter((x) => x.value != null);
     // a row named by an input ({{target_field}}): when this page has no such row, or its value is not tied to the inputs,
     // no model can return it either, so the run is not verified right away (0 calls) instead of asking the verifier
     const inputRow = replayInfo.mode === "trace" && rowNamesInputs(recipe);
@@ -369,6 +372,9 @@ async function replay(m, send, ask, isAborted) {
     if (!failFast && !unboundNote && recipe && value == null && replayInfo.mode === "trace") {
       const missing = missingInputs(recipe, params, texts.page);
       if (missing.length) failFast = `${describeMissing(missing)} is not on the page (no ${recipeWhat(recipe, params)})`;
+      // a keyed record page (a carrier snapshot for this USDOT number) that the site answered with its own "not found"
+      // page: the label row is gone and the page says so, so no model can find the value either
+      else if (recipe.key && !String(texts.page).includes(String(recipe.label ?? "").trim() || "\u0000") && NO_RECORD_RE.test(texts.page)) failFast = `the site says there is no record for ${describeMissing(inputsOf(recipe.key))}: "${String(texts.page.match(NO_RECORD_RE)[0]).slice(0, 80)}"`;
       else if (inputRow) {
         const probe = await page.evaluate(applyRecipeInPage, { recipe: { ...fillRecipe(recipe, params), probe: true }, scroll: false }).catch(() => null);
         failFast = probe?.found ? `the "${probe.label}" row has no value on this page` : `this page has no ${recipeWhat(recipe, params)}`;
