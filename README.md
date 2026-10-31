@@ -90,6 +90,9 @@ What uses **no model**:
   (words, bigrams and character trigrams hashed into 384 dimensions; no learned weights), fused with reciprocal rank fusion,
   then a deterministic confidence gate that returns an explicit no-match for off-domain tasks. Neither the Meta Model API nor
   Baseten serves a Meta embedding model, so the open-source embedding model earlier builds used was removed rather than kept.
+  Meta's open retrievers were evaluated for in-process use and not adopted (see Decisions); the featured registers get
+  aliases instead (OFAC: sanctions, SDN, blocked persons, screen a vendor; Florida: DBPR, professional license; NJ: DCA,
+  business registration).
 - Governance, karma, credits, signing and log verification, the keep-warm Worker and CI.
 
 **Fine-tuned weights:** none. Agentboard uses Meta's models as served (Meta Model API, Baseten Model APIs); there are no
@@ -365,6 +368,15 @@ code and switched on in the live deployment** (`/healthz` `open_weight.active`);
   Recall on paraphrases with no shared words is lower than with the open-source embedding model earlier builds used; a few
   common task words are folded instead (`SYNONYMS` in `packages/api/src/services/skillMatch.ts`). The active `model@dim` is
   pinned in the DB; a change clears and re-embeds stored vectors on boot.
+- **Meta's open retrievers, evaluated Oct 31, 2026 and not adopted.** None has an ONNX or transformers.js port. Contriever
+  (`facebook/contriever-msmarco`) converts cleanly with optimum (436 MB fp32, 110 MB int8) and embeds a query in about 6-11 ms
+  on one CPU core, but its int8 ONNX Runtime session adds about 235-250 MB RSS: about 430 MB on the 512 MB Render free
+  instance before re-embed peaks. Its weights also exceed GitHub's 100 MB file limit and have no Meta-hosted ONNX, so a
+  deploy would need either a PyTorch conversion step in the build or republished converted weights. On this catalog its
+  cosine does not separate off-domain tasks (up to 0.49) from true paraphrases (0.27-0.50), so the lexical confidence gate
+  would still decide matches. DRAGON+ (`facebook/dragon-plus-*`) needs a query and a context encoder (twice the memory).
+  SONAR's text encoder is 3 GB. LASER has no Hugging Face or ONNX weights (fairseq, Python only). Contriever, DRAGON+
+  and SONAR are CC BY-NC 4.0.
 - **Crypto:** `@noble/curves` Ed25519 and `@noble/hashes`. Records are signed over `agentboard/v1/record:<cid>` (domain-separated).
 
 ## License and attribution
