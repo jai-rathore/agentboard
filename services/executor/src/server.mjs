@@ -413,10 +413,13 @@ async function replay(m, send, ask, isAborted) {
       // (a date is one value: "31 December 2025" is not split into its day number and year)
       const vvDates = [...vv.matchAll(new RegExp(DATE_RE, "gi"))].map((d) => d[0]);
       const vvParts = vv && !isInput ? [...answerCandidates(vv, params).filter((x) => /\d/.test(x) && x !== vv && !vvDates.some((d) => d !== x && d.includes(x))), vv] : [];
-      const derived = await page.evaluate(deriveRecipeInPage, { candidates: [...new Set([...vvParts, ...answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params)])].slice(0, 14), labels: Object.values(params).filter((x) => String(x).length >= 2) }).catch(() => null);
+      // an input echoed back (the USDOT number on its own snapshot) is not an answer
+      const echo = (x) => Object.values(params).some((p) => String(p).trim().toLowerCase() === String(x).trim().toLowerCase());
+      const derived = await page.evaluate(deriveRecipeInPage, { candidates: [...new Set([...vvParts, ...answerCandidates(`${finalMessage}\n${verdictFull.evidence}`, params)])].filter((x) => !echo(x)).slice(0, 14), labels: Object.values(params).filter((x) => String(x).length >= 2) }).catch(() => null);
       const stored = storeRecipe(derived, params);
       const got = await extractWith(stored);
-      if (stored && got != null) { const b = await bindingOf(stored, got); if (b.ok) { recipe = stored; value = got; } else { unboundNote = b.reason; send({ type: "status", message: `Not keeping the value "${got}": ${b.reason}` }); } }
+      if (stored && got != null && echo(got)) { unboundNote = `the value "${String(got).slice(0, 60)}" is the input itself, not an answer`; send({ type: "status", message: `Not keeping ${unboundNote}` }); }
+      else if (stored && got != null) { const b = await bindingOf(stored, got); if (b.ok) { recipe = stored; value = got; } else { unboundNote = b.reason; send({ type: "status", message: `Not keeping the value "${got}": ${b.reason}` }); } }
     }
     if (value == null && m.relearn && trace?.extract) { const got = await extractWith(trace.extract); if (got != null && (await bindingOf(trace.extract, got)).ok) { recipe = trace.extract; value = got; } }
     const binding = await bindingOf(recipe, value);
