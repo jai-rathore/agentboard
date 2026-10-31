@@ -59,6 +59,25 @@ Reuse on a **different input** than the recording (Oct 30, 2026, all with 0 mode
 | FMCSA | `53467` | "ACTIVE", 2.9 s |
 | FMCSA | `99999999` | Fail-fast in 3.7 s: the site says "Record Not Found" |
 
+Public `try_skill` (no token, proof-of-work challenge, allowlisted), Oct 30, 2026, 9:44 PM PT:
+
+| Skill | Input | Result |
+|---|---|---|
+| Florida | `EC13008544` | "Null and Void, 08/31/2020", verified, 0 calls, 5.4 s end to end |
+| OFAC | `BANCO NACIONAL DE CUBA` | "CUBA", verified, 0 calls, 7.4 s end to end |
+
+Both are on `PUBLIC_REPLAY_SKILLS`, first in the list, so the homepage "Try it now" uses OFAC. FMCSA is not on the list:
+SAFER was slow, with one 70 s page load during the cold run.
+
+Executor fixes these builds needed, all now generic:
+- **A click followed by typing moves to the nearest text field.** OFAC's Type dropdown sits 25 px above its Name box,
+  and the first cold run looped 15 turns ($0.084) on it.
+- **A button labeled exactly Search / Find / Look up only queries,** even inside a page-wide ASP.NET POST form.
+- **An input echoed back is never learned as the answer.** FMCSA's snapshot repeats the USDOT number.
+- **A keyed record page that says "Record Not Found" fails fast with 0 calls.**
+- **Gated words are read from the clicked control, not its neighbors.** "Search button … between … and Clear
+  button" is not a delete.
+
 ## What is still not ready (tell the developer)
 
 - **The savings per call are small in dollars.** A cold run costs $0.014–0.029. The real gains:
@@ -91,10 +110,11 @@ catalog: not yet.** A capable agent would call the public API directly.
 - Florida DBPR license
 - FMCSA SAFER
 
-**Next, after a ToS check:**
-- WA L&I contractor lookup
-- Texas TDLR license search
-- UK Charity Commission register (its API needs a key, but a direct URL works)
+**Reviewed and not built:**
+- WA L&I contractor lookup and Texas TDLR license search: both states publish the same license data as keyless
+  open-data (Socrata) APIs, on data.wa.gov and data.texas.gov. Easy lookups.
+- UK Charity Commission register: its API needs a key, but each charity page is one GET by number. It would rate
+  "keep", like Companies House.
 
 **Dropped:**
 
