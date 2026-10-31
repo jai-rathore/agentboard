@@ -16,6 +16,8 @@
  * The API is pinged in API_WARM_WINDOWS and the executor only in EXECUTOR_WARM_WINDOWS (both in America/Los_Angeles
  * hours, "6-24" means 06:00-23:59; "*" means always; "" means never). Outside its window the executor still wakes on
  * demand: the API pings it as soon as try_skill hands out a challenge.
+ * ALWAYS_WARM_UNTIL (an ISO time, e.g. "2026-11-08T00:00:00-08:00") overrides both windows to "always" until then, for
+ * filming and judging; after it passes the windows apply again by themselves, so there is nothing to revert.
  */
 
 const DEFAULTS = {
@@ -28,6 +30,7 @@ const DEFAULTS = {
   PROBE_TRY_EVERY_MIN: "30",
   PROBE_TRY_OFF_WINDOW_EVERY_MIN: "180",
   TIMEOUT_MS: "70000",
+  ALWAYS_WARM_UNTIL: "",
 };
 const HISTORY = 48;
 
@@ -123,11 +126,18 @@ export function tryDue(now, everyMin) {
   return Math.floor(now / 300_000) % slots === 0;
 }
 
+/** True while ALWAYS_WARM_UNTIL (an ISO time) is in the future; "" or an unparseable value is false. */
+export function alwaysWarm(until, now) {
+  const u = Date.parse(String(until ?? "").trim());
+  return Number.isFinite(u) && now < u;
+}
+
 export async function runOnce(env, { fetchImpl = fetch, now = Date.now() } = {}) {
   const c = cfg(env);
   const t = Number(c.TIMEOUT_MS);
   const { hour } = laTime(now);
-  const warmApi = inWindows(c.API_WARM_WINDOWS, hour), warmExec = inWindows(c.EXECUTOR_WARM_WINDOWS, hour);
+  const always = alwaysWarm(c.ALWAYS_WARM_UNTIL, now);
+  const warmApi = always || inWindows(c.API_WARM_WINDOWS, hour), warmExec = always || inWindows(c.EXECUTOR_WARM_WINDOWS, hour);
   const withTry = warmApi && tryDue(now, warmExec ? c.PROBE_TRY_EVERY_MIN : c.PROBE_TRY_OFF_WINDOW_EVERY_MIN);
   const [api, executor] = await Promise.all([
     warmApi ? ping(fetchImpl, c.API_URL, t) : Promise.resolve({ skipped: "outside API_WARM_WINDOWS" }),
@@ -135,7 +145,7 @@ export async function runOnce(env, { fetchImpl = fetch, now = Date.now() } = {})
   ]);
   const mcp = warmApi ? await probeMcp(fetchImpl, c, withTry) : { skipped: "outside API_WARM_WINDOWS" };
   const ok = [api, executor, mcp].every((x) => x.skipped || x.ok);
-  return { ok, checked_at: new Date(now).toISOString(), la_hour: hour, api, executor, mcp };
+  return { ok, checked_at: new Date(now).toISOString(), la_hour: hour, ...(always ? { always_warm_until: c.ALWAYS_WARM_UNTIL } : {}), api, executor, mcp };
 }
 
 /** One KV write per run: the latest status plus history and last_ok in a single value. */

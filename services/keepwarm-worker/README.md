@@ -8,8 +8,10 @@ and every 3 hours outside it, because handing out a challenge makes the API wake
 at `GET /status.json` (CORS open, `stale: true` when the last run is over 15 minutes old).
 
 Windows are America/Los_Angeles hours (`API_WARM_WINDOWS`, `EXECUTOR_WARM_WINDOWS` in `wrangler.toml`) because
-Render's free tier has 750 instance-hours per workspace per month across all free services. Widen them only for
-filming and judging days, e.g. `npx wrangler deploy --var EXECUTOR_WARM_WINDOWS:8-24`.
+Render's free tier has 750 instance-hours per workspace per month across all free services (the executor is on a paid
+plan since Oct 30, so only the API counts). For filming and judging, `ALWAYS_WARM_UNTIL` (an ISO time) keeps both
+warm around the clock until it passes, then the windows apply again. `uptime-probe.sh` is the box-side check
+(see docs/DEPLOY.md).
 
 Deploy (one time; needs a Cloudflare login on the machine):
 

@@ -9,7 +9,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "23 */6 * * *"
+    - cron: "23 */2 * * *" # every 2 h through judging; back to "23 */6 * * *" after Nov 8, 2026
   workflow_dispatch:
     inputs:
       expect_commit:

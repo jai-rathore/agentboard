@@ -1,7 +1,7 @@
 // The keep-warm Worker, with a fake fetch and a fake KV: nothing leaves the process.
 import { describe, it, expect } from "vitest";
 // @ts-ignore plain JS Worker module
-import worker, { inWindows, laTime, runOnce, probeMcp, cfg, tryDue, save } from "../src/index.js";
+import worker, { inWindows, laTime, runOnce, probeMcp, cfg, tryDue, save, alwaysWarm } from "../src/index.js";
 
 const ok = (v: unknown) => new Response(JSON.stringify(v), { status: 200, headers: { "content-type": "application/json" } });
 const text = (t: string) => ({ result: { content: [{ type: "text", text: t }] } });
@@ -98,6 +98,21 @@ describe("runOnce", () => {
     const n = await runOnce({}, { fetchImpl: night.f, now: NIGHT });
     expect(night.calls).toEqual([]);
     expect(n).toMatchObject({ ok: true, api: { skipped: expect.any(String) }, mcp: { skipped: expect.any(String) } });
+  });
+
+  it("ALWAYS_WARM_UNTIL keeps both services warm at night until it passes, then the windows apply again", async () => {
+    expect(alwaysWarm("", NIGHT)).toBe(false);
+    expect(alwaysWarm("not a date", NIGHT)).toBe(false);
+    const until = "2026-11-08T00:00:00-08:00";
+    expect(alwaysWarm(until, NIGHT)).toBe(true);
+    const on = fakeFetch();
+    const s = await runOnce({ ALWAYS_WARM_UNTIL: until }, { fetchImpl: on.f, now: NIGHT });
+    expect(s).toMatchObject({ ok: true, always_warm_until: until, api: { ok: true }, executor: { ok: true } });
+    expect(on.calls).toEqual(expect.arrayContaining(["GET agentboard-api.onrender.com", "GET agentboard-executor.onrender.com", "find_skill"]));
+    const after = fakeFetch();
+    const n = await runOnce({ ALWAYS_WARM_UNTIL: until }, { fetchImpl: after.f, now: Date.parse("2026-11-09T11:00:00Z") });
+    expect(after.calls).toEqual([]);
+    expect(n.always_warm_until).toBeUndefined();
   });
 
   it("reports a down API", async () => {
