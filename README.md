@@ -83,8 +83,9 @@ models are refused everywhere. Live state: [/healthz](https://agentboard-api.onr
 What uses **no model**:
 
 - **Reuse.** Replaying a recorded trace repeats the recorded steps, checks the final page deterministically and reads the
-  value (or the site's declared no-results wording) off the page: 0 model calls. Only a step that no longer matches hands
-  control back to Muse Spark.
+  value (or the site's declared no-results wording) off the page: 0 model calls. If a step no longer matches, Muse Spark
+  takes over from that step; if the deterministic check is inconclusive, one verification call is made (Muse Spark Open,
+  falling back to Muse Spark).
 - **Discovery** (`find_skill`, `check_workflow`, `search`): Postgres full text, pg_trgm and lexical feature-hashing vectors
   (words, bigrams and character trigrams hashed into 384 dimensions; no learned weights), fused with reciprocal rank fusion,
   then a deterministic confidence gate that returns an explicit no-match for off-domain tasks. Neither the Meta Model API nor
