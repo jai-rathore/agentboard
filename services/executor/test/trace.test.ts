@@ -426,6 +426,12 @@ describe("verified negative: a declared empty-result signal tied to the input", 
     const fl = "LICENSEE SEARCH OPTIONS\nThere were no records found matching the search criteria. If you suspect unlicensed activity";
     expect(noMatchCheck({ signal: "There were no records found matching the search criteria", params: { license_number: "CBC0000001" }, pageText: fl, url: "https://www.myfloridalicense.com/wl11.asp?mode=2&search=LicNbr", fields: [], request: { url: "https://www.myfloridalicense.com/wl11.asp?mode=2&search=LicNbr", post: "hSID=&hSearchType=LicNbr&LicNbr=CBC0000001&Search1=Search" } })).toMatchObject({ ok: true, by: { license_number: "query" } });
   });
+  it("Ohio eLicense: the site's own zero-record line plus the license number still in the text field", () => {
+    const page = "Business Name Board Application/License/Endorsement # Type Status Your search return 0 records";
+    expect(noMatchCheck({ signal: "Your search return 0 records", params: { license_number: "ZZ-NOT-A-LICENSE-999" }, pageText: page, url: "https://elicense.ohio.gov/OH_VerifyLicense", fields: ["ZZ-NOT-A-LICENSE-999"], request: null })).toMatchObject({ ok: true, by: { license_number: "field" } });
+    // the number is not on the page and not in a field: the wording alone is not a verified no-hit
+    expect(noMatchCheck({ signal: "Your search return 0 records", params: { license_number: "ZZ-NOT-A-LICENSE-999" }, pageText: page, url: "https://elicense.ohio.gov/OH_VerifyLicense", fields: [], request: null }).ok).toBe(false);
+  });
   it("is not a no hit without the wording, or when the page is not tied to the input (a stale or different query)", () => {
     expect(noMatchCheck({ signal: SIG, params: { name: "TOYOTA" }, pageText: "Lookup Results: 1 Found\nTOYOTA", url: "https://x.test/", fields: ["TOYOTA"], request: null }).ok).toBe(false);
     expect(noMatchCheck({ signal: SIG, params: { name: "TOYOTA MOTOR CORPORATION" }, pageText: OFAC, url: "https://x.test/", fields: ["SOMEONE ELSE"], request: { url: "https://x.test/", post: "q=SOMEONE+ELSE" } })).toMatchObject({ ok: false });

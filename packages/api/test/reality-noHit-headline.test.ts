@@ -20,6 +20,8 @@ describe("reality: retired slugs", () => {
     expect(isRetired("fmcsa-carrier-authority")).toBe(true);
     expect(isRetired("fmcsa-usdot-status")).toBe(false);
     expect(realityOf("nj-business-license-status").verdict).toBe("feature");
+    expect(realityOf("ohio-business-license-status").verdict).toBe("feature");
+    expect(realityOf("ohio-business-license-status").why).toMatch(/business/i);
     expect(realityRank("fmcsa-carrier-authority")).toBeGreaterThan(realityRank("hacker-news-top-story"));
   });
 });

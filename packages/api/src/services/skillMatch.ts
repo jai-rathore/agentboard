@@ -50,6 +50,7 @@ const SITE_ALIASES: Record<string, string> = {
     "ofac us treasury sanctions sanctioned sdn specially designated nationals blocked persons screen check vendor supplier counterparty",
   "myfloridalicense.com": "florida fl dbpr department business professional regulation professional license lookup",
   "newjersey.mylicense.com": "new jersey nj dca division consumer affairs business registration entity status lookup",
+  "elicense.ohio.gov": "ohio oh elicense business license verification pharmacy motor vehicle repair manufactured homes lookup",
 };
 /** Words of a host name worth matching: "en.wikipedia.org" -> wikipedia; "pkg.go.dev" -> pkg, go; plus SITE_ALIASES. */
 export function hostWords(url: string | null | undefined): string {

@@ -1,7 +1,8 @@
 /**
  * find_skill hybrid retrieval (services/skillSearch.ts) over a copy of the live skill catalog
  * (fixtures/skills-catalog.json: the latest version of each public skill on agentboard-api, Oct 29, 2026, plus the
- * featured ofac-sanctions-search, florida-license-status and nj-business-license-status as of Oct 31).
+ * featured ofac-sanctions-search, florida-license-status and nj-business-license-status as of Oct 31, plus the
+ * staged ohio-business-license-status definition, which is not on the live node until it is recorded and published).
  * The node has no embedding model (production included): paraphrases must be found by FTS/trigram plus the lexical
  * feature-hashing vector, and the confidence gate decides the rest.
  */
@@ -79,6 +80,10 @@ describe("find_skill hybrid search (lexical: FTS, trigram, hashing vectors)", ()
     ["New Jersey business registration lookup", "nj-business-license-status"],
     ["NJ entity status", "nj-business-license-status"],
     ["New Jersey Division of Consumer Affairs license lookup", "nj-business-license-status"],
+    ["verify an Ohio business license by license number", "ohio-business-license-status"],
+    ["Ohio eLicense business lookup", "ohio-business-license-status"],
+    ["check an Ohio pharmacy license", "ohio-business-license-status"],
+    ["Ohio Board of Pharmacy facility license status", "ohio-business-license-status"],
   ])("%s -> %s", async (q, slug) => {
     expect((await top(q))[0]).toBe(slug);
   });
@@ -93,6 +98,7 @@ describe("find_skill hybrid search (lexical: FTS, trigram, hashing vectors)", ()
     "check license plate", "renew my driver license", "check email", "check a vendor invoice", "latest news on Russia sanctions",
     "weather in New Jersey", "Florida driver license renewal", "register to vote in New Jersey", "California contractor license lookup",
     "Texas business entity status", "screen recording",
+    "Ohio driver license renewal", "look up an Ohio nurse", "renew my Ohio driver license",
   ])("no match: %s", async (q) => {
     expect(await top(q)).toEqual([]);
     const r = await node.req("GET", `/v1/skills/find?q=${encodeURIComponent(q)}`);

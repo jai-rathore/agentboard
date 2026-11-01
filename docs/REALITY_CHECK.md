@@ -1,6 +1,6 @@
 # Reality check: would an agent actually choose Agentboard?
 
-Written Oct 30, 2026 (PT), updated Oct 31, 2026 (PT). We update it whenever a skill is added. The bar is blunt: **would a capable agent that has
+Written Oct 30, 2026 (PT), updated Nov 1, 2026 (PT). We update it whenever a skill is added. The bar is blunt: **would a capable agent that has
 web search and fetch check Agentboard first for this task?** If it would not, we do not feature the skill, even when
 the skill works.
 
@@ -44,6 +44,7 @@ reuse agent finds the skill and replays it. Both runs are signed. Times are exec
 | `ofac-sanctions-search` | 3 | 3 | 3 (row names the input) | 3 | 3 | 6 · $0.0289 · 25.8 | 0 · $0 · 6.9 | **Feature** | ASP.NET postback search with viewstate and fuzzy scoring. A fetch-only agent cannot submit it. |
 | `florida-license-status` | 3 | 3 | 3 (row's license number) | 3 | 3 | 3 · $0.0136 · 19.7 | 0 · $0 · 4.5 | **Feature** | POST-only license search with no public API. |
 | `nj-business-license-status` | 3 | 3 | 3 (row's license number) | 3 | 2 (no ToS page; "verification only", which this is) | 16 · $0.0690 · 70.1, **not verified** | 0 · $0 · 4.5, verified "Active" | **Feature** | ASP.NET postback with tightly stacked boxes that the model mis-clicks; no lookup API, only bulk roster downloads. |
+| `ohio-business-license-status` | 3 | 3 | 3 (row's license number) | 2 | 3 | not measured | not measured | **Feature** | eLicense Ohio business search: Continue, then the Business tab, then a Visualforce search. Status is a column on the row that shows the license number. No keyless API. Not on the live node until the record is published, so there is no signed cold or reuse run yet. |
 | `companies-house-last-accounts` | 2 | 2 | 3 (URL) | 3 | 3 | 6 · $0.0277 · 22.3 | 0 · $0 · 4.5 | Keep, de-emphasize | The API needs a registered key, but the company page is one GET by number. |
 | `fmcsa-usdot-status` | 3 | 2 | 3 (record keyed by USDOT) | 2 (slow at times) | 3 | 4 · $0.0125 · 14.4 | 0 · $0 · 4.5 | Keep, de-emphasize | Renamed from `fmcsa-carrier-authority`, which only ever returned USDOT status. The QCMobile API needs a webkey, but a direct GET URL exists. |
 | `fmcsa-carrier-authority` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | Retired | Its name promised operating authority; it returned USDOT status. Hidden from listings and `find_skill`; its signed history stays readable. |
@@ -158,19 +159,24 @@ Executor fixes these builds needed, all now generic:
   screening at lower scores, return all rows, or check the Address/List columns.
 - **FMCSA now says what it returns.** It was renamed `fmcsa-usdot-status`, and the old slug is retired. Operating
   authority (the L&I page) is still not covered.
-- **Coverage is thin.** There are three featured skills. An agent will check a registry only once it reliably has the
-  long tail: state license boards, court dockets, procurement portals, customs rulings. Each new site costs about
-  $0.03–0.12 of Muse to learn plus one human recording.
-- **Easy lookups dominate the catalog (9 of 13 real-site skills).** They prove the mechanism, not the value, so they
-  are no longer featured.
+- **Coverage is thin.** Three featured skills are on the live node. A fourth, `ohio-business-license-status`, scores
+  Feature and is staged in this tree; it is not live until the skill record is published. An agent will check a registry
+  only once it reliably has the long tail: state license boards, court dockets, procurement portals, customs rulings.
+  Each new site costs about $0.03–0.12 of Muse to learn plus one human recording.
+- **Easy lookups dominate the catalog (9 of 13 real-site skills on the live node).** They prove the mechanism, not the
+  value, so they are no longer featured. Publishing Ohio makes it 4 featured of 14 real-site skills.
 
 ## Would an agent use Agentboard today?
 
 **For OFAC exact-name screening, Florida license checks and NJ business-license checks: yes, I would use it.** Those are
 postback/POST forms with no keyless lookup API. Reuse answers in 3–7 s with 0 model calls, gives an input-tied value
 **or a verified no-hit**, and signs the record. On NJ and on a non-listed OFAC name, a cold agent burned 16 calls and
-60–70 s and still could not verify. **As a general tool: not yet.** There are three featured sites. Each new site costs a
-human recording plus $0.05–0.20 of Muse iteration. Pages nobody declared yet still fall to the model. For everything else in the catalog, a capable agent would call the public API directly.
+60–70 s and still could not verify. **Ohio business-license checks will join that list once the skill record is
+published.** The page is the same kind of problem (a Visualforce search, status on the row that names the license
+number, a declared no-hit line). It is not live yet, and it has no signed cold-vs-reuse numbers. **As a general tool:
+not yet.** There are three featured sites on the node. Each new site costs a human recording plus $0.05–0.20 of Muse
+iteration. Pages nobody declared yet still fall to the model. For everything else in the catalog, a capable agent would
+call the public API directly.
 
 ## Candidates reviewed (Oct 30, 2026)
 
@@ -180,6 +186,8 @@ human recording plus $0.05–0.20 of Muse iteration. Pages nobody declared yet s
 - FMCSA SAFER (renamed to USDOT status)
 - NJ Division of Consumer Affairs business license search (Oct 30). Business search only, so results are pharmacies,
   contractors and other firms, not people.
+- Ohio eLicense business license search (Nov 1, staged). Business tab and license number only. The signed record is not
+  published yet. See the scorecard row and "To make Ohio live".
 
 **Reviewed and not built:**
 - WA L&I contractor lookup and Texas TDLR license search: both states publish the same license data as keyless
@@ -201,5 +209,38 @@ human recording plus $0.05–0.20 of Muse iteration. Pages nobody declared yet s
 | Answer not input-tied | UK sanctions list search: it ORs the words, giving 142 results for "TOYOTA MOTOR CORPORATION" |
 | Captcha (Oct 30, late) | Maryland Board of Pharmacy facility search (mdbop.mylicense.com, reCAPTCHA) |
 | Privacy | Rhode Island health professional lookup (individuals only) |
-| Not this round | NC general contractors board (NCLBGC): no captcha and an explicit no-results line. But an active license's status is only on a detail page, and the results list sole proprietors by name. It is also one anonymous POST. Ohio eLicense (Salesforce) was not evaluated. |
+| Not this round (Oct 30) | NC general contractors board (NCLBGC) was deferred. Re-reviewed Nov 1; see the Nov 1 table. Ohio eLicense was not evaluated on Oct 30. |
 | Privacy | DVLA vehicle enquiry (vehicle registrations would land in a public log) |
+| Privacy and proof (Nov 1) | NC Licensing Board for General Contractors (`https://portal.nclbgc.org/Public/Search`). No captcha, no robots.txt (404, not a disallow), no terms page on the portal, and no official keyless API. License-number search is one anonymous POST to `/Public/_Search/` and returns one row (Account #, Type, Owner) in about 0.2 s. A missing number returns the exact line "No results found for search criteria." That is Pain 3 and a real no-hit line. It still does not qualify. An active license's row does not say Active (checked on company license 26344, shown as L.26344, Blythe Development, LLC). Status is only on the detail panel, which also lists named qualifiers for that company license. Inactive rows add "License Not Active" in the same cell as the account number; one archived company license's detail said "Archived - License Not Valid" and still listed no separate status column. The detail URL is an opaque key, not the license number, and the license box is `type=number`, which the current no-hit field reader does not echo. A business-only license-number flow avoids the name boxes, but the status answer is the page that names individuals. Dropped. |
+
+## Nov 1 review
+
+Probed from this environment on Nov 1, 2026. No Muse calls.
+
+**Ohio eLicense, built as `ohio-business-license-status` (staged, not published).** `https://elicense.ohio.gov/OH_VerifyLicense`.
+
+| | Score | What we saw |
+|---|---|---|
+| Need | 3 | Business license checks (pharmacy terminals and wholesalers, manufactured homes, motor vehicle repair, elevator, funeral establishments, and the other boards on the business tab). |
+| Pain | 3 | The look-up is behind a Continue button, then a Business/Individual toggle that opens on Individual, then a Visualforce AJAX search with viewstate. A GET of the URL does not return a status. No keyless API. `robots.txt` is `Allow: /`. |
+| Proof | 3 | Business license `022570050` returned one row, CVS PHARMACY #16379, status Active, in the same row as the license number. Columns include Business Name, Application/License/Endorsement #, Type, Status. A nonsense number `ZZ-NOT-A-LICENSE-999` left that number in the License Number box (`type=text`) and the table said "Your search return 0 records" (the site's wording, including the grammar). That line is the declared `empty_result`. Status is on the results row, so no `result_signal` is declared. |
+| Stable | 2 | Continue, Business, and Search completed with no captcha widget and no login (the reCAPTCHA render is commented out in the page, marked "Commented out for WAF"; the captcha container was empty). Fast when it responds. The sitekey is still in that comment, so a captcha can come back. Outside write-ups of this portal describe a WAF that sometimes blocks datacenter IPs. |
+| ToS | 3 | Public license look-up. `robots.txt` allows `/`. The privacy notice and the general terms do not ban automated reading. The general terms cover licensing transactions (applications and payments), which this skill does not submit. |
+
+The skill types only into the business License Number box. It does not fill First Name, Last Name, or the individual license box. The published example is a pharmacy facility, not a person.
+
+**NC contractors, dropped.** See the Dropped table. License-number search works and is painful, and the no-hit line is real. The active status is not on the results row, and the detail panel names individual qualifiers, so it fails the privacy bar for this round.
+
+## To make Ohio live (Nov 3)
+
+Nothing in this change writes to the production node. Filming blackout is Nov 1–2: no push or merge to `main`, and no production skill publish. On Nov 3, in order:
+
+1. Merge this branch to `main` so the Feature verdict (`packages/api/src/services/reality.ts`) and the `elicense.ohio.gov` find_skill alias deploy. Until that code is live, a published skill would list as unreviewed ("keep").
+2. Record the skill on the node with the existing pipeline (`POST /v1/skills/record`, then a verified replay). Start at `https://elicense.ohio.gov/OH_VerifyLicense`, click Continue, click Business, type a business license number (example `022570050`), click Search. The staged steps in `packages/api/test/fixtures/skills-catalog.json` are the definition the recording should match. Do not record an individual-name search.
+3. After the first verified publish, declare the no-hit line if the draft did not carry it: `POST /v1/skills/ohio-business-license-status/empty-result` with `{"text":"Your search return 0 records"}`. That publishes the next version with the same trace.
+4. Run one signed cold-vs-reuse comparison and write the numbers into the scorecard, including a failure if that is the result:
+   `SKILLS_TOKEN_FILE=… pnpm bench:reuse --skill ohio-business-license-status --input 022570050`
+   Expect on the order of $0.02–$0.30 of Muse for one cold run plus one replay. A second input worth doing is the no-hit `ZZ-NOT-A-LICENSE-999` (reuse should be 0 model calls and "Verified: no hit" once the empty-result line is declared). Stay inside the remaining Muse cap.
+5. Optional, and only after a verified replay: add `ohio-business-license-status` to `PUBLIC_REPLAY_SKILLS` if it should be on the public `try_skill` list. The steps are a search, not a submit, purchase, send, or delete.
+
+Cold vs reuse was not measured here. This environment has no Meta API key, and a signed benchmark writes records on the node that hosts the published skill. Muse spent on this review: $0.
