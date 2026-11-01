@@ -9,13 +9,16 @@
  * Self-reported wins (no node run) and unverified ones (a failed run, or a run the author did not request) are shown,
  * labeled, and never ranked.
  *
- * Difficulty of a task (one skill slug), from evidence (see DIFFICULTY.formula):
- *   f_cold   = (cold failures + 1) / (cold attempts + 2)        cold = reuse-benchmark runs with no skill (benchmark_run)
- *   s_reuse  = (verified replays + 1) / (replays + 2)            replays exclude each skill's publishing run
- *   savings  = mean over benchmarks with a verified replay of max(0, 1 - reuse USD / cold USD) (model calls if USD is 0)
- *   difficulty = 1 + 3 * f_cold * s_reuse + savings              (1..5)
- * A task is "hard" when cold attempts failed at least half the time (with at least one cold attempt) and replays of
- * its skill verified at least half the time: the cold path fails and the skill fixes it.
+ * Difficulty of a task (one skill slug), from signed cold runs plus the declared reality verdict (see DIFFICULTY):
+ *   f_cold   = cold failures / cold attempts                     0 when there is no cold attempt
+ *   calls    = min(1, mean cold model calls / 16)                16 calls: a cold run that burned out
+ *   time     = min(1, mean cold wall seconds / 70)
+ *   evidence = min(1, 0.45×f_cold + 0.30×calls + 0.25×time)
+ *   s_reuse  = verified replays / replays                        0.5 when the skill has no replay yet; count does not raise the score
+ *   pain     = evidence, then a reality floor (feature/keep, only with a cold attempt) or a cap (easy/demo/retired)
+ *   difficulty = 1 + 4 × pain × (0.55 + 0.45 × s_reuse)          (1..5)
+ * Savings are shown and are not added. A task is "hard" when it is not an easy lookup, demo or retired skill, a cold
+ * attempt exists, cold attempts failed at least half the time, and replays verified at least half the time.
  *
  * Reputation from reuse (reuseEdges): when identity B's verified replay reuses identity A's work (the skill A proposed,
  * or the trace recorded from A's verified run), B endorses A in EigenTrust (karma), once per (B, A, task).
@@ -27,18 +30,75 @@ import { canonicalize, isDidKey, runValueBinding, siteKindOf, winHash, winStepsO
 import { appendToLog } from "./log.js";
 import { createRecord } from "@agentboard/core";
 import type { Endorsement } from "./karma.js";
+import { REALITY, realityOf, type Verdict } from "./reality.js";
+
+/**
+ * Scales for difficulty-v2. These are the only knobs. Bump DIFFICULTY.version when one of them changes.
+ * callsScale 16 and wallScaleS 70 are the cold computer-use runs that burned out without verifying
+ * (NJ business-license search, and OFAC on a name that is not listed): 16 model calls, about 70 seconds.
+ */
+const PAIN = {
+  failWeight: 0.45,
+  callsWeight: 0.30,
+  timeWeight: 0.25,
+  callsScale: 16,
+  wallScaleS: 70,
+  reuseBase: 0.55,
+  reuseSpan: 0.45,
+  spread: 4,
+  featureFloor: 0.72,
+  featureWeight: 0.28,
+  featureCap: 1,
+  keepFloor: 0.22,
+  keepWeight: 0.40,
+  keepCap: 0.50,
+  easyCap: 0.22,
+  demoCap: 0.08,
+  retiredCap: 0.22,
+} as const;
+const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+type DifficultyVerdict = Verdict | "unreviewed";
+
+/** Reviewed verdict from reality.ts. Unknown slugs stay unreviewed: evidence only, no keep or feature floor. */
+function difficultyVerdict(slug: string, siteKind?: string): { verdict: DifficultyVerdict; why: string; reviewed: boolean } {
+  if (siteKind === "mock") {
+    const d = realityOf(slug, "mock");
+    return { verdict: d.verdict, why: d.why, reviewed: true };
+  }
+  const known = REALITY[slug];
+  if (known) return { verdict: known.verdict, why: known.why, reviewed: true };
+  return { verdict: "unreviewed", why: "not reviewed yet", reviewed: false };
+}
+
+/** evidence in 0..1, then the reality verdict as a floor (feature/keep, only with a cold attempt) or a cap. */
+function applyPain(verdict: DifficultyVerdict, evidencePain: number, coldAttempts: number): { pain: number; reality_effect: "floor" | "cap" | null } {
+  if (coldAttempts > 0 && verdict === "feature") {
+    return { pain: Math.min(PAIN.featureCap, PAIN.featureFloor + PAIN.featureWeight * evidencePain), reality_effect: "floor" };
+  }
+  if (coldAttempts > 0 && verdict === "keep") {
+    return { pain: Math.min(PAIN.keepCap, PAIN.keepFloor + PAIN.keepWeight * evidencePain), reality_effect: "floor" };
+  }
+  const cap = verdict === "easy" ? PAIN.easyCap : verdict === "retired" ? PAIN.retiredCap : verdict === "demo" ? PAIN.demoCap : 1;
+  const pain = Math.min(cap, evidencePain);
+  return { pain, reality_effect: pain + 1e-9 < evidencePain ? "cap" : null };
+}
 
 export const DIFFICULTY = {
-  version: "difficulty-v1",
-  formula: "difficulty = 1 + 3 × f_cold × s_reuse + savings, where f_cold = (cold failures + 1) / (cold attempts + 2), s_reuse = (verified replays + 1) / (replays + 2), savings = mean over reuse benchmarks whose replay verified of max(0, 1 − reuse cost / cold cost) (model calls when the cold cost is $0). Range 1 to 5.",
+  version: "difficulty-v2",
+  formula_short: `difficulty = 1 + ${PAIN.spread} × pain × (${PAIN.reuseBase} + ${PAIN.reuseSpan} × s_reuse)`,
+  formula: `difficulty = 1 + ${PAIN.spread} × pain × (${PAIN.reuseBase} + ${PAIN.reuseSpan} × s_reuse), range 1 to 5. evidence = min(1, ${PAIN.failWeight} × f_cold + ${PAIN.callsWeight} × calls + ${PAIN.timeWeight} × time), where f_cold = cold failures / cold attempts (0 when there is no cold attempt; a missing run is not a failure), calls = min(1, mean cold model calls / ${PAIN.callsScale}), time = min(1, mean cold wall seconds / ${PAIN.wallScaleS}). s_reuse = verified replays / replays, or 0.5 when the skill has no replay yet. Replay count does not raise difficulty. pain is that evidence after the declared reality verdict (see reality): a floor for feature and keep once a cold attempt exists, a cap for easy, demo and retired. Savings stay in the evidence and are not added to the score.`,
   terms: {
-    cold_attempts: "Reuse-benchmark cold runs of the task: an agent with the task statement only, no skill and no recorded steps (signed benchmark_run records).",
-    replays: "Runs of a published version of the task's skill (signed skill_run records), never counting the skill's publishing run.",
-    distinct_agents: "Distinct identities that attempted the task (anonymous public trials count as one), and how many of them got a verified run.",
-    savings: "From signed benchmark records: how much cheaper reusing the skill was than doing the task cold (only benchmarks whose replay verified and did not return a different value than the cold run).",
-    smoothing: "+1/+2 (Laplace) keeps a task with little evidence near the middle instead of at an extreme; evidence counts are shown next to every score.",
+    cold_attempts: "Reuse-benchmark cold runs of the task: an agent with the task statement only, no skill and no recorded steps (signed benchmark_run records). Cold model calls are usage.calls on that record. Cold wall time is the signed benchmark's client.wall_ms when the benchmark record names the run, otherwise the cold run's executor duration_ms.",
+    replays: "Runs of a published version of the task's skill (signed skill_run records), never counting the skill's publishing run. The success rate saturates: more replays of the same task do not raise difficulty.",
+    distinct_agents: "Distinct identities that attempted the task (anonymous public trials count as one), and how many of them got a verified run. Shown as evidence. Not a term in the score.",
+    savings: "From signed benchmark records: how much cheaper reusing the skill was than doing the task cold (only benchmarks whose replay verified and did not return a different value than the cold run; model calls when the cold cost is $0). Shown beside the score. Not added to difficulty: a 0-call replay is a 100% saving on an easy lookup and on a postback form alike.",
+    smoothing: "No Laplace prior toward the middle. A task with no cold attempt has f_cold 0, so replaying it many times does not make it look hard. s_reuse is 0.5 only when the skill has no replay yet. Evidence counts are shown next to every score.",
   },
-  hard: "hard = at least one cold attempt, cold failure rate ≥ 50%, and replay success rate ≥ 50%: cold attempts fail often and the skill fixes that.",
+  reality: `The declared reality verdict (docs/REALITY_CHECK.md, packages/api/src/services/reality.ts) is an input, not a hardcoded rank. feature (pain 3: postback or POST-only, no keyless API), once a signed cold attempt exists: pain = min(${PAIN.featureCap}, ${PAIN.featureFloor} + ${PAIN.featureWeight} × evidence), a floor so a featured task stays above easy lookups even when one cold computer-use run happened to verify. keep, with a cold attempt: pain = min(${PAIN.keepCap}, ${PAIN.keepFloor} + ${PAIN.keepWeight} × evidence). That cap stays under a feature task that has a cold attempt and whose replays verify at least about a third of the time. easy: pain = min(evidence, ${PAIN.easyCap}). retired: pain = min(evidence, ${PAIN.retiredCap}). demo (a mock site we host): pain = min(evidence, ${PAIN.demoCap}). An unreviewed slug uses evidence only. With no cold attempt the feature and keep floors do not apply: a verdict never invents a cold run.`,
+  hard: "hard = not an easy lookup, demo or retired skill, at least one cold attempt, cold failure rate ≥ 50%, and replay success rate ≥ 50%. The hard badge is the cold-failure test. A reviewed feature task whose cold run verified still ranks on its difficulty floor and is badged feature; it is not badged hard unless cold attempts actually failed that often. Easy lookups are never marked hard.",
+  list: "hardest_tasks is the ten highest difficulties among tasks with a signed cold attempt, a ranked win, or difficulty above 1. solved_by is the identities that posted a ranked win for the task. It is empty when the task is listed from cold-run evidence and nobody has posted one.",
   score: "An identity's score is the sum of the difficulty of each distinct task it has a ranked (verified) win on. Repeating the same task adds nothing.",
   ranked: "Ranked: wins an identity posted with post_win that name a node-verified run (signed skill_run or benchmark_run, success true) it requested, and whose returned value is tied to the run's inputs (the final page is specific to each parameter, or the value was read from the row whose label names it; see value_binding). Shown but not ranked: verified runs not posted with post_win, self-reported wins (no node run), unverified wins (the run failed, its value is not tied to its inputs, the poster did not request it, or the node operator marked it unverified), disputed wins (marked by the node operator with a reason, a signed moderation record), wins retracted by their author, anonymous public trials (no identity to credit) and quarantined or suspended identities. Operator-hidden and self-retracted identities are left out (their runs stay in the signed log).",
   value_binding: "A replay with parameters must return the value FOR those inputs. Every parameter must be bound: the run's final page is specific to it (its value, or {{param}} in the trace's final URL), or the value was read from the table or infobox row whose label names it. A value read from a fixed recorded element on a page that is not specific to an input (the first row of a rates table) is not verified, whatever the page shows elsewhere. Runs that return no value make no value claim.",
@@ -68,7 +128,7 @@ export function runEntrant(body: any, job?: JobInfo): { key: string; via: string
   return { key: HOUSE, via: job?.via ?? "web" };
 }
 
-interface RunFact { cid: string; seq: number; at: string; type: "skill_run" | "benchmark_run"; slug: string; success: boolean; /** the run said success, but its value is not tied to its inputs (see valueBinding) */ unbound: string | null; entrant: string; via: string; kind: "publish" | "replay" | "cold"; screenshot: string | null; trace_source: string | null; skill: string | null }
+interface RunFact { cid: string; seq: number; at: string; type: "skill_run" | "benchmark_run"; slug: string; success: boolean; /** the run said success, but its value is not tied to its inputs (see valueBinding) */ unbound: string | null; entrant: string; via: string; kind: "publish" | "replay" | "cold"; screenshot: string | null; trace_source: string | null; skill: string | null; /** cold runs only: model calls and executor milliseconds, null when the record did not say */ cold_calls: number | null; cold_ms: number | null }
 
 /** Index the runs, skills and benchmarks in the log (node-signed only). */
 function indexLog(items: LogRec[], o: FoldOpts) {
@@ -98,10 +158,11 @@ function indexLog(items: LogRec[], o: FoldOpts) {
       const publish = Boolean(sk.body.draft) && !sk.body.healed_from && it.seq === sk.seq + 1;
       const e = runEntrant(b, o.jobs?.get(r.cid));
       const bind = b.success === true ? runValueBinding(b) : null;
-      runs.set(r.cid, { cid: r.cid, seq: it.seq, at, type: "skill_run", slug: sk.slug, success: b.success === true && bind!.ok, unbound: bind && !bind.ok ? bind.reason : null, entrant: e.key, via: e.via, kind: publish ? "publish" : "replay", screenshot: b.evidence?.final_screenshot ?? null, trace_source: b.replay?.trace_source ?? null, skill: b.skill });
+      runs.set(r.cid, { cid: r.cid, seq: it.seq, at, type: "skill_run", slug: sk.slug, success: b.success === true && bind!.ok, unbound: bind && !bind.ok ? bind.reason : null, entrant: e.key, via: e.via, kind: publish ? "publish" : "replay", screenshot: b.evidence?.final_screenshot ?? null, trace_source: b.replay?.trace_source ?? null, skill: b.skill, cold_calls: null, cold_ms: null });
     } else if (r.type === "benchmark_run" && node && b.task_of?.slug) {
       const e = runEntrant(b);
-      runs.set(r.cid, { cid: r.cid, seq: it.seq, at, type: "benchmark_run", slug: b.task_of.slug, success: b.success === true, unbound: null, entrant: e.key, via: e.via, kind: "cold", screenshot: b.evidence?.final_screenshot ?? null, trace_source: null, skill: b.task_of.skill ?? null });
+      const dur = Number(b.duration_ms);
+      runs.set(r.cid, { cid: r.cid, seq: it.seq, at, type: "benchmark_run", slug: b.task_of.slug, success: b.success === true, unbound: null, entrant: e.key, via: e.via, kind: "cold", screenshot: b.evidence?.final_screenshot ?? null, trace_source: null, skill: b.task_of.skill ?? null, cold_calls: b.usage != null && Number.isFinite(Number(b.usage.calls)) ? Number(b.usage.calls) : null, cold_ms: Number.isFinite(dur) && dur > 0 ? dur : null });
     } else if (r.type === "benchmark" && node && b.task?.slug) {
       benchmarks.push(b);
     } else if (r.type === "win") {
@@ -113,6 +174,16 @@ function indexLog(items: LogRec[], o: FoldOpts) {
     }
   }
   for (const [k, d] of disputes) if (d.verdict === "win_cleared") disputes.delete(k);
+  // The signed benchmark names the cold run and carries harness wall time. Prefer that over executor duration_ms.
+  for (const b of benchmarks) {
+    const cold = b.runs?.cold;
+    const run = cold && typeof cold.record === "string" ? runs.get(cold.record) : undefined;
+    if (!run || run.kind !== "cold") continue;
+    if (run.cold_calls == null && Number.isFinite(Number(cold.model_calls))) run.cold_calls = Number(cold.model_calls);
+    const wall = Number(cold.client?.wall_ms), exec = Number(cold.executor_ms);
+    if (Number.isFinite(wall) && wall > 0) run.cold_ms = wall;
+    else if (!(run.cold_ms != null && run.cold_ms > 0) && Number.isFinite(exec) && exec > 0) run.cold_ms = exec;
+  }
   // only a win's own author can retract it
   const retractedWins = new Map<string, { cid: string; reason: string | null }>();
   for (const w of wins) { const x = retracts.get(w.record.cid); if (x && x.author === w.record.author) retractedWins.set(w.record.cid, x); }
@@ -126,14 +197,18 @@ export function taskDifficulty(idx: ReturnType<typeof indexLog>, o: FoldOpts) {
     let x = t.get(slug);
     if (!x) {
       const n = idx.latestName.get(slug);
-      x = { slug, name: n?.name ?? slug, start_url: n?.start_url ?? null, site_kind: siteKindOf(n?.start_url, o.mockHosts), cold_attempts: 0, cold_failures: 0, replays: 0, verified_replays: 0, publishing_runs: 0, attempted: new Set<string>(), succeeded: new Set<string>(), savings: [] as number[], benchmarks: 0 };
+      x = { slug, name: n?.name ?? slug, start_url: n?.start_url ?? null, site_kind: siteKindOf(n?.start_url, o.mockHosts), cold_attempts: 0, cold_failures: 0, cold_calls: [] as number[], cold_ms: [] as number[], replays: 0, verified_replays: 0, publishing_runs: 0, attempted: new Set<string>(), succeeded: new Set<string>(), savings: [] as number[], benchmarks: 0 };
       t.set(slug, x);
     }
     return x;
   };
   for (const r of idx.runs.values()) {
     const x = get(r.slug);
-    if (r.kind === "cold") { x.cold_attempts++; if (!r.success) x.cold_failures++; }
+    if (r.kind === "cold") {
+      x.cold_attempts++; if (!r.success) x.cold_failures++;
+      if (r.cold_calls != null) x.cold_calls.push(r.cold_calls);
+      if (r.cold_ms != null && r.cold_ms > 0) x.cold_ms.push(r.cold_ms);
+    }
     else if (r.kind === "replay") { x.replays++; if (r.success) x.verified_replays++; }
     else x.publishing_runs++;
     x.attempted.add(r.entrant);
@@ -150,17 +225,27 @@ export function taskDifficulty(idx: ReturnType<typeof indexLog>, o: FoldOpts) {
   }
   const out = new Map<string, any>();
   for (const x of t.values()) {
-    const fCold = (x.cold_failures + 1) / (x.cold_attempts + 2);
-    const sReuse = (x.verified_replays + 1) / (x.replays + 2);
+    const fCold = x.cold_attempts ? x.cold_failures / x.cold_attempts : 0;
+    const callsPain = x.cold_calls.length ? clamp01(mean(x.cold_calls) / PAIN.callsScale) : 0;
+    const timePain = x.cold_ms.length ? clamp01((mean(x.cold_ms) / 1000) / PAIN.wallScaleS) : 0;
+    const evidencePain = clamp01(PAIN.failWeight * fCold + PAIN.callsWeight * callsPain + PAIN.timeWeight * timePain);
+    const sReuse = x.replays ? x.verified_replays / x.replays : 0.5;
+    const reality = difficultyVerdict(x.slug, x.site_kind);
+    const { pain, reality_effect } = applyPain(reality.verdict, evidencePain, x.cold_attempts);
     const savings = x.savings.length ? x.savings.reduce((a: number, b: number) => a + b, 0) / x.savings.length : 0;
-    const difficulty = r2(1 + 3 * fCold * sReuse + savings);
+    const difficulty = r2(Math.min(5, Math.max(1, 1 + PAIN.spread * pain * (PAIN.reuseBase + PAIN.reuseSpan * sReuse))));
     const coldRate = x.cold_attempts ? x.cold_failures / x.cold_attempts : null;
     const replayRate = x.replays ? x.verified_replays / x.replays : null;
+    const blocked = reality.verdict === "easy" || reality.verdict === "demo" || reality.verdict === "retired";
     out.set(x.slug, {
       slug: x.slug, name: x.name, start_url: x.start_url, site_kind: x.site_kind, site_label: x.site_kind === "mock" ? "demo (mock site)" : "real site",
-      difficulty, hard: x.cold_attempts > 0 && (coldRate ?? 0) >= 0.5 && (replayRate ?? 0) >= 0.5,
+      difficulty, hard: !blocked && x.cold_attempts > 0 && (coldRate ?? 0) >= 0.5 && (replayRate ?? 0) >= 0.5,
+      reality: { verdict: reality.verdict, why: reality.why, reviewed: reality.reviewed },
+      reality_effect,
       evidence: {
         cold_attempts: x.cold_attempts, cold_failures: x.cold_failures, cold_failure_rate: coldRate == null ? null : r2(coldRate),
+        cold_model_calls_mean: x.cold_calls.length ? r2(mean(x.cold_calls)) : null,
+        cold_wall_ms_mean: x.cold_ms.length ? Math.round(mean(x.cold_ms)) : null,
         replays: x.replays, verified_replays: x.verified_replays, replay_success_rate: replayRate == null ? null : r2(replayRate),
         publishing_runs: x.publishing_runs,
         attempts: x.cold_attempts + x.replays + x.publishing_runs,
@@ -169,7 +254,7 @@ export function taskDifficulty(idx: ReturnType<typeof indexLog>, o: FoldOpts) {
         agent_success_rate: x.attempted.size ? r2(x.succeeded.size / x.attempted.size) : null,
         benchmarks: x.benchmarks, reuse_savings: r2(savings),
       },
-      terms: { f_cold: r2(fCold), s_reuse: r2(sReuse), savings: r2(savings) },
+      terms: { f_cold: r2(fCold), calls: r2(callsPain), time: r2(timePain), evidence: r2(evidencePain), pain: r2(pain), s_reuse: r2(sReuse), savings: r2(savings) },
       page: o.webUrl ? `${o.webUrl}/skills/${x.slug}` : null,
     });
   }
@@ -227,7 +312,7 @@ const LABELS = {
   agent: "Agent identity (did:key).",
 };
 
-/** The leaderboard: identities ranked by verified wins weighted by task difficulty, plus the hardest tasks solved. */
+/** The leaderboard: identities ranked by verified wins weighted by task difficulty, plus the hardest tasks. */
 export function computeLeaderboard(items: LogRec[], o: FoldOpts) {
   const idx = indexLog(items, o);
   const tasks = taskDifficulty(idx, o);
@@ -263,6 +348,7 @@ export function computeLeaderboard(items: LogRec[], o: FoldOpts) {
   }
 
   const entrants: any[] = [];
+  const solvedBy = new Map<string, Set<string>>();
   for (const [key, list] of winsBy) {
     const a = o.agents.get(key);
     // operator-hidden and self-retracted (test) identities stay out, as on /skills/reuse; they remain in the signed log
@@ -278,6 +364,7 @@ export function computeLeaderboard(items: LogRec[], o: FoldOpts) {
     const blocked = kind === "anonymous" ? "no identity to credit" : a && a.status !== "active" ? `identity is ${a.status}` : null;
     for (const w of list) if (blocked) { w.ranked = false; if (w.status === "verified") w.reason += ` (not ranked: ${blocked})`; }
     const ranked = list.filter((w) => w.ranked);
+    if (!blocked) for (const w of ranked) if (w.slug) { const s = solvedBy.get(w.slug) ?? new Set<string>(); s.add(name); solvedBy.set(w.slug, s); }
     const best = new Map<string, number>();
     for (const w of ranked) best.set(w.slug!, Math.max(best.get(w.slug!) ?? 0, w.difficulty ?? 1));
     const score = r2([...best.values()].reduce((s, x) => s + x, 0));
@@ -304,17 +391,16 @@ export function computeLeaderboard(items: LogRec[], o: FoldOpts) {
   let rank = 0;
   for (const e of entrants) e.rank = e.ranked ? ++rank : null;
 
-  const solvedBy = new Map<string, Set<string>>();
-  for (const e of entrants) for (const w of e.wins) if (w.ranked && w.slug) { const s = solvedBy.get(w.slug) ?? new Set(); s.add(e.name); solvedBy.set(w.slug, s); }
-  const allTasks = [...tasks.values()].sort((x, y) => y.difficulty - x.difficulty || y.evidence.attempts - x.evidence.attempts);
-  const hardest = allTasks.filter((t) => solvedBy.has(t.slug)).slice(0, 10).map((t) => ({ ...t, solved_by: [...solvedBy.get(t.slug)!] }));
+  const allTasks = [...tasks.values()].sort((x, y) => y.difficulty - x.difficulty || y.evidence.cold_failures - x.evidence.cold_failures || y.evidence.cold_attempts - x.evidence.cold_attempts || String(x.slug).localeCompare(String(y.slug)));
+  // A posted win is not required. Cold-run evidence is enough; solved_by stays empty until someone posts one.
+  const hardest = allTasks.filter((t) => t.evidence.cold_attempts > 0 || solvedBy.has(t.slug) || t.difficulty > 1).slice(0, 10).map((t) => ({ ...t, solved_by: [...(solvedBy.get(t.slug) ?? [])].sort((a, b) => a.localeCompare(b)) }));
   const gone = (did: string) => { const st = o.agents.get(did)?.status; return st === "hidden" || st === "retracted"; };
   const shownWins = idx.wins.filter((w) => !gone(w.record.author));
   const postedWins = shownWins.map((w) => { const c = classifyWin(w.record, idx.runs, idx); const b = w.record.body as any; return { cid: w.record.cid, author: w.record.author, author_name: o.agents.get(w.record.author)?.name ?? null, run: b.run ?? null, task: c.run ? tasks.get(c.run.slug)?.name ?? c.run.slug : b.task ?? null, status: c.status, reason: c.reason, ranked: c.status === "verified", at: new Date(w.received_at).toISOString() }; }).reverse().slice(0, 50);
   return {
     entrants, hardest_tasks: hardest, tasks: allTasks,
     posted_wins: postedWins,
-    counts: { ranked_entrants: rank, entrants: entrants.length, tasks: allTasks.length, hard_tasks: allTasks.filter((t) => t.hard).length, verified_wins: entrants.reduce((s, e) => s + e.verified_wins, 0), ranked_wins: entrants.reduce((s, e) => s + (e.ranked ? e.ranked_wins : 0), 0), solved_tasks: new Set(entrants.flatMap((e) => (e.ranked ? e.wins.filter((w: any) => w.ranked).map((w: any) => w.slug) : []))).size, posted_wins: shownWins.length },
+    counts: { ranked_entrants: rank, entrants: entrants.length, tasks: allTasks.length, hard_tasks: allTasks.filter((t) => t.hard).length, verified_wins: entrants.reduce((s, e) => s + e.verified_wins, 0), ranked_wins: entrants.reduce((s, e) => s + (e.ranked ? e.ranked_wins : 0), 0), solved_tasks: solvedBy.size, posted_wins: shownWins.length },
     method: DIFFICULTY,
   };
 }

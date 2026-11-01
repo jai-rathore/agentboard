@@ -22,7 +22,7 @@ const item = (rec: SignedRecord): LogRec => ({ seq: ++seq, received_at: new Date
 // distinct created_at per record: identical bodies signed in the same millisecond would share a cid
 let tick = 0;
 const at = () => new Date(T0 + ++tick);
-const skill = (slug: string, o: { draft?: boolean; proposer?: string } = {}) => item(createRecord(NODE, "skill", { slug, version: 1, prev: null, skill: { name: `Task ${slug}`, params: [], steps: [] }, source: { start_url: "https://example.org/" }, ...(o.draft ? { draft: "d" } : {}), ...(o.proposer ? { proposal: { proposer: o.proposer, cid: "x" } } : {}) }, at()));
+const skill = (slug: string, o: { draft?: boolean; proposer?: string; start_url?: string } = {}) => item(createRecord(NODE, "skill", { slug, version: 1, prev: null, skill: { name: `Task ${slug}`, params: [], steps: [] }, source: { start_url: o.start_url ?? "https://example.org/" }, ...(o.draft ? { draft: "d" } : {}), ...(o.proposer ? { proposal: { proposer: o.proposer, cid: "x" } } : {}) }, at()));
 const run = (skillCid: string, by: KeyPair | "web" | "public", success = true, extra: Record<string, unknown> = {}) => item(createRecord(NODE, "skill_run", {
   skill: skillCid, success, params: {}, start_url: "https://example.org/", actions: [{ turn: 1, type: "click", detail: "click go", approval: "auto", checks: [] }],
   evidence: { final_screenshot: "a".repeat(64), gif: null },
@@ -49,8 +49,9 @@ describe("difficulty and leaderboard (pure fold)", () => {
     ];
     const lb = computeLeaderboard(items, opts([[A, "alpha"], [B, "beta"]]));
     const h = lb.tasks.find((t: any) => t.slug === "hard-task")!, e = lb.tasks.find((t: any) => t.slug === "easy-task")!;
-    // f_cold = (3+1)/(3+2) = 0.8; s_reuse = (2+1)/(3+2) = 0.6; no benchmarks -> savings 0; 1 + 3*0.8*0.6 = 2.44
-    expect(h.difficulty).toBe(2.44);
+    // unreviewed: f_cold = 3/3 = 1, no calls or wall time, evidence = 0.45; s_reuse = 2/3; 1 + 4 × 0.45 × (0.55 + 0.45 × 2/3) = 2.53
+    expect(h.difficulty).toBe(2.53);
+    expect(e.difficulty).toBe(1);
     expect(h.hard).toBe(true);
     expect(h.evidence).toMatchObject({ cold_attempts: 3, cold_failures: 3, replays: 3, verified_replays: 2, publishing_runs: 1 });
     expect(e.hard).toBe(false);
@@ -186,6 +187,77 @@ describe("difficulty and leaderboard (pure fold)", () => {
     expect(edges.map((e) => `${e.from === B.did ? "B" : e.from === C.did ? "C" : "?"}->${e.to === A.did ? "A" : e.to === B.did ? "B" : "?"}`).sort()).toEqual(["B->A", "C->B"]);
     expect(edges.every((e) => e.weight === 2)).toBe(true);
   });
+
+  it("ranks featured cold pain above easy lookups, and lists a task with no posted win", () => {
+    seq = 0;
+    const njSkill = skill("nj-business-license-status");
+    const flSkill = skill("florida-license-status");
+    const rubySkill = skill("rubygems-version");
+    const goSkill = skill("go-package-version");
+    const ofacSkill = skill("ofac-sanctions-search");
+    const pypiSkill = skill("pypi-package-version");
+    const shopSkill = skill("shop-mock-purchase", { start_url: "https://agentboard.test/demo/shop/" });
+    const coldRun = (slug: string, skillCid: string, success: boolean, calls: number, ms: number) => item(createRecord(NODE, "benchmark_run", {
+      benchmark: "b", role: "cold", task_of: { slug, skill: skillCid }, requested_by: { via: "benchmark", agent: C.did },
+      success, actions: [], evidence: { final_screenshot: "b".repeat(64) }, usage: { calls, usd: 0.02 }, duration_ms: ms,
+    }, at()));
+    const reps = (cid: string, n: number, ok = true) => Array.from({ length: n }, () => run(cid, ok ? A : B, ok));
+    const njCold = coldRun("nj-business-license-status", njSkill.record.cid, false, 16, 70119);
+    const flCold = coldRun("florida-license-status", flSkill.record.cid, true, 3, 1000);
+    const rubyCold = coldRun("rubygems-version", rubySkill.record.cid, true, 4, 1000);
+    const pypiCold = coldRun("pypi-package-version", pypiSkill.record.cid, false, 16, 70000);
+    const shopCold = coldRun("shop-mock-purchase", shopSkill.record.cid, false, 16, 70000);
+    const njReps = [...reps(njSkill.record.cid, 4), run(njSkill.record.cid, B, false)];
+    const flReps = [...reps(flSkill.record.cid, 7), run(flSkill.record.cid, B, false)];
+    const rubyReps = reps(rubySkill.record.cid, 8);
+    const bench = (slug: string, coldRec: LogRec, calls: number, wall: number, success: boolean) => item(createRecord(NODE, "benchmark", {
+      task: { slug },
+      runs: {
+        cold: { record: coldRec.record.cid, success, model_calls: calls, usd: 0.02, executor_ms: wall, client: { wall_ms: wall } },
+        reuse: { success: true, model_calls: 0, usd: 0 },
+      },
+      comparison: { values_match: true },
+    }, at()));
+    const items = [
+      njSkill, flSkill, rubySkill, goSkill, ofacSkill, pypiSkill, shopSkill,
+      njCold, flCold, rubyCold, pypiCold, shopCold,
+      ...njReps, ...flReps, ...rubyReps, ...reps(goSkill.record.cid, 10), ...reps(ofacSkill.record.cid, 5), ...reps(pypiSkill.record.cid, 8), ...reps(shopSkill.record.cid, 4),
+      posted(A, rubyReps[0]),
+      bench("florida-license-status", flCold, 3, 19731, true),
+      bench("rubygems-version", rubyCold, 4, 27341, true),
+    ];
+    const lb = computeLeaderboard(items, { ...opts([[A, "alpha"], [B, "beta"]]), mockHosts: ["agentboard.test"] });
+    const task = (slug: string) => lb.tasks.find((t: any) => t.slug === slug);
+    const nj = task("nj-business-license-status"), fl = task("florida-license-status"), ruby = task("rubygems-version");
+    const go = task("go-package-version"), ofac = task("ofac-sanctions-search"), pypi = task("pypi-package-version"), shop = task("shop-mock-purchase");
+    // NJ: cold 16 calls / 70.1 s, not verified. pain = 1, s_reuse = 4/5, difficulty = 1 + 4 × 0.91 = 4.64
+    expect(nj).toMatchObject({ difficulty: 4.64, hard: true, reality_effect: "floor", reality: { verdict: "feature", reviewed: true } });
+    expect(nj.evidence).toMatchObject({ cold_failures: 1, cold_attempts: 1, cold_model_calls_mean: 16, cold_wall_ms_mean: 70119 });
+    // Florida's cold run verified. Declared feature pain still ranks it; wall time comes from the benchmark, not duration_ms.
+    expect(fl).toMatchObject({ difficulty: 3.85, hard: false, reality_effect: "floor", reality: { verdict: "feature" } });
+    expect(fl.evidence.cold_wall_ms_mean).toBe(19731);
+    expect(fl.evidence.cold_model_calls_mean).toBe(3);
+    // RubyGems: 0 cold failures, a 100% saving, 8 verified replays. The saving is shown and does not add +1. Capped as an easy lookup.
+    expect(ruby.evidence.reuse_savings).toBe(1);
+    expect(ruby).toMatchObject({ difficulty: 1.69, hard: false, reality: { verdict: "easy" } });
+    expect(ruby.difficulty).toBeLessThan(2);
+    // No cold attempt: replay count does not raise it, and the feature floor does not apply.
+    expect(go).toMatchObject({ difficulty: 1, hard: false, reality_effect: null, reality: { verdict: "easy" } });
+    expect(ofac).toMatchObject({ difficulty: 1, hard: false, reality_effect: null, reality: { verdict: "feature" } });
+    // A burned-out cold run on a public API is still an easy lookup: capped, never hard.
+    expect(pypi).toMatchObject({ difficulty: 1.88, hard: false, reality_effect: "cap", reality: { verdict: "easy" } });
+    expect(shop).toMatchObject({ difficulty: 1.32, hard: false, reality_effect: "cap", reality: { verdict: "demo" } });
+    expect(lb.hardest_tasks.map((t: any) => t.slug).slice(0, 3)).toEqual(["nj-business-license-status", "florida-license-status", "pypi-package-version"]);
+    expect(lb.hardest_tasks[0].solved_by).toEqual([]);
+    expect(lb.hardest_tasks.find((t: any) => t.slug === "rubygems-version").solved_by).toEqual(["alpha"]);
+    expect(lb.hardest_tasks.some((t: any) => t.slug === "go-package-version" || t.slug === "ofac-sanctions-search")).toBe(false);
+    expect(lb.entrants.find((e: any) => e.name === "alpha").hardest_task).toEqual({ slug: "rubygems-version", difficulty: 1.69 });
+    expect(nj.difficulty).toBeGreaterThan(fl.difficulty);
+    expect(fl.difficulty).toBeGreaterThan(pypi.difficulty);
+    expect(lb.method.version).toBe("difficulty-v2");
+    expect(lb.method.reality).toMatch(/not a hardcoded rank/);
+    expect(lb.method.list).toMatch(/solved_by/);
+  });
 });
 
 describe("win records on a node", () => {
@@ -229,7 +301,8 @@ describe("win records on a node", () => {
     const w = lb.entrants.find((e: any) => e.did === agent.did);
     expect(w).toMatchObject({ ranked: true, rank: 1, name: "winner", posted_wins: 1 });
     expect(lb.entrants.find((e: any) => e.did === other.did)).toMatchObject({ ranked: false, unverified_wins: 1 });
-    expect(lb.method.formula).toMatch(/difficulty = 1 \+ 3/);
+    expect(lb.method.formula).toMatch(/difficulty = 1 \+ 4/);
+    expect(lb.method.version).toBe("difficulty-v2");
     expect(lb.hardest_tasks[0].slug).toBe("node-task");
     expect((await node.req("GET", "/openapi.json")).body.paths["/v1/leaderboard"]).toBeTruthy();
   });
