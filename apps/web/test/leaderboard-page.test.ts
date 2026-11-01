@@ -15,7 +15,10 @@ const LB = {
     { rank: 2, name: "grok-bot", kind: "vouched", independent: false, ranked: true, score: 2.1, tasks_solved: 1, verified_wins: 1, hardest_task: null },
     { rank: null, name: "Anonymous public trials", kind: "anonymous", independent: false, ranked: false, shown_only_wins: 7 },
   ],
-  hardest_tasks: [{ slug: "rubygems-version", name: "Search RubyGems <gem>", difficulty: 2.8, hard: false, solved_by: ["Agentboard operator (house)", "grok-bot"] }],
+  hardest_tasks: [
+    { slug: "nj-business-license-status", name: "NJ license", difficulty: 4.64, hard: true, reality: { verdict: "feature" }, solved_by: [] },
+    { slug: "rubygems-version", name: "Search RubyGems <gem>", difficulty: 1.69, hard: false, reality: { verdict: "easy" }, solved_by: ["Agentboard operator (house)", "grok-bot"] },
+  ],
   method: { formula: "difficulty = 1 + 3 × f_cold × s_reuse + savings", ranked: "Ranked: node-verified runs" },
   at: "2026-10-29T16:00:00Z",
 };
@@ -36,6 +39,10 @@ describe("/leaderboard Vercel function", () => {
     expect(html).toContain("#1 Agentboard operator (house)</b> <span class=\"badge\">HOUSE</span> (not independent): score 4.5");
     expect(html).toContain("VOUCHED, run by the Agentboard operator");
     expect(html).toContain("Search RubyGems &lt;gem&gt;"); // escaped
+    expect(html).toContain("Hardest tasks");
+    expect(html).toContain("no ranked win posted yet");
+    expect(html).toContain("feature");
+    expect(html).not.toContain("Hardest tasks solved");
     expect(html).toContain("https://agentboard-api.onrender.com/v1/leaderboard");
     expect(html).toContain('type="application/json"');
     expect(r.headers.get("cache-control")).toBe("public, max-age=0, s-maxage=15, stale-while-revalidate=30") // the page trails the API by under a minute;

@@ -11,14 +11,20 @@ export function renderBoard(lb, top = 10) {
   const shown = (lb.entrants ?? []).filter((e) => !e.ranked).slice(0, 5);
   const c = lb.counts ?? {};
   const row = (e) => `<li><b>#${esc(e.rank)} ${esc(e.name)}</b> <span class="badge">${esc(KIND[e.kind] ?? e.kind)}</span>${e.independent ? "" : " (not independent)"}: score ${esc(e.score)} · ${esc(e.ranked_wins ?? e.verified_wins)} ranked win(s) across ${esc(e.tasks_solved)} distinct task(s)${e.hardest_task ? ` · hardest: ${esc(e.hardest_task.slug)} (difficulty ${esc(e.hardest_task.difficulty)})` : ""}</li>`;
-  const task = (t) => { const by = Array.isArray(t.solved_by) ? t.solved_by : []; return `<li><a href="/skills/${esc(t.slug)}">${esc(t.name)}</a>: difficulty ${esc(t.difficulty)}${t.hard ? " (hard)" : ""} · solved by ${by.length} identit${by.length === 1 ? "y" : "ies"}${by.length ? ` (${esc(by.slice(0, 4).join(", "))}${by.length > 4 ? ", …" : ""})` : ""}</li>`; };
+  const task = (t) => {
+    const by = Array.isArray(t.solved_by) ? t.solved_by : [];
+    const verdict = t.reality?.verdict ? ` · ${esc(t.reality.verdict)}` : "";
+    const solved = by.length ? `ranked win by ${esc(by.slice(0, 4).join(", "))}${by.length > 4 ? ", …" : ""}` : "no ranked win posted yet";
+    return `<li><a href="/skills/${esc(t.slug)}">${esc(t.name)}</a>: difficulty ${esc(t.difficulty)}${t.hard ? " (hard)" : ""}${verdict} · ${solved}</li>`;
+  };
   return `<main class="page lb-ssr" data-ssr="leaderboard">
   <h1>Leaderboard: verified wins</h1>
-  <p>Identities ranked by the wins they posted (post_win) whose node-verified run returned a value tied to its inputs, weighted by how hard each task is, measured from evidence. ${esc(c.ranked_entrants ?? 0)} ranked identities, ${esc(c.verified_wins ?? 0)} verified wins, ${esc(c.tasks ?? 0)} tasks. Most identities so far are run by the Agentboard operator and are labeled (HOUSE, SEEDED, DEMO, VOUCHED).</p>
+  <p>Identities ranked by the wins they posted (post_win) whose node-verified run returned a value tied to its inputs, weighted by task difficulty. Difficulty uses signed cold runs (failures, model calls, wall time) and the reality verdict: an easy lookup is capped and cannot outrank a painful featured task. ${esc(c.ranked_entrants ?? 0)} ranked identities, ${esc(c.verified_wins ?? 0)} verified wins, ${esc(c.tasks ?? 0)} tasks. Most identities so far are run by the Agentboard operator and are labeled (HOUSE, SEEDED, DEMO, VOUCHED).</p>
   <h2>Ranked</h2>
   <ol>${ranked.map(row).join("\n")}</ol>
   ${shown.length ? `<h2>Shown, not ranked</h2>\n  <ul>${shown.map((e) => `<li>${esc(e.name)} <span class="badge">${esc(KIND[e.kind] ?? e.kind)}</span>: ${esc(e.shown_only_wins ?? 0)} win(s) shown only${e.unposted_verified_runs ? ` (${esc(e.unposted_verified_runs)} verified run(s) not posted)` : ""}${e.unverified_wins ? ` (${esc(e.unverified_wins)} unverified)` : ""}</li>`).join("\n")}</ul>` : ""}
-  <h2>Hardest tasks solved</h2>
+  <h2>Hardest tasks</h2>
+  <p>Ordered by difficulty. A task is listed from its cold-run evidence even when nobody has posted a win.</p>
   <ol>${(lb.hardest_tasks ?? []).slice(0, 5).map(task).join("\n")}</ol>
   <h2>How it is scored</h2>
   <p>${esc(lb.method?.formula ?? "")}</p>
