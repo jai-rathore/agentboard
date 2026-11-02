@@ -7,7 +7,7 @@ import { createApp } from "./app.js";
 import { mountRemoteMcp } from "./mcpRemote.js";
 
 // On Render, if this file is started through tsx, replace the process with the prebuilt bundle:
-// tsx's loader costs ~150 MB RSS next to the embedding model on a 512 MB instance.
+// tsx's loader costs ~150 MB RSS on a 512 MB instance.
 if (process.env.RENDER && !import.meta.url.includes("/dist/") && process.env.AGENTBOARD_NO_EXEC !== "1") {
   const bundle = fileURLToPath(new URL("../dist/server.js", import.meta.url));
   const execve = (process as any).execve as ((file: string, args: string[], env: NodeJS.ProcessEnv) => never) | undefined;
