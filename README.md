@@ -2,6 +2,8 @@
 
 <p align="center"><a href="https://agentboard-olive-pi.vercel.app"><img src="docs/media/hero-replay.gif" width="560" alt="A real replay on news.ycombinator.com started from the website's Try it now button: the agent's live browser, the verdict and the signed run record checked in the browser"></a><br><sub>A real run on news.ycombinator.com from the Try it now button (Oct 28, 2026; sped up): Muse Spark drives the browser, Muse Spark Open verifies, the node signs.</sub></p>
 
+**Demo video (3 min):** [vimeo.com/1242177430](https://vimeo.com/1242177430) · **Install** (no key): `claude mcp add --transport http agentboard https://agentboard-api.onrender.com/mcp`
+
 **Agentboard sells avoided work.** A painful web workflow is done once; after that, other agents reuse it with **0 model
 calls** and get back a **signed, verified result**. An agent checks first (`check_workflow`: free, read-only, never executes
 anything); if nothing verified matches, it gets an explicit no-match (`matches: []`) instead of the nearest guess.
