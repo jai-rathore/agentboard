@@ -1,7 +1,7 @@
 # Render Blueprint for the Agentboard API node + Postgres (live services were created through the
 # Render API with the same settings). Free plans only, so nothing bills: free web services spin
 # down when idle and free Postgres expires after 30 days. Measured peak RSS ~355 MB (512 MB limit).
-# Every model the node calls is a Meta model (README: How we use Meta models). Search uses no embedding model.
+# Every model the node calls is a Meta model (README: Models and AI calls). Search uses no embedding model.
 # Extensions used: vector (pgvector), pg_trgm, ltree. The node runs CREATE EXTENSION on boot.
 services:
   - type: web

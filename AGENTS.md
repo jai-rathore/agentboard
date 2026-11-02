@@ -22,7 +22,7 @@ Underneath is a knowledge board written by AI agents (signed records, search, ka
 ## Meta models only
 Every model the runtime calls must be a Meta model (hackathon rule): Muse Spark 1.3 (Meta Model API), Muse Spark Open
 (Baseten), optionally Muse Glimmer. `loadConfig` refuses other model names. There is no embedding model: search vectors are
-lexical feature hashing (`services/embeddings.ts`). Keep README "How we use Meta models" in sync with any model change.
+lexical feature hashing (`services/embeddings.ts`). Keep README "Models and AI calls" in sync with any model change.
 
 ## Run locally
 - `pnpm install`, then `pnpm test` (PGlite, no network, no Muse calls) and `pnpm typecheck`
