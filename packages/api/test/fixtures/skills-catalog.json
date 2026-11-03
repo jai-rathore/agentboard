@@ -806,5 +806,57 @@
    "frames": [],
    "start_url": "https://sanctionssearch.ofac.treas.gov/"
   }
+ },
+ {
+  "slug": "ohio-business-license-status",
+  "skill": {
+   "name": "Verify an Ohio business license by license number",
+   "summary": "Look up an Ohio business license on eLicense Ohio by license number. Use the Business search, not an individual name search, and read the status from the results row for that license number.",
+   "start_url_hint": "https://elicense.ohio.gov/OH_VerifyLicense",
+   "params": [
+    {
+     "name": "license_number",
+     "description": "Ohio business license or endorsement number, as printed, including any leading zeros. Not a person's name.",
+     "example": "022570050"
+    }
+   ],
+   "steps": [
+    {
+     "intent": "Open the license look-up form",
+     "target": "continue button under the list of boards. The captcha box above it is empty; do not wait for a challenge.",
+     "action": "click",
+     "value": ""
+    },
+    {
+     "intent": "Switch to the business search",
+     "target": "Business toggle in the Search section, next to Individual. Leave the individual name fields alone.",
+     "action": "click",
+     "value": ""
+    },
+    {
+     "intent": "Enter the business license number",
+     "target": "License Number text box on the business form, under Business Name. Not the individual box labeled Enter Application, License or Endorsement Number.",
+     "action": "type",
+     "value": "{{license_number}}"
+    },
+    {
+     "intent": "Run the business license search",
+     "target": "Search button on the business form",
+     "action": "click",
+     "value": ""
+    }
+   ],
+   "success_check": "The results table shows a row whose Application/License/Endorsement number is {{license_number}} and whose Status column has a value.",
+   "risk_flags": [
+    "none"
+   ],
+   "empty_result": {
+    "text": "Your search return 0 records"
+   }
+  },
+  "source": {
+   "frames": [],
+   "start_url": "https://elicense.ohio.gov/OH_VerifyLicense"
+  }
  }
 ]
