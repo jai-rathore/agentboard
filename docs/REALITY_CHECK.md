@@ -44,7 +44,7 @@ reuse agent finds the skill and replays it. Both runs are signed. Times are exec
 | `ofac-sanctions-search` | 3 | 3 | 3 (row names the input) | 3 | 3 | 6 · $0.0289 · 25.8 | 0 · $0 · 6.9 | **Feature** | ASP.NET postback search with viewstate and fuzzy scoring. A fetch-only agent cannot submit it. |
 | `florida-license-status` | 3 | 3 | 3 (row's license number) | 3 | 3 | 3 · $0.0136 · 19.7 | 0 · $0 · 4.5 | **Feature** | POST-only license search with no public API. |
 | `nj-business-license-status` | 3 | 3 | 3 (row's license number) | 3 | 2 (no ToS page; "verification only", which this is) | 16 · $0.0690 · 70.1, **not verified** | 0 · $0 · 4.5, verified "Active" | **Feature** | ASP.NET postback with tightly stacked boxes that the model mis-clicks; no lookup API, only bulk roster downloads. |
-| `ohio-business-license-status` | 3 | 3 | 3 (row's license number) | 2 | 3 | not measured | not measured | **Feature** | eLicense Ohio business search: Continue, then the Business tab, then a Visualforce search. Status is a column on the row that shows the license number. No keyless API. Not on the live node until the record is published, so there is no signed cold or reuse run yet. |
+| `ohio-business-license-status` | 3 | 3 | 3 (row's license number) | 2 | 3 | not measured: the Nov 3 draft run stopped at turn 3 on an approval (3 Muse calls, $0.0151, not verified) | not measured (no published skill) | **Not featured, not published** (Nov 3) | eLicense Ohio business search: Continue, then the Business tab, then a Visualforce search. The Continue button is an `input type=submit` with the label "continue", which the executor's approval policy treats as a commit, so every run (cold, replay, `try_skill`) waits for a human on the first step. See "Ohio, Nov 3". |
 | `companies-house-last-accounts` | 2 | 2 | 3 (URL) | 3 | 3 | 6 · $0.0277 · 22.3 | 0 · $0 · 4.5 | Keep, de-emphasize | The API needs a registered key, but the company page is one GET by number. |
 | `fmcsa-usdot-status` | 3 | 2 | 3 (record keyed by USDOT) | 2 (slow at times) | 3 | 4 · $0.0125 · 14.4 | 0 · $0 · 4.5 | Keep, de-emphasize | Renamed from `fmcsa-carrier-authority`, which only ever returned USDOT status. The QCMobile API needs a webkey, but a direct GET URL exists. |
 | `fmcsa-carrier-authority` | n/a | n/a | n/a | n/a | n/a | n/a | n/a | Retired | Its name promised operating authority; it returned USDOT status. Hidden from listings and `find_skill`; its signed history stays readable. |
@@ -159,21 +159,22 @@ Executor fixes these builds needed, all now generic:
   screening at lower scores, return all rows, or check the Address/List columns.
 - **FMCSA now says what it returns.** It was renamed `fmcsa-usdot-status`, and the old slug is retired. Operating
   authority (the L&I page) is still not covered.
-- **Coverage is thin.** Three featured skills are on the live node. A fourth, `ohio-business-license-status`, scores
-  Feature and is staged in this tree; it is not live until the skill record is published. An agent will check a registry
+- **Coverage is thin.** Three featured skills are on the live node. A fourth, `ohio-business-license-status`, scored
+  Feature on the Nov 1 review but is not featured or published: on Nov 3 its Continue button needed a human approval on every run. An agent will check a registry
   only once it reliably has the long tail: state license boards, court dockets, procurement portals, customs rulings.
   Each new site costs about $0.03–0.12 of Muse to learn plus one human recording.
 - **Easy lookups dominate the catalog (9 of 13 real-site skills on the live node).** They prove the mechanism, not the
-  value, so they are no longer featured. Publishing Ohio makes it 4 featured of 14 real-site skills.
+  value, so they are no longer featured.
 
 ## Would an agent use Agentboard today?
 
 **For OFAC exact-name screening, Florida license checks and NJ business-license checks: yes, I would use it.** Those are
 postback/POST forms with no keyless lookup API. Reuse answers in 3–7 s with 0 model calls, gives an input-tied value
 **or a verified no-hit**, and signs the record. On NJ and on a non-listed OFAC name, a cold agent burned 16 calls and
-60–70 s and still could not verify. **Ohio business-license checks will join that list once the skill record is
-published.** The page is the same kind of problem (a Visualforce search, status on the row that names the license
-number, a declared no-hit line). It is not live yet, and it has no signed cold-vs-reuse numbers. **As a general tool:
+60–70 s and still could not verify. **Ohio business-license checks are not on that list.** The page is the same
+kind of problem (a Visualforce search, status on the row that names the license number, a no-hit line), but its
+Continue button is a submit input that the approval policy gates, so it cannot run unattended. It has no signed
+cold-vs-reuse numbers. **As a general tool:
 not yet.** There are three featured sites on the node. Each new site costs a human recording plus $0.05–0.20 of Muse
 iteration. Pages nobody declared yet still fall to the model. For everything else in the catalog, a capable agent would
 call the public API directly.
@@ -186,8 +187,8 @@ call the public API directly.
 - FMCSA SAFER (renamed to USDOT status)
 - NJ Division of Consumer Affairs business license search (Oct 30). Business search only, so results are pharmacies,
   contractors and other firms, not people.
-- Ohio eLicense business license search (Nov 1, staged). Business tab and license number only. The signed record is not
-  published yet. See the scorecard row and "To make Ohio live".
+- Ohio eLicense business license search (Nov 1, staged; Nov 3, not published). Business tab and license number only.
+  Blocked by the approval policy on its Continue button. See "Ohio, Nov 3".
 
 **Reviewed and not built:**
 - WA L&I contractor lookup and Texas TDLR license search: both states publish the same license data as keyless
@@ -231,7 +232,7 @@ The skill types only into the business License Number box. It does not fill Firs
 
 **NC contractors, dropped.** See the Dropped table. License-number search works and is painful, and the no-hit line is real. The active status is not on the results row, and the detail panel names individual qualifiers, so it fails the privacy bar for this round.
 
-## To make Ohio live (Nov 3)
+## To make Ohio live (plan written Nov 1)
 
 Nothing in this change writes to the production node. Filming blackout is Nov 1–2: no push or merge to `main`, and no production skill publish. On Nov 3, in order:
 
@@ -244,3 +245,32 @@ Nothing in this change writes to the production node. Filming blackout is Nov 1�
 5. Optional, and only after a verified replay: add `ohio-business-license-status` to `PUBLIC_REPLAY_SKILLS` if it should be on the public `try_skill` list. The steps are a search, not a submit, purchase, send, or delete.
 
 Cold vs reuse was not measured here. This environment has no Meta API key, and a signed benchmark writes records on the node that hosts the published skill. Muse spent on this review: $0.
+
+## Ohio, Nov 3: not featured
+
+What ran on Nov 3, 2026 (PT), against production:
+
+- Merged the Nov 1 change to `main` (`ab262dd`, rebased on `a314303`, CI green). Render `/healthz` and Vercel
+  `/version.json` both served `ab262dd`.
+- Recorded a human-speed demonstration (Continue, Business, License Number `022570050`, Search; no individual-name
+  search) and drafted it with the existing pipeline (`POST /v1/skills/record`). Three drafts on Muse Spark Open
+  (Baseten), $0.0224 together: the first named the param `license`, the first two misread the example; the third had
+  the right param (`license_number`, example `022570050`) and the right five steps. The site showed no captcha and no WAF
+  block; `022570050` returned CVS PHARMACY #16379, Active, and `ZZ-NOT-A-LICENSE-999` returned "Your search return 0 records".
+- The draft's verification run (Muse Spark 1.3 computer use through the node's `/internal/muse/responses`) scrolled to the
+  Continue button and stopped at turn 3: `click on input "continue" commits an action: a human must approve`. The
+  approval was declined (unattended runs must not need one). 3 Muse calls, 10,940 input and 344 output tokens, $0.0151.
+  **Not verified, not published.**
+- Why it is structural, not a fluke: Continue is `<input type="submit" value="continue">` posting a Visualforce AJAX
+  form, and `approvalFor` (`services/executor/src/policy.mjs`) treats any submit input whose whole label is not a search
+  verb as a commit. A recorded trace replays through the same policy, so every cold run, replay, benchmark and `try_skill`
+  run would stop on step 1 for a human. There is no GET URL past the Continue page.
+- So: no skill record, no empty-result declaration, no signed cold-vs-reuse benchmark (`bench:reuse` stops with
+  `404 skill_not_found`), not added to `PUBLIC_REPLAY_SKILLS`, and the Feature verdict is removed from
+  `packages/api/src/services/reality.ts`. The `elicense.ohio.gov` find_skill alias and the staged test fixture stay;
+  they do nothing until a skill starts on that host.
+- Muse spent on Ohio on Nov 3: $0.0151 on Muse Spark 1.3 (lifetime $2.9796 after it) plus $0.0224 on Muse Spark Open.
+
+What would make it runnable, not done during the freeze: a narrow, tested approval rule for a submit control whose whole
+label is a navigation word (continue, next, proceed) on a form with no visible fields, so it submits nothing the user
+typed. That loosens the safety policy, so it needs its own review and an executor deploy.
