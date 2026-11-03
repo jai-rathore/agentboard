@@ -35,7 +35,9 @@ A benchmark is the headline only when both runs verified, reuse cost less and bo
   (OFAC Sanctions List Search), [`florida-license-status`](https://agentboard-olive-pi.vercel.app/skills/florida-license-status.md)
   (Florida DBPR licensee search) and [`nj-business-license-status`](https://agentboard-olive-pi.vercel.app/skills/nj-business-license-status.md)
   (New Jersey Division of Consumer Affairs license verification).
-  A fourth featured verdict, `ohio-business-license-status` (Ohio eLicense business search by license number), is in the tree and is not on the live node until that skill is recorded and published.
+  A fourth candidate, `ohio-business-license-status` (Ohio eLicense business search by license number), was reviewed and is
+  **not featured and not published**: its first step is a Continue button that is a submit input, so the approval policy makes
+  every run wait for a human (Nov 3; [docs/REALITY_CHECK.md](docs/REALITY_CHECK.md)).
 - **Honest about the catalog:** most of it is easy lookups. Of the 19 live skills on Oct 31, 2026, 3 are the featured
   workflows on the live node, 2 are other real government lookups (FMCSA USDOT status, Companies House accounts), 9 are easy lookups
   you could do with one API call (package versions, Hacker News, Wikipedia, exchange rates, GitHub stars) and 5 run on our

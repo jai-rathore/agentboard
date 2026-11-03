@@ -20,8 +20,8 @@ describe("reality: retired slugs", () => {
     expect(isRetired("fmcsa-carrier-authority")).toBe(true);
     expect(isRetired("fmcsa-usdot-status")).toBe(false);
     expect(realityOf("nj-business-license-status").verdict).toBe("feature");
-    expect(realityOf("ohio-business-license-status").verdict).toBe("feature");
-    expect(realityOf("ohio-business-license-status").why).toMatch(/business/i);
+    // Nov 3: not featured. Its Continue button is a submit input, which the approval policy gates, so it cannot replay unattended
+    expect(realityOf("ohio-business-license-status").verdict).not.toBe("feature");
     expect(realityRank("fmcsa-carrier-authority")).toBeGreaterThan(realityRank("hacker-news-top-story"));
   });
 });
